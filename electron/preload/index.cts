@@ -22,6 +22,13 @@ contextBridge.exposeInMainWorld("oscode", {
   loadPreferences: () => ipcRenderer.invoke("preferences:get"),
   savePreferences: (preferences: unknown) =>
     ipcRenderer.invoke("preferences:set", preferences),
+  openSecureData: () => ipcRenderer.invoke("app:open-secure-data"),
+  onPreferencesChanged: (callback: (preferences: unknown) => void) => {
+    const listener = (_event: unknown, preferences: unknown) =>
+      callback(preferences);
+    ipcRenderer.on("preferences:changed", listener);
+    return () => ipcRenderer.removeListener("preferences:changed", listener);
+  },
   appUpdateStatus: () => ipcRenderer.invoke("updates:status"),
   setAppAutoUpdate: (enabled: boolean) =>
     ipcRenderer.invoke("updates:set-enabled", enabled),

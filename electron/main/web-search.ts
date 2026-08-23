@@ -1,5 +1,9 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import {
+  assertReceiveOnlyPublicUrl,
+  assertSafeOutboundText,
+} from "./outbound-guard.js";
 
 function privateAddress(address: string) {
   if (net.isIPv4(address)) {
@@ -24,7 +28,7 @@ function privateAddress(address: string) {
 }
 
 async function safeUrl(raw: string) {
-  const url = new URL(raw);
+  const url = assertReceiveOnlyPublicUrl(raw);
   if (
     url.protocol !== "https:" ||
     url.username ||
@@ -84,8 +88,7 @@ function plainText(html: string) {
 }
 
 export async function searchWeb(query: string) {
-  const q = query.trim().slice(0, 300);
-  if (!q) throw new Error("Search query is empty");
+  const q = assertSafeOutboundText(query, "Search query");
   const { text } = await boundedFetch(
     `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`,
   );

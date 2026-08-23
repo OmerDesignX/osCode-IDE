@@ -12,11 +12,23 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import {
+  assertReceiveOnlyPublicUrl,
+  receiveOnlyBrowserRequest,
+  strippedReceiveOnlyHeaders,
+} from "./outbound-guard.js";
 
 const execFileAsync = promisify(execFile);
 
 export type AgentActivity = {
-  kind: "browser" | "computer" | "download" | "platformio" | "network";
+  kind:
+    | "browser"
+    | "computer"
+    | "download"
+    | "platformio"
+    | "network"
+    | "security"
+    | "queue";
   label: string;
   active: boolean;
   network: boolean;
@@ -30,7 +42,7 @@ export type AgentActivity = {
 type ActivityListener = (activity: AgentActivity) => void;
 
 const blockedNativeTarget =
-  /(?:^|[\\/\s._-])(?:powershell|pwsh|cmd|windowsterminal|wt|terminal|credentialuibroker|credential|keepass|1password|bitwarden|authenticator|consent|logonui|securityhealth|windowsdefender|taskmgr|regedit)(?:\.exe)?(?:$|[\\/\s._-])/i;
+  /(?:^|[\\/\s._-])(?:powershell|pwsh|cmd|windowsterminal|wt|terminal|credentialuibroker|credential|keepass|1password|bitwarden|authenticator|consent|logonui|securityhealth|windowsdefender|taskmgr|regedit|chrome|msedge|firefox|safari|outlook|mail|slack|teams|discord)(?:\.exe)?(?:$|[\\/\s._-])/i;
 
 function cleanNativeTarget(value: string) {
   const target = value
@@ -193,6 +205,7 @@ async function validatedAddress(raw: string, projectRoot: string) {
     throw new Error("The page address could not be resolved");
   if (addresses.some((entry) => privateAddress(entry.address)))
     throw new Error("Private network pages are blocked");
+  assertReceiveOnlyPublicUrl(url.toString());
   return { url: url.toString(), network: true };
 }
 
@@ -302,6 +315,17 @@ export class AgentControlService {
 
   private emit(activity: AgentActivity) {
     this.activity(activity);
+  }
+
+  private blockedOutbound(reason: string, url = "") {
+    this.emit({
+      kind: "security",
+      label: `Blocked outbound data · ${reason}`,
+      active: true,
+      network: false,
+      url,
+      cancellable: false,
+    });
   }
 
   private nativeHelperPath() {
@@ -512,10 +536,28 @@ export class AgentControlService {
     );
     this.browserSession.setDevicePermissionHandler(() => false);
     this.browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
-      details.requestHeaders.DNT = "1";
-      callback({ requestHeaders: details.requestHeaders });
+      callback({
+        requestHeaders: {
+          ...strippedReceiveOnlyHeaders(details.requestHeaders),
+          DNT: "1",
+        },
+      });
+    });
+    this.browserSession.webRequest.onHeadersReceived((details, callback) => {
+      const responseHeaders = { ...(details.responseHeaders || {}) };
+      for (const name of Object.keys(responseHeaders)) {
+        if (["set-cookie", "set-cookie2"].includes(name.toLowerCase()))
+          delete responseHeaders[name];
+      }
+      callback({ responseHeaders });
     });
     this.browserSession.webRequest.onBeforeRequest((details, callback) => {
+      const policy = receiveOnlyBrowserRequest(details);
+      if (!policy.allowed) {
+        this.blockedOutbound(policy.reason, details.url);
+        callback({ cancel: true });
+        return;
+      }
       void validatedAddress(details.url, this.projectRoot())
         .then((target) => {
           const source = details.referrer || "";
@@ -639,6 +681,15 @@ export class AgentControlService {
     const window = this.browser;
     if (!window || window.isDestroyed())
       throw new Error("Open the agent browser first");
+    if (window.webContents.getURL().startsWith("https:")) {
+      this.blockedOutbound(
+        "Public pages are read-only; page controls cannot be clicked",
+        window.webContents.getURL(),
+      );
+      throw new Error(
+        "Public pages are read-only. Open a specific public page address instead.",
+      );
+    }
     const result = await execute(
       window.webContents,
       targetScript(query, "click"),
@@ -657,6 +708,15 @@ export class AgentControlService {
     const window = this.browser;
     if (!window || window.isDestroyed())
       throw new Error("Open the agent browser first");
+    if (window.webContents.getURL().startsWith("https:")) {
+      this.blockedOutbound(
+        "Typing into public pages is blocked",
+        window.webContents.getURL(),
+      );
+      throw new Error(
+        "Typing into public pages is blocked so local data cannot be submitted.",
+      );
+    }
     const result = await execute(
       window.webContents,
       targetScript(query, "type", text),

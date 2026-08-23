@@ -6,9 +6,12 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  safeStorage,
   session,
   shell,
   type MenuItemConstructorOptions,
+  type IpcMainInvokeEvent,
+  type WebContents,
 } from "electron";
 import path from "node:path";
 import { lstatSync, unlinkSync } from "node:fs";
@@ -32,6 +35,7 @@ import { PlatformioService } from "./platformio.js";
 import { defaultPreferences, validPreferences } from "./preferences.js";
 import { guardBrokenOutputPipe } from "./process-output.js";
 import { AppUpdateService } from "./updater.js";
+import { SecureDataStore, type KeyProtector } from "./secure-store.js";
 import {
   setPythonSelection,
   validPythonSelections,
@@ -51,18 +55,32 @@ guardBrokenOutputPipe(process.stdout);
 guardBrokenOutputPipe(process.stderr);
 let mainWindow: BrowserWindow | null = null;
 let projectRoot = "";
+type WindowContext = {
+  projectRoot: string;
+  dirty: boolean;
+  restoreLastProject: boolean;
+  allowClose: boolean;
+  confirmOpen: boolean;
+};
+const windowContexts = new Map<number, WindowContext>();
+let aiProjectRoot = "";
+let aiExecutionOwner: WebContents | null = null;
+let aiExecutionTail: Promise<void> = Promise.resolve();
+let aiQueueDepth = 0;
 const terminals = new Map<string, pty.IPty>();
+const terminalOwners = new Map<string, WebContents>();
 const terminalDisposals = new Map<string, Promise<void>>();
 let runningScript: ReturnType<typeof spawn> | null = null;
+let runningScriptOwner: WebContents | null = null;
 let aiService: LocalAiService;
 let agentControlService: AgentControlService;
 let platformioService: PlatformioService;
 let appUpdateService: AppUpdateService;
+let secureStore: SecureDataStore;
 let runningDebug = false;
 let quittingAfterCleanup = false;
 let rendererHasUnsavedChanges = false;
 let closeConfirmationOpen = false;
-let allowWindowClose = false;
 let spellcheckEnabled = true;
 function sendToRenderer(channel: string, ...args: unknown[]) {
   if (
@@ -72,6 +90,81 @@ function sendToRenderer(channel: string, ...args: unknown[]) {
   )
     return;
   mainWindow.webContents.send(channel, ...args);
+}
+function broadcastToRenderers(channel: string, ...args: unknown[]) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed())
+      window.webContents.send(channel, ...args);
+  }
+}
+function activateSender(event: IpcMainInvokeEvent) {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window && !window.isDestroyed()) mainWindow = window;
+  const context = windowContexts.get(event.sender.id);
+  if (context) projectRoot = context.projectRoot;
+  return context;
+}
+function setSenderProject(event: IpcMainInvokeEvent, root: string) {
+  const context = activateSender(event);
+  if (context) context.projectRoot = root;
+  projectRoot = root;
+}
+function queueAiRequest(event: IpcMainInvokeEvent, request: unknown) {
+  const context = activateSender(event);
+  const requestedRoot = context?.projectRoot || "";
+  const projectName = requestedRoot ? path.basename(requestedRoot) : "project";
+  aiQueueDepth += 1;
+  if (aiQueueDepth > 1)
+    broadcastToRenderers("agent:activity", {
+      kind: "queue",
+      label: `${projectName} is queued while another project uses AI`,
+      active: true,
+      network: false,
+      cancellable: false,
+    });
+  const run = aiExecutionTail.then(async () => {
+    aiProjectRoot = requestedRoot;
+    aiExecutionOwner = event.sender.isDestroyed() ? null : event.sender;
+    const ownerWindow = event.sender.isDestroyed()
+      ? null
+      : BrowserWindow.fromWebContents(event.sender);
+    if (ownerWindow && !ownerWindow.isDestroyed()) mainWindow = ownerWindow;
+    broadcastToRenderers("agent:activity", {
+      kind: "queue",
+      label: `AI is working in ${projectName}`,
+      active: true,
+      network: false,
+      cancellable: true,
+    });
+    try {
+      return await aiService.chat(request);
+    } finally {
+      aiProjectRoot = "";
+      if (aiExecutionOwner === event.sender) aiExecutionOwner = null;
+      const focused = BrowserWindow.getFocusedWindow();
+      if (focused && !focused.isDestroyed()) {
+        mainWindow = focused;
+        projectRoot =
+          windowContexts.get(focused.webContents.id)?.projectRoot || "";
+      }
+      aiQueueDepth = Math.max(0, aiQueueDepth - 1);
+      broadcastToRenderers("agent:activity", {
+        kind: "queue",
+        label:
+          aiQueueDepth > 0
+            ? `${aiQueueDepth} AI request${aiQueueDepth === 1 ? "" : "s"} waiting`
+            : "AI queue is ready",
+        active: aiQueueDepth > 0,
+        network: false,
+        cancellable: aiQueueDepth > 0,
+      });
+    }
+  });
+  aiExecutionTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 const managedPythonVersions = ["3.10", "3.11", "3.12", "3.13", "3.14"];
 const smokeMarker = path.join(
@@ -102,6 +195,7 @@ if (smokeMode) {
 async function stopProjectProcesses() {
   const child = runningScript;
   runningScript = null;
+  runningScriptOwner = null;
   runningDebug = false;
   child?.kill();
   await aiService?.stop();
@@ -150,6 +244,7 @@ async function disposeTerminal(id: string) {
   try {
     await disposal;
     if (terminals.get(id) === terminal) terminals.delete(id);
+    terminalOwners.delete(id);
     await new Promise((resolve) => setTimeout(resolve, 150));
   } finally {
     terminalDisposals.delete(id);
@@ -525,28 +620,26 @@ type PythonRuntimeRecord = {
   path: string;
   installed: boolean;
 };
-const pythonRegistryPath = () =>
-  path.join(app.getPath("userData"), "python-runtimes.json");
-const pythonSelectionsPath = () =>
-  path.join(app.getPath("userData"), "python-selections.json");
-const preferencesPath = () =>
-  path.join(app.getPath("userData"), "preferences.json");
+const secureStatePath = (name: string) =>
+  path.join(secureStore.root, "state", `${name}.oscode-data`);
+const legacyStatePath = (name: string) =>
+  path.join(app.getPath("userData"), `${name}.json`);
 async function readPreferences() {
-  try {
-    return validPreferences(
-      JSON.parse(await fs.readFile(preferencesPath(), "utf8")),
-    );
-  } catch {
-    return defaultPreferences;
-  }
+  return validPreferences(
+    await secureStore.readJson(
+      secureStatePath("preferences"),
+      defaultPreferences,
+      "preferences",
+      legacyStatePath("preferences"),
+    ),
+  );
 }
 async function writePreferences(value: unknown) {
   const preferences = validPreferences(value);
-  await fs.mkdir(app.getPath("userData"), { recursive: true });
-  await fs.writeFile(
-    preferencesPath(),
-    JSON.stringify(preferences, null, 2),
-    "utf8",
+  await secureStore.writeJson(
+    secureStatePath("preferences"),
+    preferences,
+    "preferences",
   );
   return preferences;
 }
@@ -594,42 +687,41 @@ async function inspectPython(requested: string) {
   };
 }
 async function customPythonList(): Promise<PythonRuntimeRecord[]> {
-  try {
-    const parsed = JSON.parse(
-      await fs.readFile(pythonRegistryPath(), "utf8"),
-    ) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    const valid: PythonRuntimeRecord[] = [];
-    for (const item of parsed) {
-      if (
-        !item ||
-        typeof item !== "object" ||
-        typeof item.version !== "string" ||
-        typeof item.path !== "string" ||
-        !path.isAbsolute(item.path)
-      )
-        continue;
-      try {
-        const executable = await fs.realpath(item.path);
-        valid.push({
-          version: item.version,
-          path: executable,
-          installed: true,
-        });
-      } catch {
-        /* ignore interpreters that were moved or removed */
-      }
+  const parsed = await secureStore.readJson<unknown>(
+    secureStatePath("python-runtimes"),
+    [],
+    "python-runtimes",
+    legacyStatePath("python-runtimes"),
+  );
+  if (!Array.isArray(parsed)) return [];
+  const valid: PythonRuntimeRecord[] = [];
+  for (const item of parsed) {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof item.version !== "string" ||
+      typeof item.path !== "string" ||
+      !path.isAbsolute(item.path)
+    )
+      continue;
+    try {
+      const executable = await fs.realpath(item.path);
+      valid.push({
+        version: item.version,
+        path: executable,
+        installed: true,
+      });
+    } catch {
+      /* ignore interpreters that were moved or removed */
     }
-    return valid;
-  } catch {
-    return [];
   }
+  return valid;
 }
 async function saveCustomPython(runtimes: PythonRuntimeRecord[]) {
-  await fs.writeFile(
-    pythonRegistryPath(),
-    JSON.stringify(runtimes, null, 2),
-    "utf8",
+  await secureStore.writeJson(
+    secureStatePath("python-runtimes"),
+    runtimes,
+    "python-runtimes",
   );
 }
 const managedPythonRoot = () => path.join(app.getPath("userData"), "python");
@@ -704,24 +796,24 @@ async function uvExecutable() {
   return (await find(bundledToolPath("uv"))) || "uv";
 }
 async function readPythonSelections() {
-  try {
-    return validPythonSelections(
-      JSON.parse(await fs.readFile(pythonSelectionsPath(), "utf8")),
-    );
-  } catch {
-    return {};
-  }
-}
-async function savePythonSelections(selections: Record<string, string>) {
-  await fs.writeFile(
-    pythonSelectionsPath(),
-    JSON.stringify(selections, null, 2),
-    "utf8",
+  return validPythonSelections(
+    await secureStore.readJson(
+      secureStatePath("python-selections"),
+      {},
+      "python-selections",
+      legacyStatePath("python-selections"),
+    ),
   );
 }
-function createWindow(show = true) {
-  allowWindowClose = false;
-  mainWindow = new BrowserWindow({
+async function savePythonSelections(selections: Record<string, string>) {
+  await secureStore.writeJson(
+    secureStatePath("python-selections"),
+    selections,
+    "python-selections",
+  );
+}
+function createWindow(show = true, restoreLastProject = true) {
+  const window = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1040,
@@ -741,25 +833,40 @@ function createWindow(show = true) {
       spellcheck: true,
     },
   });
-  mainWindow.webContents.session.setSpellCheckerLanguages(["en-US"]);
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devUrl) mainWindow.loadURL(devUrl);
-  else mainWindow.loadFile(path.join(app.getAppPath(), "dist/index.html"));
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  mainWindow.webContents.on("before-input-event", (event, input) => {
+  const webContentsId = window.webContents.id;
+  mainWindow = window;
+  windowContexts.set(webContentsId, {
+    projectRoot: "",
+    dirty: false,
+    restoreLastProject,
+    allowClose: false,
+    confirmOpen: false,
+  });
+  window.on("focus", () => {
+    mainWindow = window;
+    projectRoot = windowContexts.get(webContentsId)?.projectRoot || "";
+  });
+  window.webContents.session.setSpellCheckerLanguages(["en-US"]);
+  // Never let an inherited environment variable redirect a packaged build.
+  // Development URLs are accepted only while Electron itself is unpackaged.
+  const devUrl = app.isPackaged ? undefined : process.env.VITE_DEV_SERVER_URL;
+  if (devUrl) window.loadURL(devUrl);
+  else window.loadFile(path.join(app.getAppPath(), "dist/index.html"));
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("before-input-event", (event, input) => {
     if (input.key === "Escape" && agentControlService?.isActive()) {
       event.preventDefault();
       void agentControlService.stop();
     }
   });
-  mainWindow.webContents.on("context-menu", (_event, params) => {
+  window.webContents.on("context-menu", (_event, params) => {
     if (!spellcheckEnabled || !params.misspelledWord) return;
     const word = params.misspelledWord;
     const suggestions = params.dictionarySuggestions.slice(0, 8);
     const template: MenuItemConstructorOptions[] = suggestions.map(
       (suggestion) => ({
         label: suggestion,
-        click: () => mainWindow?.webContents.replaceMisspelling(suggestion),
+        click: () => window.webContents.replaceMisspelling(suggestion),
       }),
     );
     if (!suggestions.length)
@@ -772,46 +879,65 @@ function createWindow(show = true) {
         submenu: suggestions.map((suggestion) => ({
           label: suggestion,
           click: () =>
-            sendToRenderer("spellcheck:replace-all", word, suggestion),
+            window.webContents.send("spellcheck:replace-all", word, suggestion),
         })),
       },
       {
         label: "Add to dictionary",
         click: () =>
-          mainWindow?.webContents.session.addWordToSpellCheckerDictionary(word),
+          window.webContents.session.addWordToSpellCheckerDictionary(word),
       },
     );
-    if (mainWindow)
-      Menu.buildFromTemplate(template).popup({ window: mainWindow });
+    Menu.buildFromTemplate(template).popup({ window });
   });
   if (process.env.OSCODE_DEBUG_RENDERER === "1") {
-    mainWindow.webContents.on("console-message", (_event, level, message) =>
+    window.webContents.on("console-message", (_event, level, message) =>
       console.error(`[renderer:${level}] ${message}`),
     );
-    mainWindow.webContents.on("did-fail-load", (_event, code, description) =>
+    window.webContents.on("did-fail-load", (_event, code, description) =>
       console.error(`[renderer-load:${code}] ${description}`),
     );
   }
-  mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  mainWindow.webContents.on("will-attach-webview", (event) =>
+  window.webContents.on("will-navigate", (event) => event.preventDefault());
+  window.webContents.on("will-attach-webview", (event) =>
     event.preventDefault(),
   );
-  const window = mainWindow;
   window.on("close", (event) => {
-    if (allowWindowClose || !rendererHasUnsavedChanges) return;
+    const context = windowContexts.get(webContentsId);
+    if (quittingAfterCleanup || context?.allowClose || !context?.dirty) return;
     event.preventDefault();
-    if (closeConfirmationOpen) return;
-    closeConfirmationOpen = true;
+    if (!context || context.confirmOpen) return;
+    context.confirmOpen = true;
     void confirmDiscardChanges(
       "Closing osCode now will discard changes that have not been saved.",
     ).then((discard) => {
-      closeConfirmationOpen = false;
+      context.confirmOpen = false;
       if (!discard || window.isDestroyed()) return;
-      rendererHasUnsavedChanges = false;
-      allowWindowClose = true;
+      context.dirty = false;
+      context.allowClose = true;
       window.close();
     });
   });
+  window.on("closed", () => {
+    const ownerId = webContentsId;
+    windowContexts.delete(ownerId);
+    rendererHasUnsavedChanges = [...windowContexts.values()].some(
+      (item) => item.dirty,
+    );
+    for (const [id, owner] of terminalOwners) {
+      if (owner.id === ownerId) void disposeTerminal(id);
+    }
+    if (runningScriptOwner?.id === ownerId) {
+      runningScript?.kill();
+      runningScript = null;
+      runningScriptOwner = null;
+      runningDebug = false;
+    }
+    if (aiExecutionOwner?.id === ownerId) void aiService.stop();
+    if (mainWindow === window)
+      mainWindow = BrowserWindow.getAllWindows()[0] || null;
+  });
+  return window;
 }
 async function runSmokeTest(window: BrowserWindow) {
   const timeout = setTimeout(() => {
@@ -1542,6 +1668,12 @@ function createApplicationMenu() {
       label: "File",
       submenu: [
         {
+          label: "New Window",
+          accelerator: "CmdOrCtrl+Shift+N",
+          click: () => createWindow(true, false),
+        },
+        { type: "separator" },
+        {
           label: "Open Folder…",
           accelerator: "CmdOrCtrl+O",
           click: send("open-project"),
@@ -1629,8 +1761,12 @@ function createApplicationMenu() {
 }
 function registerIpc() {
   ipcMain.on("app:set-dirty", (event, dirty: unknown) => {
-    if (event.sender === mainWindow?.webContents && typeof dirty === "boolean")
-      rendererHasUnsavedChanges = dirty;
+    if (typeof dirty !== "boolean") return;
+    const context = windowContexts.get(event.sender.id);
+    if (context) context.dirty = dirty;
+    rendererHasUnsavedChanges = [...windowContexts.values()].some(
+      (item) => item.dirty,
+    );
   });
   ipcMain.handle(
     "dialog:confirm-discard",
@@ -1642,8 +1778,21 @@ function registerIpc() {
       return confirmDiscardChanges(detail);
     },
   );
-  ipcMain.handle("preferences:get", readPreferences);
-  ipcMain.handle("platformio:state", async () => {
+  ipcMain.handle("preferences:get", async (event) => {
+    const preferences = await readPreferences();
+    const context = windowContexts.get(event.sender.id);
+    return context?.restoreLastProject === false
+      ? { ...preferences, lastProject: "" }
+      : preferences;
+  });
+  ipcMain.handle("app:open-secure-data", async () => {
+    await secureStore.ready();
+    const result = await shell.openPath(secureStore.root);
+    if (result) throw new Error(result);
+    return secureStore.root;
+  });
+  ipcMain.handle("platformio:state", async (event) => {
+    activateSender(event);
     const state = await platformioService.state(projectRoot);
     if (state.autoUpdate) {
       void platformioService
@@ -1665,17 +1814,20 @@ function registerIpc() {
     return state;
   });
   ipcMain.handle("platformio:boards", () => platformioService.boards());
-  ipcMain.handle("platformio:install", async () => {
+  ipcMain.handle("platformio:install", async (event) => {
+    activateSender(event);
     await platformioService.install(false);
     return platformioService.state(projectRoot);
   });
-  ipcMain.handle("platformio:update", async () => {
+  ipcMain.handle("platformio:update", async (event) => {
+    activateSender(event);
     await platformioService.install(true);
     return platformioService.state(projectRoot);
   });
   ipcMain.handle(
     "platformio:set-auto-update",
-    async (_event, enabled: unknown) => {
+    async (event, enabled: unknown) => {
+      activateSender(event);
       if (typeof enabled !== "boolean")
         throw new Error("Invalid update preference");
       await platformioService.setAutoUpdate(enabled);
@@ -1684,7 +1836,8 @@ function registerIpc() {
   );
   ipcMain.handle(
     "platformio:initialize",
-    async (_event, board: unknown, framework: unknown) => {
+    async (event, board: unknown, framework: unknown) => {
+      activateSender(event);
       if (typeof board !== "string" || typeof framework !== "string")
         throw new Error("Invalid PlatformIO project settings");
       return platformioService.initialize(
@@ -1696,7 +1849,8 @@ function registerIpc() {
   );
   ipcMain.handle(
     "platformio:run",
-    async (_event, action: unknown, environment: unknown) => {
+    async (event, action: unknown, environment: unknown) => {
+      activateSender(event);
       const allowed = ["build", "upload", "clean", "test", "monitor"] as const;
       if (
         !allowed.includes(action as (typeof allowed)[number]) ||
@@ -1767,6 +1921,7 @@ function registerIpc() {
     const preferences = await writePreferences(value);
     if (appUpdateService?.isEnabled() !== preferences.autoUpdateEnabled)
       await appUpdateService?.setEnabled(preferences.autoUpdateEnabled);
+    broadcastToRenderers("preferences:changed", preferences);
     return true;
   });
   ipcMain.handle("updates:status", () => appUpdateService.getStatus());
@@ -1788,43 +1943,59 @@ function registerIpc() {
   ipcMain.handle("ai:download-oscode-model", (_event, tier: unknown) =>
     aiService.downloadOsCodeModel(tier),
   );
-  ipcMain.handle("ai:agent-state", () => aiService.getAgentState());
-  ipcMain.handle("ai:create-chat", (_event, title: unknown) =>
-    aiService.createChat(title),
-  );
+  ipcMain.handle("ai:agent-state", (event) => {
+    activateSender(event);
+    return aiService.getAgentState();
+  });
+  ipcMain.handle("ai:create-chat", (event, title: unknown) => {
+    activateSender(event);
+    return aiService.createChat(title);
+  });
   ipcMain.handle(
     "ai:save-chat",
-    (_event, id: unknown, messages: unknown, contextSummary: unknown) =>
-      aiService.saveChat(id, messages, contextSummary),
+    (event, id: unknown, messages: unknown, contextSummary: unknown) => {
+      activateSender(event);
+      return aiService.saveChat(id, messages, contextSummary);
+    },
   );
-  ipcMain.handle("ai:delete-chat", (_event, id: unknown) =>
-    aiService.deleteChat(id),
-  );
+  ipcMain.handle("ai:delete-chat", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.deleteChat(id);
+  });
   ipcMain.handle(
     "ai:set-goal",
-    (_event, chatId: unknown, text: unknown, automatic: unknown) =>
-      aiService.setGoal(chatId, text, automatic),
+    (event, chatId: unknown, text: unknown, automatic: unknown) => {
+      activateSender(event);
+      return aiService.setGoal(chatId, text, automatic);
+    },
   );
-  ipcMain.handle("ai:complete-goal", (_event, id: unknown) =>
-    aiService.completeGoal(id),
-  );
-  ipcMain.handle("ai:remove-goal", (_event, id: unknown) =>
-    aiService.removeGoal(id),
-  );
+  ipcMain.handle("ai:complete-goal", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.completeGoal(id);
+  });
+  ipcMain.handle("ai:remove-goal", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.removeGoal(id);
+  });
   ipcMain.handle(
     "ai:add-queue",
-    (_event, chatId: unknown, prompt: unknown, runAt: unknown) =>
-      aiService.addQueue(chatId, prompt, runAt),
+    (event, chatId: unknown, prompt: unknown, runAt: unknown) => {
+      activateSender(event);
+      return aiService.addQueue(chatId, prompt, runAt);
+    },
   );
-  ipcMain.handle("ai:update-queue", (_event, id: unknown, status: unknown) =>
-    aiService.updateQueue(id, status),
-  );
-  ipcMain.handle("ai:prioritize-queue", (_event, id: unknown) =>
-    aiService.prioritizeQueue(id),
-  );
-  ipcMain.handle("ai:remove-queue", (_event, id: unknown) =>
-    aiService.removeQueue(id),
-  );
+  ipcMain.handle("ai:update-queue", (event, id: unknown, status: unknown) => {
+    activateSender(event);
+    return aiService.updateQueue(id, status);
+  });
+  ipcMain.handle("ai:prioritize-queue", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.prioritizeQueue(id);
+  });
+  ipcMain.handle("ai:remove-queue", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.removeQueue(id);
+  });
   ipcMain.handle(
     "ai:add-schedule",
     (
@@ -1833,20 +2004,36 @@ function registerIpc() {
       prompt: unknown,
       nextRunAt: unknown,
       cadence: unknown,
-    ) => aiService.addSchedule(chatId, prompt, nextRunAt, cadence),
+    ) => {
+      activateSender(_event);
+      return aiService.addSchedule(chatId, prompt, nextRunAt, cadence);
+    },
   );
-  ipcMain.handle("ai:remove-schedule", (_event, id: unknown) =>
-    aiService.removeSchedule(id),
-  );
-  ipcMain.handle("ai:collect-due", () => aiService.collectDueSchedules());
+  ipcMain.handle("ai:remove-schedule", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.removeSchedule(id);
+  });
+  ipcMain.handle("ai:collect-due", (event) => {
+    activateSender(event);
+    return aiService.collectDueSchedules();
+  });
   ipcMain.handle(
     "ai:grant-permission",
-    (_event, kind: unknown, scope: unknown, chatId: unknown, detail: unknown) =>
-      aiService.grantPermission(kind, scope, chatId, detail),
+    (
+      event,
+      kind: unknown,
+      scope: unknown,
+      chatId: unknown,
+      detail: unknown,
+    ) => {
+      activateSender(event);
+      return aiService.grantPermission(kind, scope, chatId, detail);
+    },
   );
-  ipcMain.handle("ai:revoke-permission", (_event, id: unknown) =>
-    aiService.revokePermission(id),
-  );
+  ipcMain.handle("ai:revoke-permission", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.revokePermission(id);
+  });
   ipcMain.handle("ai:remove-model", (_event, id: unknown) =>
     aiService.removeModel(id),
   );
@@ -1980,20 +2167,24 @@ function registerIpc() {
   ipcMain.handle("ai:prepare-engine", (_event, engine: unknown) =>
     aiService.prepareEngine(engine),
   );
-  ipcMain.handle("ai:chat", async (_event, request: unknown) => {
+  ipcMain.handle("ai:chat", async (event, request: unknown) => {
     try {
-      return await aiService.chat(request);
+      return await queueAiRequest(event, request);
     } finally {
-      sendToRenderer("ai:status", "Ready · local only");
+      broadcastToRenderers("ai:status", "Ready · local only");
     }
   });
   ipcMain.handle("ai:resolve-edits", (_event, ids: unknown, approve: unknown) =>
     aiService.resolveEdits(ids, approve),
   );
-  ipcMain.handle("ai:list-history", () => aiService.listHistory());
-  ipcMain.handle("ai:revert-history", (_event, id: unknown) =>
-    aiService.revertHistory(id),
-  );
+  ipcMain.handle("ai:list-history", (event) => {
+    activateSender(event);
+    return aiService.listHistory();
+  });
+  ipcMain.handle("ai:revert-history", (event, id: unknown) => {
+    activateSender(event);
+    return aiService.revertHistory(id);
+  });
   ipcMain.handle("ai:stop", () => aiService.stop());
   ipcMain.handle("agent:stop-control", () => agentControlService.stop());
   ipcMain.handle("agent:browser-snapshot", () =>
@@ -2013,45 +2204,48 @@ function registerIpc() {
       mainWindow.webContents.session.spellCheckerEnabled = spellcheckEnabled;
     return spellcheckEnabled;
   });
-  ipcMain.handle("project:open", async () => {
-    const result = await dialog.showOpenDialog({
+  ipcMain.handle("project:open", async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(owner || undefined, {
       properties: ["openDirectory"],
     });
     if (result.canceled) return null;
-    await stopProjectProcesses();
-    projectRoot = await fs.realpath(result.filePaths[0]);
+    const nextRoot = await fs.realpath(result.filePaths[0]);
+    setSenderProject(event, nextRoot);
     return {
-      root: projectRoot,
-      name: path.basename(projectRoot),
-      tree: await tree(projectRoot),
+      root: nextRoot,
+      name: path.basename(nextRoot),
+      tree: await tree(nextRoot),
     };
   });
-  ipcMain.handle("project:open-path", async (_e, requestedPath: string) => {
+  ipcMain.handle("project:open-path", async (event, requestedPath: string) => {
     const resolved = path.resolve(requestedPath.trim());
     const stat = await fs.stat(resolved);
     if (!stat.isDirectory()) throw new Error("That path is not a folder");
-    await stopProjectProcesses();
-    projectRoot = await fs.realpath(resolved);
+    const nextRoot = await fs.realpath(resolved);
+    setSenderProject(event, nextRoot);
     return {
-      root: projectRoot,
-      name: path.basename(projectRoot),
-      tree: await tree(projectRoot),
+      root: nextRoot,
+      name: path.basename(nextRoot),
+      tree: await tree(nextRoot),
     };
   });
-  ipcMain.handle("project:close", async () => {
-    await stopProjectProcesses();
-    projectRoot = "";
+  ipcMain.handle("project:close", async (event) => {
+    setSenderProject(event, "");
     return true;
   });
-  ipcMain.handle("project:refresh", async () =>
-    projectRoot ? tree(projectRoot) : [],
-  );
-  ipcMain.handle("project:search", (_event, query: unknown) =>
-    searchProject(query),
-  );
-  ipcMain.handle("project:list-directory", async (_e, target: string) =>
-    tree(await safeProjectPath(target)),
-  );
+  ipcMain.handle("project:refresh", async (event) => {
+    activateSender(event);
+    return projectRoot ? tree(projectRoot) : [];
+  });
+  ipcMain.handle("project:search", (event, query: unknown) => {
+    activateSender(event);
+    return searchProject(query);
+  });
+  ipcMain.handle("project:list-directory", async (event, target: string) => {
+    activateSender(event);
+    return tree(await safeProjectPath(target));
+  });
   ipcMain.handle(
     "project:create-item",
     async (_e, directory: string, requestedName: string, kind: string) => {
@@ -2127,7 +2321,8 @@ function registerIpc() {
   );
   ipcMain.handle(
     "markdown:read-image",
-    async (_e, rawMarkdownPath: unknown, rawSource: unknown) => {
+    async (event, rawMarkdownPath: unknown, rawSource: unknown) => {
+      activateSender(event);
       if (typeof rawMarkdownPath !== "string" || typeof rawSource !== "string")
         throw new Error("Invalid Markdown image");
       const source = rawSource.split(/[?#]/, 1)[0];
@@ -2162,22 +2357,31 @@ function registerIpc() {
       return `data:${mime};base64,${(await fs.readFile(imageFile)).toString("base64")}`;
     },
   );
-  ipcMain.handle("file:read", async (_e, target: string) => {
+  ipcMain.handle("file:read", async (event, target: string) => {
+    activateSender(event);
     const file = await safeProjectPath(target);
     const stat = await fs.stat(file);
     if (!stat.isFile()) throw new Error("Only regular files can be opened");
     return decodeTextFile(await fs.readFile(file));
   });
-  ipcMain.handle("file:write", async (_e, target: string, content: unknown) => {
-    await fs.writeFile(
-      await safeProjectPath(target),
-      validateTextContent(content),
-      "utf8",
-    );
-    return true;
+  ipcMain.handle(
+    "file:write",
+    async (event, target: string, content: unknown) => {
+      activateSender(event);
+      await fs.writeFile(
+        await safeProjectPath(target),
+        validateTextContent(content),
+        "utf8",
+      );
+      return true;
+    },
+  );
+  ipcMain.handle("git:state", (event) => {
+    activateSender(event);
+    return gitState();
   });
-  ipcMain.handle("git:state", gitState);
-  ipcMain.handle("git:run", async (_e, action: string, payload?: string) => {
+  ipcMain.handle("git:run", async (event, action: string, payload?: string) => {
+    activateSender(event);
     const remote = action === "remote" ? validateGitRemote(payload) : "";
     const commitReference = async (value: unknown) => {
       const reference = String(value || "").trim();
@@ -2335,7 +2539,8 @@ function registerIpc() {
     else throw new Error("Unsupported Git action");
     return gitState();
   });
-  ipcMain.handle("git:delete-repository", async () => {
+  ipcMain.handle("git:delete-repository", async (event) => {
+    activateSender(event);
     if (!projectRoot) throw new Error("Open a project first");
     const state = await gitState();
     if (!state.initialized) return state;
@@ -2362,7 +2567,8 @@ function registerIpc() {
     await shell.trashItem(metadata);
     return gitState();
   });
-  ipcMain.handle("git:absorb-submodule", async (_e, sub: string) => {
+  ipcMain.handle("git:absorb-submodule", async (event, sub: string) => {
+    activateSender(event);
     const state = await gitState();
     if (
       !state.submodules.some((item) => item.path === sub) ||
@@ -2416,7 +2622,8 @@ function registerIpc() {
   });
   ipcMain.handle(
     "terminal:create",
-    async (_e, rawId: string, interpreter = "") => {
+    async (event, rawId: string, interpreter = "") => {
+      activateSender(event);
       const id = validateTerminalId(rawId);
       if (!terminals.has(id) && terminals.size >= 8)
         throw new Error("Close a terminal before opening another one");
@@ -2464,10 +2671,18 @@ function registerIpc() {
         },
       );
       terminals.set(id, terminal);
-      terminal.onData((data) => sendToRenderer("terminal:data", id, data));
+      terminalOwners.set(id, event.sender);
+      terminal.onData((data) => {
+        const owner = terminalOwners.get(id);
+        if (owner && !owner.isDestroyed())
+          owner.send("terminal:data", id, data);
+      });
       terminal.onExit(({ exitCode }) => {
         if (terminals.get(id) === terminal) terminals.delete(id);
-        sendToRenderer("terminal:data", id, `\r\n[process exited ${exitCode}]`);
+        const owner = terminalOwners.get(id);
+        terminalOwners.delete(id);
+        if (owner && !owner.isDestroyed())
+          owner.send("terminal:data", id, `\r\n[process exited ${exitCode}]`);
       });
       return { shell: path.basename(command) };
     },
@@ -2497,7 +2712,8 @@ function registerIpc() {
     await disposeTerminal(id);
     return true;
   });
-  ipcMain.handle("python:list", async () => {
+  ipcMain.handle("python:list", async (event) => {
+    activateSender(event);
     const contained = await containedPythonList();
     const discovered = await Promise.all(
       managedPythonVersions.map(async (version) => {
@@ -2598,7 +2814,8 @@ function registerIpc() {
     }
     return [...projectRuntimes, ...discovered];
   });
-  ipcMain.handle("python:get-selection", async () => {
+  ipcMain.handle("python:get-selection", async (event) => {
+    activateSender(event);
     if (!projectRoot) return "";
     const root = await fs.realpath(projectRoot);
     const selections = await readPythonSelections();
@@ -2611,7 +2828,8 @@ function registerIpc() {
       return "";
     }
   });
-  ipcMain.handle("python:set-selection", async (_e, interpreter: string) => {
+  ipcMain.handle("python:set-selection", async (event, interpreter: string) => {
+    activateSender(event);
     if (!projectRoot) return false;
     if (typeof interpreter !== "string")
       throw new Error("Invalid Python interpreter selection");
@@ -2625,7 +2843,8 @@ function registerIpc() {
     await savePythonSelections(selections);
     return true;
   });
-  ipcMain.handle("python:choose", async () => {
+  ipcMain.handle("python:choose", async (event) => {
+    activateSender(event);
     const selected = await dialog.showOpenDialog({
       title: "Choose a Python interpreter",
       properties: ["openFile"],
@@ -2658,7 +2877,8 @@ function registerIpc() {
   });
   ipcMain.handle(
     "python:create-venv",
-    async (_e, interpreter: string, requestedName = "") => {
+    async (event, interpreter: string, requestedName = "") => {
+      activateSender(event);
       if (!projectRoot) throw new Error("Open a project first");
       if (!interpreter) throw new Error("Select a Python interpreter first");
       const name = requestedName.trim();
@@ -2730,13 +2950,25 @@ function registerIpc() {
   });
   ipcMain.handle(
     "python:run",
-    async (_e, file: string, interpreter: string, debug = false) => {
+    async (event, file: string, interpreter: string, debug = false) => {
+      activateSender(event);
+      if (runningScript) {
+        broadcastToRenderers("agent:activity", {
+          kind: "queue",
+          label: "Another project is already running Python",
+          active: true,
+          network: false,
+          cancellable: false,
+        });
+        throw new Error(
+          "Another project is already running Python. Stop it or wait for it to finish.",
+        );
+      }
       const script = await safeProjectPath(file);
       if (path.extname(script) !== ".py")
         throw new Error("Select a Python file in the current project");
       if (!interpreter) throw new Error("Select a Python interpreter first");
       const inspected = await inspectPython(interpreter);
-      runningScript?.kill();
       runningDebug = debug;
       const command = inspected.path;
       const scriptArgs = debug ? ["-m", "pdb", script] : [script];
@@ -2746,34 +2978,36 @@ function registerIpc() {
         env: process.env,
       });
       runningScript = child;
-      mainWindow?.webContents.send(
+      runningScriptOwner = event.sender;
+      const sendRun = (channel: string, ...values: unknown[]) => {
+        if (!event.sender.isDestroyed()) event.sender.send(channel, ...values);
+      };
+      sendRun(
         "run:data",
         `› ${path.basename(command)} ${path.basename(script)}\r\n`,
       );
-      child.stdout?.on("data", (data) =>
-        mainWindow?.webContents.send("run:data", data.toString()),
-      );
-      child.stderr?.on("data", (data) =>
-        mainWindow?.webContents.send("run:data", data.toString()),
-      );
+      child.stdout?.on("data", (data) => sendRun("run:data", data.toString()));
+      child.stderr?.on("data", (data) => sendRun("run:data", data.toString()));
       child.on("error", (error) => {
         if (runningScript !== child) return;
-        mainWindow?.webContents.send(
+        sendRun(
           "run:data",
           `\r\nProcess could not start: ${error.message}\r\n`,
         );
-        mainWindow?.webContents.send("run:stopped");
+        sendRun("run:stopped");
         runningScript = null;
+        runningScriptOwner = null;
         runningDebug = false;
       });
       child.on("exit", (code) => {
         if (runningScript !== child) return;
-        mainWindow?.webContents.send(
+        sendRun(
           "run:data",
           `\r\nProcess finished with exit code ${code ?? "unknown"}\r\n`,
         );
-        mainWindow?.webContents.send("run:stopped");
+        sendRun("run:stopped");
         runningScript = null;
+        runningScriptOwner = null;
         runningDebug = false;
       });
       return true;
@@ -2785,8 +3019,11 @@ function registerIpc() {
     runningDebug = false;
     if (child) {
       child.kill();
-      mainWindow?.webContents.send("run:data", "\r\nProcess stopped\r\n");
-      mainWindow?.webContents.send("run:stopped");
+      if (runningScriptOwner && !runningScriptOwner.isDestroyed()) {
+        runningScriptOwner.send("run:data", "\r\nProcess stopped\r\n");
+        runningScriptOwner.send("run:stopped");
+      }
+      runningScriptOwner = null;
     }
     return true;
   });
@@ -2799,7 +3036,47 @@ function registerIpc() {
     return true;
   });
 }
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  const osKeyProtector: KeyProtector = {
+    status: () => {
+      if (!safeStorage.isEncryptionAvailable())
+        return {
+          available: false,
+          backend: "unavailable",
+          reason:
+            "Your operating system's secure key store is unavailable. osCode will not save sensitive data without encryption.",
+        };
+      const backend =
+        process.platform === "linux"
+          ? safeStorage.getSelectedStorageBackend()
+          : process.platform === "darwin"
+            ? "Keychain"
+            : "DPAPI";
+      if (process.platform === "linux" && backend === "basic_text")
+        return {
+          available: false,
+          backend,
+          reason:
+            "A Linux Secret Service or KWallet is required. osCode refuses Electron's unprotected basic_text fallback.",
+        };
+      return { available: true, backend };
+    },
+    protect: (value) => safeStorage.encryptString(value.toString("base64")),
+    unprotect: (value) =>
+      Buffer.from(safeStorage.decryptString(value), "base64"),
+  };
+  secureStore = new SecureDataStore(app.getPath("userData"), osKeyProtector);
+  try {
+    await secureStore.ready();
+    await secureStore.purgeLegacyPromptData();
+  } catch (error) {
+    dialog.showErrorBox(
+      "Secure storage unavailable",
+      error instanceof Error ? error.message : String(error),
+    );
+    app.quit();
+    return;
+  }
   appUpdateService = new AppUpdateService((status) =>
     sendToRenderer("updates:status-changed", status),
   );
@@ -2824,17 +3101,18 @@ app.whenReady().then(() => {
   );
   agentControlService = new AgentControlService(
     () => mainWindow,
-    () => projectRoot,
-    (activity) => sendToRenderer("agent:activity", activity),
+    () => aiProjectRoot || projectRoot,
+    (activity) => broadcastToRenderers("agent:activity", activity),
     false,
   );
   aiService = new LocalAiService({
     userData: app.getPath("userData"),
     modelsRoot: path.join(app.getPath("userData"), "models"),
+    secureStore,
     llamaRoot: app.isPackaged
       ? path.join(process.resourcesPath, "llama")
       : path.join(app.getAppPath(), "vendor", "llama"),
-    getProjectRoot: () => projectRoot,
+    getProjectRoot: () => aiProjectRoot || projectRoot,
     getUv: uvExecutable,
     getPython: async () => {
       const runtimes = await containedPythonList();
@@ -2843,11 +3121,12 @@ app.whenReady().then(() => {
       if (!python) throw new Error("The bundled Python runtime is unavailable");
       return python;
     },
-    status: (message) => sendToRenderer("ai:status", message),
-    activity: (activity) => sendToRenderer("agent:activity", activity),
-    platformioState: () => platformioService.state(projectRoot),
+    status: (message) => broadcastToRenderers("ai:status", message),
+    activity: (activity) => broadcastToRenderers("agent:activity", activity),
+    platformioState: () =>
+      platformioService.state(aiProjectRoot || projectRoot),
     platformioRun: (action, environment) =>
-      platformioService.run(action, environment, projectRoot),
+      platformioService.run(action, environment, aiProjectRoot || projectRoot),
     browserOpen: (url) => agentControlService.openBrowser(url),
     browserInspect: () => agentControlService.inspectBrowser(),
     browserClick: (query) => agentControlService.clickBrowser(query),
@@ -2870,6 +3149,7 @@ app.whenReady().then(() => {
       return python;
     },
     (data) => sendToRenderer("platformio:output", data),
+    secureStore,
   );
   registerIpc();
   createWindow(!smokeMode);
@@ -2900,7 +3180,7 @@ app.on("before-quit", (event) => {
       closeConfirmationOpen = false;
       if (!discard) return;
       rendererHasUnsavedChanges = false;
-      allowWindowClose = true;
+      for (const context of windowContexts.values()) context.allowClose = true;
       quittingAfterCleanup = true;
       await stopProjectProcesses();
       await aiService.dispose();

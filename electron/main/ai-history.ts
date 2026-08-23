@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SecureDataStore } from "./secure-store.js";
 
 export type AiHistoryEntry = {
   id: string;
@@ -16,31 +17,49 @@ function projectKey(root: string) {
 }
 
 export class AiHistoryStore {
-  constructor(private readonly userData: string) {}
+  private readonly secure: SecureDataStore;
+
+  constructor(
+    private readonly userData: string,
+    secureStore?: SecureDataStore,
+  ) {
+    this.secure = secureStore || new SecureDataStore(userData);
+  }
 
   private directory(root: string) {
-    return path.join(this.userData, "ai", "history", projectKey(root));
+    return path.join(this.secure.root, "projects", projectKey(root), "history");
   }
 
   private journal(root: string) {
-    return path.join(this.directory(root), "journal.json");
+    return path.join(this.directory(root), "journal.oscode-data");
+  }
+
+  private legacyJournal(root: string) {
+    return path.join(
+      this.userData,
+      "ai",
+      "history",
+      projectKey(root),
+      "journal.json",
+    );
   }
 
   async list(root: string): Promise<AiHistoryEntry[]> {
-    try {
-      const value = JSON.parse(await fs.readFile(this.journal(root), "utf8"));
-      return Array.isArray(value)
-        ? value.filter(
-            (item): item is AiHistoryEntry =>
-              item &&
-              typeof item.id === "string" &&
-              typeof item.path === "string" &&
-              typeof item.after === "string",
-          )
-        : [];
-    } catch {
-      return [];
-    }
+    const value = await this.secure.readJson<unknown>(
+      this.journal(root),
+      [],
+      `history:${projectKey(root)}`,
+      this.legacyJournal(root),
+    );
+    return Array.isArray(value)
+      ? value.filter(
+          (item): item is AiHistoryEntry =>
+            item &&
+            typeof item.id === "string" &&
+            typeof item.path === "string" &&
+            typeof item.after === "string",
+        )
+      : [];
   }
 
   async record(
@@ -60,12 +79,10 @@ export class AiHistoryStore {
       summary: before === null ? `Created ${relative}` : `Edited ${relative}`,
     };
     entries.push(entry);
-    const directory = this.directory(root);
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(
+    await this.secure.writeJson(
       this.journal(root),
-      JSON.stringify(entries.slice(-250), null, 2),
-      "utf8",
+      entries.slice(-250),
+      `history:${projectKey(root)}`,
     );
     return entry;
   }
@@ -87,10 +104,10 @@ export class AiHistoryStore {
       }
       affected.add(entry.path);
     }
-    await fs.writeFile(
+    await this.secure.writeJson(
       this.journal(root),
-      JSON.stringify(entries.slice(0, index), null, 2),
-      "utf8",
+      entries.slice(0, index),
+      `history:${projectKey(root)}`,
     );
     return [...affected];
   }

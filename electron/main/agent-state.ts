@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { SecureDataStore } from "./secure-store.js";
 import type {
   AiAgentState,
   AiChatMessage,
@@ -36,6 +37,16 @@ const emptyState = (): AiAgentState => ({
   schedules: [],
   permissions: [],
 });
+
+type StoredChat = AiChatThread & { storageLabel?: string };
+type StoredAgentState = Omit<AiAgentState, "chats"> & { chats: StoredChat[] };
+
+function projectKey(root: string) {
+  return crypto
+    .createHash("sha256")
+    .update(path.resolve(root).toLowerCase())
+    .digest("hex");
+}
 
 function text(value: unknown, max = 20_000) {
   return typeof value === "string" ? value.slice(0, max) : "";
@@ -107,72 +118,172 @@ function messages(value: unknown): AiChatMessage[] {
 
 export class AgentStateStore {
   private mutation = Promise.resolve();
+  private readonly secure: SecureDataStore;
 
-  constructor(private readonly userData: string) {}
+  constructor(
+    private readonly userData: string,
+    secureStore?: SecureDataStore,
+  ) {
+    this.secure = secureStore || new SecureDataStore(userData);
+  }
 
   private get statePath() {
+    return path.join(this.secure.root, "state", "agent-state.oscode-data");
+  }
+
+  private get legacyStatePath() {
     return path.join(this.userData, "ai", "agent-state.json");
   }
 
+  private projectDirectory(projectRoot: string) {
+    return path.join(this.secure.root, "projects", projectKey(projectRoot));
+  }
+
+  private chatDirectory(projectRoot: string, label: string) {
+    return path.join(this.projectDirectory(projectRoot), "chats", label);
+  }
+
+  private chatPath(projectRoot: string, label: string) {
+    return path.join(
+      this.chatDirectory(projectRoot, label),
+      "chat.oscode-data",
+    );
+  }
+
+  private chatNamespace(projectRoot: string, chatId: string) {
+    return `chat:${projectKey(projectRoot)}:${chatId}`;
+  }
+
+  private storageLabel(chat: StoredChat, chats: StoredChat[]) {
+    if (/^\d{4}-\d{2}-\d{2}-\d{3}$/.test(chat.storageLabel || ""))
+      return chat.storageLabel!;
+    const date =
+      /^\d{4}-\d{2}-\d{2}/.exec(chat.createdAt)?.[0] ||
+      new Date().toISOString().slice(0, 10);
+    const used = chats
+      .filter((item) => item.projectRoot === chat.projectRoot)
+      .map((item) => item.storageLabel || "")
+      .filter((label) => label.startsWith(`${date}-`))
+      .map((label) => Number(label.slice(-3)))
+      .filter(Number.isFinite);
+    const next = Math.max(0, ...used) + 1;
+    return `${date}-${String(next).padStart(3, "0")}`;
+  }
+
+  agentCodeDirectory(projectRoot: string, chat: StoredChat) {
+    if (!chat.storageLabel) throw new Error("Chat storage is not ready");
+    return path.join(
+      this.chatDirectory(projectRoot, chat.storageLabel),
+      "agentCode",
+    );
+  }
+
   private async read(): Promise<AiAgentState> {
-    try {
-      const value = JSON.parse(await fs.readFile(this.statePath, "utf8")) as
-        Partial<AiAgentState> | undefined;
-      if (!value || typeof value !== "object") return emptyState();
-      return {
-        chats: Array.isArray(value.chats)
-          ? value.chats.slice(-100).flatMap((item) => {
-              if (!item || typeof item !== "object") return [];
-              const input = item as Partial<AiChatThread>;
-              const id = text(input.id, 100);
-              const projectRoot = text(input.projectRoot, 2000);
-              if (!id || !projectRoot) return [];
-              const now = new Date().toISOString();
-              return [
-                {
-                  id,
-                  title: text(input.title, 120) || "New chat",
-                  projectRoot,
-                  messages: messages(input.messages),
-                  contextSummary: text(input.contextSummary, 64_000),
-                  createdAt: text(input.createdAt, 40) || now,
-                  updatedAt: text(input.updatedAt, 40) || now,
-                },
-              ];
-            })
-          : [],
-        goals: Array.isArray(value.goals)
-          ? (value.goals as AiGoal[]).slice(-200)
-          : [],
-        queue: Array.isArray(value.queue)
-          ? (value.queue as AiQueueItem[]).slice(-500)
-          : [],
-        schedules: Array.isArray(value.schedules)
-          ? (value.schedules as AiSchedule[]).slice(-200)
-          : [],
-        permissions: Array.isArray(value.permissions)
-          ? value.permissions
-              .slice(-500)
-              .filter((grant): grant is AiPermissionGrant =>
-                Boolean(
-                  grant &&
-                  typeof grant.id === "string" &&
-                  permissionKinds.has(grant.kind as AiPermissionKind) &&
-                  permissionScopes.has(grant.scope as AiPermissionScope),
-                ),
-              )
-          : [],
-      };
-    } catch {
-      return emptyState();
+    const value = await this.secure.readJson<Partial<StoredAgentState>>(
+      this.statePath,
+      {},
+      "agent-state-index",
+      this.legacyStatePath,
+    );
+    if (!value || typeof value !== "object") return emptyState();
+    const parsedChats: StoredChat[] = [];
+    if (Array.isArray(value.chats)) {
+      for (const item of value.chats.slice(-100)) {
+        if (!item || typeof item !== "object") continue;
+        const input = item as Partial<StoredChat>;
+        const id = text(input.id, 100);
+        const projectRoot = text(input.projectRoot, 2000);
+        if (!id || !projectRoot) continue;
+        const now = new Date().toISOString();
+        const storageLabel = /^\d{4}-\d{2}-\d{2}-\d{3}$/.test(
+          text(input.storageLabel, 20),
+        )
+          ? text(input.storageLabel, 20)
+          : undefined;
+        let chatMessages = messages(input.messages);
+        let contextSummary = text(input.contextSummary, 64_000);
+        if (storageLabel) {
+          const body = await this.secure.readJson<{
+            messages?: unknown;
+            contextSummary?: unknown;
+          }>(
+            this.chatPath(projectRoot, storageLabel),
+            {},
+            this.chatNamespace(projectRoot, id),
+          );
+          chatMessages = messages(body.messages);
+          contextSummary = text(body.contextSummary, 64_000);
+        }
+        parsedChats.push({
+          id,
+          title: text(input.title, 120) || "New chat",
+          projectRoot,
+          messages: chatMessages,
+          contextSummary,
+          createdAt: text(input.createdAt, 40) || now,
+          updatedAt: text(input.updatedAt, 40) || now,
+          ...(storageLabel ? { storageLabel } : {}),
+        });
+      }
     }
+    return {
+      chats: parsedChats,
+      goals: Array.isArray(value.goals)
+        ? (value.goals as AiGoal[]).slice(-200)
+        : [],
+      queue: Array.isArray(value.queue)
+        ? (value.queue as AiQueueItem[]).slice(-500)
+        : [],
+      schedules: Array.isArray(value.schedules)
+        ? (value.schedules as AiSchedule[]).slice(-200)
+        : [],
+      permissions: Array.isArray(value.permissions)
+        ? value.permissions
+            .slice(-500)
+            .filter((grant): grant is AiPermissionGrant =>
+              Boolean(
+                grant &&
+                typeof grant.id === "string" &&
+                permissionKinds.has(grant.kind as AiPermissionKind) &&
+                permissionScopes.has(grant.scope as AiPermissionScope),
+              ),
+            )
+        : [],
+    };
   }
 
   private async write(state: AiAgentState) {
-    await fs.mkdir(path.dirname(this.statePath), { recursive: true });
-    const temporary = `${this.statePath}.${process.pid}.tmp`;
-    await fs.writeFile(temporary, JSON.stringify(state, null, 2), "utf8");
-    await fs.rename(temporary, this.statePath);
+    const chats = state.chats as StoredChat[];
+    for (const chat of chats) {
+      chat.storageLabel = this.storageLabel(chat, chats);
+      const directory = this.chatDirectory(chat.projectRoot, chat.storageLabel);
+      await fs.mkdir(path.join(directory, "agentCode"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await this.secure.writeJson(
+        this.chatPath(chat.projectRoot, chat.storageLabel),
+        {
+          messages: chat.messages,
+          contextSummary: chat.contextSummary,
+        },
+        this.chatNamespace(chat.projectRoot, chat.id),
+      );
+    }
+    await this.secure.writeJson(
+      this.statePath,
+      {
+        ...state,
+        chats: chats.map(
+          ({ messages: _messages, contextSummary: _summary, ...chat }) => ({
+            ...chat,
+            messages: [],
+            contextSummary: "",
+          }),
+        ),
+      },
+      "agent-state-index",
+    );
   }
 
   private async update<T>(change: (state: AiAgentState) => T | Promise<T>) {
@@ -248,12 +359,16 @@ export class AgentStateStore {
     });
   }
 
-  deleteChat(id: string, projectRoot: string) {
-    return this.update((state) => {
+  async deleteChat(id: string, projectRoot: string) {
+    let removedLabel = "";
+    const removed = await this.update((state) => {
       const exists = state.chats.some(
         (item) => item.id === id && item.projectRoot === projectRoot,
       );
       if (!exists) return false;
+      removedLabel =
+        (state.chats.find((item) => item.id === id) as StoredChat | undefined)
+          ?.storageLabel || "";
       state.chats = state.chats.filter((item) => item.id !== id);
       state.goals = state.goals.filter((item) => item.chatId !== id);
       state.queue = state.queue.filter((item) => item.chatId !== id);
@@ -263,6 +378,20 @@ export class AgentStateStore {
       );
       return true;
     });
+    if (removed && removedLabel) {
+      const directory = this.chatDirectory(projectRoot, removedLabel);
+      const relative = path.relative(this.secure.root, directory);
+      const stat = await fs.lstat(directory).catch(() => null);
+      if (
+        stat?.isDirectory() &&
+        !stat.isSymbolicLink() &&
+        relative &&
+        !relative.startsWith("..") &&
+        !path.isAbsolute(relative)
+      )
+        await fs.rm(directory, { recursive: true });
+    }
+    return removed;
   }
 
   setGoal(chatId: string, goalText: string, automatic: boolean) {

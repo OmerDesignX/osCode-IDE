@@ -4232,6 +4232,14 @@ textarea,
 .top-status.network {
   color: var(--accent);
 }
+.top-status[role="button"] {
+  cursor: pointer;
+}
+.top-status.security {
+  color: var(--text);
+  border-color: color-mix(in srgb, #d99a6c 55%, var(--line));
+  background: color-mix(in srgb, #d99a6c 9%, var(--panel));
+}
 .top-status > span {
   min-width: 0;
   flex: 1;

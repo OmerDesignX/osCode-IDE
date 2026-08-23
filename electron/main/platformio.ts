@@ -6,6 +6,7 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { promisify } from "node:util";
+import { SecureDataStore } from "./secure-store.js";
 
 const exec = promisify(execFile);
 
@@ -37,12 +38,16 @@ const validFramework = (value: string) =>
 
 export class PlatformioService {
   private child: ChildProcessWithoutNullStreams | null = null;
+  private readonly secure: SecureDataStore;
 
   constructor(
     private readonly dataRoot: string,
     private readonly getPython: () => Promise<string>,
     private readonly output: (data: string) => void,
-  ) {}
+    secureStore?: SecureDataStore,
+  ) {
+    this.secure = secureStore || new SecureDataStore(dataRoot);
+  }
 
   private get penvRoot() {
     return path.join(this.dataRoot, "penv");
@@ -55,6 +60,10 @@ export class PlatformioService {
   }
 
   private get configPath() {
+    return path.join(this.secure.root, "state", "platformio.oscode-data");
+  }
+
+  private get legacyConfigPath() {
     return path.join(this.dataRoot, "oscode.json");
   }
 
@@ -75,27 +84,25 @@ export class PlatformioService {
   }
 
   private async config(): Promise<PlatformioConfig> {
-    try {
-      const value = JSON.parse(
-        await fs.readFile(this.configPath, "utf8"),
-      ) as Partial<PlatformioConfig>;
-      return {
-        autoUpdate: value.autoUpdate === true,
-        lastUpdateCheck: Number.isFinite(value.lastUpdateCheck)
-          ? Number(value.lastUpdateCheck)
-          : 0,
-      };
-    } catch {
-      return { autoUpdate: false, lastUpdateCheck: 0 };
-    }
+    const value = await this.secure.readJson<Partial<PlatformioConfig>>(
+      this.configPath,
+      {},
+      "platformio-preferences",
+      this.legacyConfigPath,
+    );
+    return {
+      autoUpdate: value.autoUpdate === true,
+      lastUpdateCheck: Number.isFinite(value.lastUpdateCheck)
+        ? Number(value.lastUpdateCheck)
+        : 0,
+    };
   }
 
   private async saveConfig(config: PlatformioConfig) {
-    await fs.mkdir(this.dataRoot, { recursive: true });
-    await fs.writeFile(
+    await this.secure.writeJson(
       this.configPath,
-      `${JSON.stringify(config, null, 2)}\n`,
-      "utf8",
+      config,
+      "platformio-preferences",
     );
   }
 

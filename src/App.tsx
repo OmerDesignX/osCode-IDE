@@ -487,6 +487,24 @@ export function App() {
       menuActions.current[action]?.(),
     );
   }, []);
+  useEffect(
+    () =>
+      window.oscode.onPreferencesChanged((preferences) => {
+        if (!preferencesReady) return;
+        setTheme(preferences.theme);
+        setLocale(preferences.locale);
+        setSidebarSide(preferences.sidebarSide);
+        setUiScale(preferences.uiScale);
+        setEditorFontSize(preferences.editorFontSize);
+        setAiPanelWidth(preferences.aiPanelWidth);
+        setAiEngine(preferences.aiEngine);
+        setAiModel(preferences.aiModel);
+        setAiExecutable(preferences.aiExecutable);
+        setAiContextLimit(preferences.aiContextLimit);
+        setAiHardware(preferences.aiHardware);
+      }),
+    [preferencesReady],
+  );
   useEffect(() => {
     void window.oscode.appUpdateStatus().then(setUpdateStatus);
     return window.oscode.onAppUpdateStatus((status) => {
@@ -570,8 +588,23 @@ export function App() {
           setBrowserSnapshot(null);
         }
       }
-      if (next.active) setActivity(next);
-      else
+      if (next.active) {
+        setActivity(next);
+        if (
+          next.kind === "security" ||
+          (next.kind === "queue" && /queued|another project/i.test(next.label))
+        ) {
+          setNotifications((current) => [
+            ...current.slice(-39),
+            {
+              id: crypto.randomUUID(),
+              message: next.label,
+              createdAt: Date.now(),
+            },
+          ]);
+          setNotificationsOpen(true);
+        }
+      } else
         setActivity((current) =>
           current?.kind === next.kind ? null : current,
         );
@@ -1588,7 +1621,43 @@ export function App() {
             </div>
           )}
           {(activity || notice) && (
-            <div className={`top-status ${activity?.network ? "network" : ""}`}>
+            <div
+              className={`top-status ${activity?.network ? "network" : ""} ${activity?.kind === "security" ? "security" : ""}`}
+              role="button"
+              tabIndex={0}
+              title="Open activity details"
+              onClick={() => {
+                const message = activity
+                  ? [activity.label, activity.url, activity.target]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : notice;
+                if (message)
+                  setNotifications((current) =>
+                    current.some(
+                      (item) =>
+                        item.message === message &&
+                        Date.now() - item.createdAt < 2_000,
+                    )
+                      ? current
+                      : [
+                          ...current.slice(-39),
+                          {
+                            id: crypto.randomUUID(),
+                            message,
+                            createdAt: Date.now(),
+                          },
+                        ],
+                  );
+                setNotificationsOpen(true);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setNotificationsOpen(true);
+                }
+              }}
+            >
               {activity?.network && <FeatherIcon icon="wifi" size="17" />}
               {activity?.kind === "computer" && (
                 <FeatherIcon icon="mouse-pointer" size="17" />
@@ -1598,6 +1667,12 @@ export function App() {
               )}
               {activity?.kind === "platformio" && (
                 <FeatherIcon icon="cpu" size="17" />
+              )}
+              {activity?.kind === "queue" && (
+                <FeatherIcon icon="clock" size="17" />
+              )}
+              {activity?.kind === "security" && (
+                <FeatherIcon icon="shield" size="17" />
               )}
               <span>{activity?.label || notice}</span>
               {activity && (
@@ -1624,7 +1699,8 @@ export function App() {
                 aria-label={
                   activity ? "Stop current activity" : "Dismiss message"
                 }
-                onClick={() => {
+                onClick={(event) => {
+                  event.stopPropagation();
                   if (activity) void window.oscode.stopCurrentActivity();
                   setActivity(null);
                   setNotice("");
@@ -3510,6 +3586,32 @@ export function App() {
                     {tr("Check now", "تحقق الآن")}
                   </button>
                 )}
+              </section>
+              <section>
+                <span className="settings-label">
+                  {tr("PRIVACY", "الخصوصية")}
+                </span>
+                <p className="settings-note">
+                  {tr(
+                    "Chats and settings are encrypted in application data.",
+                    "المحادثات والإعدادات مشفرة في بيانات التطبيق.",
+                  )}
+                </p>
+                <button
+                  className="settings-update-check"
+                  onClick={async () => {
+                    try {
+                      await window.oscode.openSecureData();
+                    } catch (error) {
+                      setNotice(
+                        errorMessage(error, "Could not open secure data"),
+                      );
+                    }
+                  }}
+                >
+                  <FeatherIcon icon="folder" size="15" />
+                  {tr("Open secure data", "فتح البيانات الآمنة")}
+                </button>
               </section>
             </div>
           )}

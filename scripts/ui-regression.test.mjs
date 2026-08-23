@@ -314,3 +314,30 @@ test("application updates use a remembered one-time notification and Settings to
   assert.match(main, /if \(smokeMarkerReady\) unlinkSync\(smokeMarker\)/);
   assert.match(main, /callback\(\{ cancel: !allowDevelopmentRenderer \}\)/);
 });
+
+test("packaged builds cannot be redirected by an inherited dev-server URL", () => {
+  assert.match(
+    main,
+    /const devUrl = app\.isPackaged \? undefined : process\.env\.VITE_DEV_SERVER_URL/,
+  );
+  assert.match(main, /else window\.loadFile\(path\.join\(app\.getAppPath\(\), "dist\/index\.html"\)\)/);
+});
+
+test("project windows share one model queue while keeping project chats separate", () => {
+  assert.match(main, /new Map<number, WindowContext>/);
+  assert.match(main, /label: "New Window"/);
+  assert.match(main, /queueAiRequest\(event, request\)/);
+  assert.match(main, /AI is working in \$\{projectName\}/);
+  assert.match(main, /Another project is already running Python/);
+  assert.match(main, /broadcastToRenderers\("preferences:changed"/);
+  assert.match(app, /onPreferencesChanged/);
+  assert.match(app, /next\.kind === "queue"/);
+});
+
+test("security activity expands into timestamped notifications", () => {
+  assert.match(app, /activity\?\.kind === "security"/);
+  assert.match(app, /title="Open activity details"/);
+  assert.match(app, /setNotificationsOpen\(true\)/);
+  assert.match(app, /createdAt: Date\.now\(\)/);
+  assert.match(styles, /\.top-status\[role="button"\]/);
+});

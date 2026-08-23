@@ -62,6 +62,33 @@ test("agent chats, goals, queue, schedules, and permission scopes persist locall
     state.permissions.some((item) => item.id === once.id),
     false,
   );
+  const stored = await fs.readFile(
+    path.join(root, "secure", "state", "agent-state.oscode-data"),
+  );
+  assert.equal(stored.includes(Buffer.from("Build a parser")), false);
+  const projectFolders = await fs.readdir(
+    path.join(root, "secure", "projects"),
+  );
+  const chatFolders = await fs.readdir(
+    path.join(root, "secure", "projects", projectFolders[0], "chats"),
+  );
+  assert.match(chatFolders[0], /^\d{4}-\d{2}-\d{2}-\d{3}$/);
+  assert.equal(
+    (
+      await fs.stat(
+        path.join(
+          root,
+          "secure",
+          "projects",
+          projectFolders[0],
+          "chats",
+          chatFolders[0],
+          "agentCode",
+        ),
+      )
+    ).isDirectory(),
+    true,
+  );
 });
 
 test("conversation permissions do not cross chats and always stays project scoped", async (t) => {

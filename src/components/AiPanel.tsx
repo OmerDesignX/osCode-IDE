@@ -287,8 +287,15 @@ export function AiPanel({
       (popup === "permissions" && permissionOpen) ||
       (popup === "models" && modelsOpen) ||
       (popup === "ollama" && ollamaPickerOpen);
-    closeAiPopups();
-    if (!isOpen) openAiPopup(popup);
+    const shouldOpen = !isOpen;
+    setWorkspaceOpen(shouldOpen && popup === "workspace");
+    setHistoryOpen(shouldOpen && popup === "history");
+    setPermissionOpen(shouldOpen && popup === "permissions");
+    setModelsOpen(shouldOpen && popup === "models");
+    setOllamaPickerOpen(shouldOpen && popup === "ollama");
+    setAddMenuOpen(false);
+    setCustomListOpen(false);
+    setSource("");
   };
   const messagesRef = useRef<AiChatMessage[]>([]);
   const busyRef = useRef(false);

@@ -290,6 +290,10 @@ declare global {
       ): Promise<{ deleted: boolean; tree: TreeEntry[] }>;
       loadPreferences(): Promise<EditorPreferences>;
       savePreferences(preferences: EditorPreferences): Promise<boolean>;
+      openSecureData(): Promise<string>;
+      onPreferencesChanged(
+        cb: (preferences: EditorPreferences) => void,
+      ): () => void;
       appUpdateStatus(): Promise<AppUpdateStatus>;
       setAppAutoUpdate(enabled: boolean): Promise<AppUpdateStatus>;
       checkForAppUpdate(): Promise<AppUpdateStatus>;
@@ -441,7 +445,14 @@ declare global {
 }
 
 export type AgentActivity = {
-  kind: "browser" | "computer" | "download" | "platformio" | "network";
+  kind:
+    | "browser"
+    | "computer"
+    | "download"
+    | "platformio"
+    | "network"
+    | "security"
+    | "queue";
   label: string;
   active: boolean;
   network: boolean;
