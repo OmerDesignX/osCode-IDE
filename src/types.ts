@@ -68,6 +68,12 @@ export type AiModel = {
   downloadBytes?: number;
 };
 export type AiModelTier = "small" | "medium" | "large" | "custom";
+export type OllamaCliStatus = {
+  installed: boolean;
+  managed: boolean;
+  version: string;
+  message: string;
+};
 export type AiPermissionKind =
   | "project.read"
   | "project.write"
@@ -361,6 +367,8 @@ declare global {
       removeAiModel(id: string): Promise<boolean>;
       chooseAiExecutable(engine: AiEngine): Promise<string>;
       downloadAiModel(engine: AiEngine, source: string): Promise<AiModel>;
+      ollamaCliStatus(): Promise<OllamaCliStatus>;
+      installOllamaCli(): Promise<OllamaCliStatus>;
       prepareAiEngine(engine: AiEngine): Promise<string>;
       aiChat(request: {
         chatId: string;

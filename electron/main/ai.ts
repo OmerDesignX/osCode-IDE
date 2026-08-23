@@ -32,6 +32,15 @@ import { fetchWebPage, searchWeb } from "./web-search.js";
 
 const exec = promisify(execFile);
 const engines = new Set<AiEngine>(["llamacpp", "ollama", "pytorch", "mlx"]);
+const OLLAMA_API_ROOT = "http://127.0.0.1:11435";
+const OLLAMA_RELEASE_API =
+  "https://api.github.com/repos/ollama/ollama/releases/latest";
+const OLLAMA_ARCHIVE_LIMIT = 2 * 1024 * 1024 * 1024;
+const ollamaDownloadHosts = new Set([
+  "github.com",
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+]);
 const ignored = new Set([
   ".git",
   ".oscode",
@@ -51,6 +60,45 @@ const cudaRuntimeAssets = {
     sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
   },
 } as const;
+
+export function ollamaCliAssetName(
+  platform = process.platform,
+  arch = process.arch,
+) {
+  if (platform === "win32" && arch === "x64") return "ollama-windows-amd64.zip";
+  if (platform === "win32" && arch === "arm64")
+    return "ollama-windows-arm64.zip";
+  if (platform === "darwin" && ["x64", "arm64"].includes(arch))
+    return "ollama-darwin.tgz";
+  if (platform === "linux" && arch === "x64")
+    return "ollama-linux-amd64.tar.zst";
+  if (platform === "linux" && arch === "arm64")
+    return "ollama-linux-arm64.tar.zst";
+  throw new Error("The Ollama CLI is not available for this computer");
+}
+
+export function isTrustedOllamaDownloadUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    return (
+      url.protocol === "https:" &&
+      ollamaDownloadHosts.has(url.hostname) &&
+      (url.hostname !== "github.com" ||
+        url.pathname.startsWith("/ollama/ollama/releases/download/"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function cleanOllamaModelName(rawValue: unknown) {
+  const name = cleanText(rawValue, 200).trim();
+  if (!name || !/^[A-Za-z0-9._:/-]{1,200}$/.test(name))
+    throw new Error("Use an Ollama model name such as qwen3:0.6b");
+  if (/(?:^|[/:._-])cloud(?:$|[/:._-])/i.test(name))
+    throw new Error("Cloud-hosted Ollama models are not supported");
+  return name;
+}
 
 function versionAtLeast(version = "", minimum = "") {
   const parts = (value: string) =>
@@ -529,6 +577,7 @@ async function localModelContextLimit(model: AiModel) {
 export class LocalAiService {
   private worker: ReturnType<typeof spawn> | null = null;
   private ollamaWorker: ReturnType<typeof spawn> | null = null;
+  private cachedOllamaExecutable = "";
   private controller: AbortController | null = null;
   private downloadController: AbortController | null = null;
   private readonly pendingEdits = new Map<string, PendingEdit>();
@@ -750,15 +799,62 @@ export class LocalAiService {
     await this.saveRegistry(models);
     return selected;
   }
+  private get managedOllamaRoot() {
+    return path.join(
+      this.aiRoot,
+      "ollama-cli",
+      `${process.platform}-${process.arch}`,
+    );
+  }
+  private ollamaEnvironment() {
+    return {
+      ...process.env,
+      OLLAMA_HOST: "127.0.0.1:11435",
+      OLLAMA_NO_CLOUD: "1",
+      OLLAMA_MODELS: path.join(this.aiRoot, "ollama-models"),
+    };
+  }
   private async ollamaReady() {
-    const response = await fetch("http://127.0.0.1:11434/api/tags", {
+    const response = await fetch(`${OLLAMA_API_ROOT}/api/tags`, {
       signal: AbortSignal.timeout(1000),
     }).catch(() => null);
     return Boolean(response?.ok);
   }
-  private async ollamaExecutable() {
-    const candidates =
-      process.platform === "win32"
+  private async managedOllamaExecutable(root = this.managedOllamaRoot) {
+    const command = process.platform === "win32" ? "ollama.exe" : "ollama";
+    for (const candidate of [
+      path.join(root, command),
+      path.join(root, "bin", command),
+    ]) {
+      const stat = await fs.lstat(candidate).catch(() => null);
+      if (stat?.isFile() && !stat.isSymbolicLink()) return candidate;
+    }
+    return "";
+  }
+  private async ollamaExecutableAvailable(candidate: string) {
+    if (!candidate) return false;
+    if (path.isAbsolute(candidate)) {
+      const stat = await fs.lstat(candidate).catch(() => null);
+      if (!stat?.isFile() || stat.isSymbolicLink()) return false;
+    }
+    return exec(candidate, ["--version"], {
+      timeout: 8_000,
+      windowsHide: true,
+      env: this.ollamaEnvironment(),
+    })
+      .then(() => true)
+      .catch(() => false);
+  }
+  private async findOllamaExecutable() {
+    if (
+      this.cachedOllamaExecutable &&
+      (await this.ollamaExecutableAvailable(this.cachedOllamaExecutable))
+    )
+      return this.cachedOllamaExecutable;
+    const managed = await this.managedOllamaExecutable();
+    const candidates = [
+      managed,
+      ...(process.platform === "win32"
         ? [
             process.env.LOCALAPPDATA
               ? path.join(
@@ -775,26 +871,201 @@ export class LocalAiService {
             "/opt/homebrew/bin/ollama",
             "/usr/bin/ollama",
             "ollama",
-          ];
+          ]),
+    ];
     for (const candidate of candidates.filter(Boolean)) {
-      if (!path.isAbsolute(candidate)) return candidate;
-      if (
-        await fs
-          .access(candidate)
-          .then(() => true)
-          .catch(() => false)
-      )
+      if (await this.ollamaExecutableAvailable(candidate)) {
+        this.cachedOllamaExecutable = candidate;
         return candidate;
+      }
     }
-    throw new Error("Ollama is not installed on this computer");
+    return "";
   }
-  private async ensureOllama() {
+  private async ollamaExecutable() {
+    const executable = await this.findOllamaExecutable();
+    if (executable) return executable;
+    throw new Error(
+      "The Ollama CLI is not installed. Download the command-line tools first.",
+    );
+  }
+  async ollamaCliStatus() {
+    const executable = await this.findOllamaExecutable();
+    if (!executable)
+      return {
+        installed: false,
+        managed: false,
+        version: "",
+        message: "Ollama CLI is not installed",
+      };
+    const { stdout, stderr } = await exec(executable, ["--version"], {
+      timeout: 8_000,
+      windowsHide: true,
+      env: this.ollamaEnvironment(),
+    });
+    return {
+      installed: true,
+      managed: path
+        .resolve(executable)
+        .startsWith(`${path.resolve(this.managedOllamaRoot)}${path.sep}`),
+      version: `${stdout}\n${stderr}`.trim().slice(0, 120),
+      message: "Ollama CLI is ready",
+    };
+  }
+  async installOllamaCli() {
+    const existing = await this.findOllamaExecutable();
+    if (existing) return this.ollamaCliStatus();
+    if (this.downloadController)
+      throw new Error("Another model or runtime download is already running");
+    const assetName = ollamaCliAssetName();
+    const controller = new AbortController();
+    this.downloadController = controller;
+    const downloads = path.join(this.aiRoot, "downloads");
+    const archive = path.join(downloads, assetName);
+    const target = this.managedOllamaRoot;
+    const staging = path.join(
+      path.dirname(target),
+      `.ollama-staging-${crypto.randomUUID()}`,
+    );
+    const label = "Ollama CLI";
+    this.options.status(`Downloading ${label}…`);
+    this.options.activity?.({
+      kind: "download",
+      label: `Downloading ${label}`,
+      active: true,
+      network: true,
+      cancellable: true,
+      progress: 0,
+    });
+    try {
+      const releaseResponse = await fetch(OLLAMA_RELEASE_API, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "osCode-Ollama-CLI-installer",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        signal: controller.signal,
+      });
+      if (!releaseResponse.ok)
+        throw new Error(
+          `Ollama CLI release lookup failed (${releaseResponse.status})`,
+        );
+      const release = (await releaseResponse.json()) as {
+        assets?: Array<{
+          name?: unknown;
+          size?: unknown;
+          digest?: unknown;
+          browser_download_url?: unknown;
+        }>;
+      };
+      const asset = release.assets?.find((item) => item.name === assetName);
+      const assetUrl = String(asset?.browser_download_url || "");
+      const digest = String(asset?.digest || "");
+      const expectedBytes = Number(asset?.size || 0);
+      if (!asset || !isTrustedOllamaDownloadUrl(assetUrl))
+        throw new Error("The official Ollama CLI archive was not found");
+      if (!/^sha256:[a-f0-9]{64}$/i.test(digest))
+        throw new Error("The Ollama CLI archive has no trusted checksum");
+      if (
+        !Number.isSafeInteger(expectedBytes) ||
+        expectedBytes < 1_000_000 ||
+        expectedBytes > OLLAMA_ARCHIVE_LIMIT
+      )
+        throw new Error("The Ollama CLI archive size is invalid");
+      await fs.mkdir(downloads, { recursive: true });
+      await fs.mkdir(staging, { recursive: true });
+      const response = await fetch(assetUrl, {
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      if (
+        !response.ok ||
+        !response.body ||
+        !isTrustedOllamaDownloadUrl(response.url)
+      )
+        throw new Error(`Ollama CLI download failed (${response.status})`);
+      let received = 0;
+      let lastProgress = -1;
+      const body = Readable.fromWeb(response.body as never);
+      body.on("data", (chunk: Buffer) => {
+        received += chunk.length;
+        const progress = Math.min(
+          99,
+          Math.floor((received / expectedBytes) * 100),
+        );
+        if (progress === lastProgress) return;
+        lastProgress = progress;
+        this.options.activity?.({
+          kind: "download",
+          label: `Downloading ${label}`,
+          active: true,
+          network: true,
+          cancellable: true,
+          progress,
+        });
+      });
+      await pipeline(body, createWriteStream(archive, { flags: "w" }));
+      if (received !== expectedBytes)
+        throw new Error("The Ollama CLI archive download is incomplete");
+      if (
+        `sha256:${await this.hashFile(archive)}`.toLowerCase() !==
+        digest.toLowerCase()
+      )
+        throw new Error("The Ollama CLI archive failed checksum verification");
+      const tarExecutable =
+        process.platform === "win32" ? "tar.exe" : "/usr/bin/tar";
+      const tarArgs =
+        process.platform === "linux"
+          ? ["--zstd", "-xf", archive, "-C", staging]
+          : process.platform === "darwin"
+            ? ["-xzf", archive, "-C", staging]
+            : ["-xf", archive, "-C", staging];
+      await exec(tarExecutable, tarArgs, {
+        timeout: 30 * 60 * 1000,
+        windowsHide: true,
+      });
+      const stagedExecutable = await this.managedOllamaExecutable(staging);
+      if (!stagedExecutable)
+        throw new Error("The downloaded Ollama CLI archive is incomplete");
+      if (process.platform !== "win32") await fs.chmod(stagedExecutable, 0o755);
+      await fs.rm(target, { recursive: true, force: true });
+      await fs.rename(staging, target);
+      const installed = await this.managedOllamaExecutable(target);
+      if (!installed || !(await this.ollamaExecutableAvailable(installed)))
+        throw new Error("The Ollama CLI could not start after installation");
+      this.cachedOllamaExecutable = installed;
+      this.options.status("Ollama CLI is ready");
+      return this.ollamaCliStatus();
+    } catch (error) {
+      if (controller.signal.aborted)
+        throw new Error("Ollama CLI download stopped");
+      throw error;
+    } finally {
+      await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(archive, { force: true }).catch(() => {});
+      if (this.downloadController === controller)
+        this.downloadController = null;
+      this.options.activity?.({
+        kind: "download",
+        label: `${label} download finished`,
+        active: false,
+        network: false,
+      });
+    }
+  }
+  private async ensureOllama(installIfMissing = false) {
     if (await this.ollamaReady()) return;
     if (!this.ollamaWorker) {
-      const executable = await this.ollamaExecutable();
+      let executable = await this.findOllamaExecutable();
+      if (!executable && installIfMissing) {
+        await this.installOllamaCli();
+        executable = await this.ollamaExecutable();
+      }
+      if (!executable) executable = await this.ollamaExecutable();
       const child = spawn(executable, ["serve"], {
         stdio: "ignore",
         windowsHide: true,
+        cwd: path.dirname(executable),
+        env: this.ollamaEnvironment(),
       });
       child.on("error", () => {
         if (this.ollamaWorker === child) this.ollamaWorker = null;
@@ -808,7 +1079,7 @@ export class LocalAiService {
       await new Promise((resolve) => setTimeout(resolve, 250));
       if (await this.ollamaReady()) return;
     }
-    throw new Error("Ollama could not start locally");
+    throw new Error("The Ollama CLI could not start locally");
   }
   async removeModel(rawId: unknown) {
     const id = cleanText(rawId, 1200);
@@ -833,11 +1104,11 @@ export class LocalAiService {
       return true;
     }
     if (id.startsWith("ollama:")) {
-      const name = selected?.path || id.slice("ollama:".length);
-      if (!/^[A-Za-z0-9._:/-]{1,200}$/.test(name))
-        throw new Error("Invalid Ollama model name");
+      const name = cleanOllamaModelName(
+        selected?.path || id.slice("ollama:".length),
+      );
       await this.ensureOllama();
-      const response = await fetch("http://127.0.0.1:11434/api/delete", {
+      const response = await fetch(`${OLLAMA_API_ROOT}/api/delete`, {
         method: "DELETE",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: name }),
@@ -864,7 +1135,7 @@ export class LocalAiService {
     for (const model of models)
       model.contextLimit = await localModelContextLimit(model);
     try {
-      const response = await fetch("http://127.0.0.1:11434/api/tags", {
+      const response = await fetch(`${OLLAMA_API_ROOT}/api/tags`, {
         signal: AbortSignal.timeout(800),
       });
       if (response.ok) {
@@ -897,11 +1168,12 @@ export class LocalAiService {
 
   async downloadModel(rawEngine: unknown, rawSource: unknown) {
     const engine = cleanEngine(rawEngine);
-    const source = cleanText(rawSource, 1000).trim();
     if (engine !== "ollama")
       throw new Error("Choose a local model file or folder instead");
-    if (!source || !/^[A-Za-z0-9._:/-]{1,200}$/.test(source))
-      throw new Error("Use an Ollama model name such as qwen3:0.6b");
+    const source = cleanOllamaModelName(rawSource);
+    if (this.downloadController)
+      throw new Error("Another model download is already running");
+    await this.ensureOllama(true);
     if (this.downloadController)
       throw new Error("Another model download is already running");
     const controller = new AbortController();
@@ -915,9 +1187,8 @@ export class LocalAiService {
       cancellable: true,
     });
     try {
-      await this.ensureOllama();
       const timeout = setTimeout(() => controller.abort(), 60 * 60 * 1000);
-      const response = await fetch("http://127.0.0.1:11434/api/pull", {
+      const response = await fetch(`${OLLAMA_API_ROOT}/api/pull`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: source, stream: false }),
@@ -2386,7 +2657,7 @@ export class LocalAiService {
     this.controller = controller;
     try {
       if (request.engine === "ollama") {
-        const response = await fetch("http://127.0.0.1:11434/api/chat", {
+        const response = await fetch(`${OLLAMA_API_ROOT}/api/chat`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({

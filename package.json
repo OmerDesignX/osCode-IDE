@@ -28,7 +28,6 @@
     "computer:prepare": "node scripts/prepare-computer-control.mjs",
     "release:check-disk": "node scripts/check-release-disk.mjs",
     "release:stage:macos": "node scripts/stage-native-release.mjs macos",
-    "release:stage:linux": "node scripts/stage-native-release.mjs linux",
     "release:stage:windows": "node scripts/stage-windows-release.mjs",
     "format": "prettier --write . --ignore-unknown",
     "format:check": "prettier --check . --ignore-unknown",
@@ -41,7 +40,6 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "dompurify": "3.4.13",
-    "electron-updater": "^6.8.9",
     "feather-icons": "^4.29.2",
     "marked": "^18.0.9",
     "mermaid": "^11.16.1",
@@ -75,13 +73,6 @@
       "output": "release",
       "buildResources": "build"
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "OmerDesignX",
-        "repo": "osCode-IDE"
-      }
-    ],
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -91,6 +82,7 @@
     "mac": {
       "icon": "build/icon.png",
       "minimumSystemVersion": "12.0",
+      "artifactName": "osCode-${version}.${ext}",
       "extraResources": [
         {
           "from": "vendor/uv",
@@ -118,12 +110,13 @@
         }
       ],
       "target": [
-        "zip"
+        "dmg"
       ],
       "category": "public.app-category.developer-tools"
     },
     "win": {
       "icon": "build/icon.png",
+      "artifactName": "osCode-Setup-${version}.${ext}",
       "extraResources": [
         {
           "from": "vendor/git/win32-x64",
@@ -241,7 +234,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": false
     }
   }
 }

@@ -10,7 +10,13 @@ test("release metadata keeps the requested desktop compatibility", () => {
   const manifest = JSON.parse(read("package.json"));
   assert.equal(manifest.devDependencies.electron, "^35.0.0");
   assert.equal(manifest.build.mac.minimumSystemVersion, "12.0");
-  assert.deepEqual(manifest.build.mac.target, ["zip"]);
+  assert.deepEqual(manifest.build.mac.target, ["dmg"]);
+  assert.equal(manifest.build.mac.artifactName, "osCode-${version}.${ext}");
+  assert.equal(
+    manifest.build.win.artifactName,
+    "osCode-Setup-${version}.${ext}",
+  );
+  assert.equal(manifest.build.nsis.differentialPackage, false);
   assert.ok(manifest.build.win.target[0].arch.includes("x64"));
   for (const platform of ["mac", "win", "linux"])
     assert.equal(manifest.build[platform].icon, "build/icon.png");
@@ -183,20 +189,30 @@ test("release workflow uses native runners and publishes verified packages", () 
   const workflow = read(".github/workflows/build.yml");
   assert.match(workflow, /permissions:\s+contents: read/);
   assert.match(workflow, /desktop:[\s\S]*permissions:\s+contents: write/);
-  for (const label of [
-    "oscode-release-windows",
-    "oscode-release-macos",
-    "oscode-release-linux",
-  ])
+  for (const label of ["oscode-release-windows", "oscode-release-macos"])
     assert.match(workflow, new RegExp(label));
+  assert.doesNotMatch(
+    workflow,
+    /oscode-release-linux|--linux|release:stage:linux/,
+  );
+  assert.match(workflow, /electron-builder --mac dmg --universal/);
   assert.match(workflow, /pnpm run llama:prepare/);
   assert.match(workflow, /pnpm run release:check-disk/);
   assert.doesNotMatch(workflow, /linux:package-models|models:prepare/);
   assert.match(workflow, /scripts\/upload-release-assets\.mjs/);
 
   const stageNative = read("scripts/stage-native-release.mjs");
-  assert.match(stageNative, /1_900_000_000/);
-  assert.match(stageNative, /SHA256SUMS/);
+  assert.match(stageNative, /`osCode-\$\{manifest\.version\}\.dmg`/);
+  assert.doesNotMatch(
+    stageNative,
+    /latest-mac|SHA256SUMS|manifest\.json|\.zip/,
+  );
+  const stageWindows = read("scripts/stage-windows-release.mjs");
+  assert.match(stageWindows, /`osCode-Setup-\$\{manifest\.version\}\.exe`/);
+  assert.doesNotMatch(
+    stageWindows,
+    /blockmap|latest\.yml|SHA256SUMS|manifest\.json/i,
+  );
   const upload = read("scripts/upload-release-assets.mjs");
   assert.match(upload, /2 \* 1024 \* 1024 \* 1024/);
   assert.match(upload, /https:\/\/api\.github\.com\/repos/);
@@ -205,17 +221,16 @@ test("release workflow uses native runners and publishes verified packages", () 
   assert.doesNotMatch(upload, /spawnSync\("gh"/);
 
   const manifest = JSON.parse(read("package.json"));
-  assert.equal(manifest.dependencies["electron-updater"], "^6.8.9");
-  assert.deepEqual(manifest.build.publish, [
-    {
-      provider: "github",
-      owner: "OmerDesignX",
-      repo: "osCode-IDE",
-    },
-  ]);
-  assert.match(read("scripts/stage-windows-release.mjs"), /latest\.yml/);
-  assert.match(read("scripts/stage-native-release.mjs"), /latest-mac\.yml/);
-  assert.match(read("scripts/stage-native-release.mjs"), /latest-linux\.yml/);
+  assert.equal(manifest.dependencies["electron-updater"], undefined);
+  assert.equal(manifest.build.publish, undefined);
+  assert.match(read("electron/main/updater.ts"), /releases\/latest/);
+  assert.match(read("electron/main/updater.ts"), /sha256:/i);
+  assert.match(read("electron/main/updater.ts"), /installReadyUpdate/);
+  assert.match(
+    read("scripts/verify-package.mjs"),
+    /\^osCode-Setup-.\+\\\.exe\$/,
+  );
+  assert.match(read("scripts/verify-package.mjs"), /\\\.dmg\$/);
   assert.match(
     read("electron/main/index.ts"),
     /app\.commandLine\.hasSwitch\("smoke-test"\)/,

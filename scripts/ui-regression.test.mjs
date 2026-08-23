@@ -75,6 +75,8 @@ test("model downloads, inference hardware, visible capabilities, and spellcheck 
 test("Ollama uses its focused model picker and manual engine choices are not auto-reset", () => {
   assert.match(ai, /aria-label="Add an Ollama model"/);
   assert.match(ai, /placeholder="Search or enter a model name"/);
+  assert.match(ai, /Command line only · no desktop app/);
+  assert.match(ai, /Download CLI/);
   assert.match(ai, /Pulling…/);
   assert.match(ai, /manualEngine\.current === engine/);
   assert.match(ai, /const nextEngine = event\.target\.value as AiEngine/);
@@ -82,6 +84,8 @@ test("Ollama uses its focused model picker and manual engine choices are not aut
   assert.doesNotMatch(ai, /onEngine\("ollama"\);\s*openAiPopup\("models"\)/);
   assert.match(ai, /is ready and selected/);
   assert.match(ai, /setSource\(""\);[\s\S]*setOllamaPickerOpen\(false\)/);
+  assert.match(main, /ai:install-ollama-cli/);
+  assert.doesNotMatch(`${ai}\n${main}`, /OllamaSetup\.exe|Ollama\.dmg/);
 });
 
 test("user chat identity is an icon and compact controls cannot wrap labels", () => {

@@ -51,7 +51,7 @@ if (platform === "windows") {
   executable = path.join(appRoot, "osCode.exe");
   artifacts = all(
     (file) =>
-      /^osCode Setup .+\.exe$/i.test(path.basename(file)) &&
+      /^osCode-Setup-.+\.exe$/i.test(path.basename(file)) &&
       !relative(file).includes("/"),
   );
 } else if (platform === "linux") {
@@ -66,7 +66,7 @@ if (platform === "windows") {
     /osCode\.app\/Contents\/MacOS\/osCode$/.test(relative(file)),
   );
   appRoot = path.resolve(executable, "..", "..", "..");
-  artifacts = [first((file) => /\.zip$/i.test(file))].filter(Boolean);
+  artifacts = [first((file) => /\.dmg$/i.test(file))].filter(Boolean);
 }
 
 requireLargeFile(executable, `${platform} application executable`, 1_000_000);

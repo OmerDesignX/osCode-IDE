@@ -3,12 +3,9 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 const [platform, tag] = process.argv.slice(2);
-if (
-  !["windows", "macos", "linux"].includes(platform) ||
-  !/^v\d/.test(tag || "")
-)
+if (!["windows", "macos"].includes(platform) || !/^v\d/.test(tag || ""))
   throw new Error(
-    "Usage: node scripts/upload-release-assets.mjs <windows|macos|linux> <v-tag>",
+    "Usage: node scripts/upload-release-assets.mjs <windows|macos> <v-tag>",
   );
 
 const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
@@ -42,7 +39,11 @@ const walk = async (directory) => {
 };
 
 const assets = await walk(assetRoot);
-if (assets.length === 0) throw new Error(`No ${platform} release assets found`);
+const expectedExtension = platform === "windows" ? ".exe" : ".dmg";
+if (assets.length !== 1 || path.extname(assets[0]) !== expectedExtension)
+  throw new Error(
+    `${platform} releases must contain one ${expectedExtension} file`,
+  );
 const assetSizes = new Map();
 for (const asset of assets) {
   const size = (await stat(asset)).size;

@@ -4,9 +4,38 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  isTrustedOllamaDownloadUrl,
   LocalAiService,
+  ollamaCliAssetName,
   toolResultForModel,
 } from "../dist-electron/main/ai.js";
+
+test("Ollama setup selects standalone CLI archives and rejects desktop installers", () => {
+  assert.equal(ollamaCliAssetName("win32", "x64"), "ollama-windows-amd64.zip");
+  assert.equal(
+    ollamaCliAssetName("win32", "arm64"),
+    "ollama-windows-arm64.zip",
+  );
+  assert.equal(ollamaCliAssetName("darwin", "arm64"), "ollama-darwin.tgz");
+  assert.equal(
+    ollamaCliAssetName("linux", "x64"),
+    "ollama-linux-amd64.tar.zst",
+  );
+  assert.equal(
+    isTrustedOllamaDownloadUrl(
+      "https://github.com/ollama/ollama/releases/download/v1.0.0/ollama-windows-amd64.zip",
+    ),
+    true,
+  );
+  assert.equal(
+    isTrustedOllamaDownloadUrl("https://ollama.com/download/OllamaSetup.exe"),
+    false,
+  );
+  assert.equal(
+    isTrustedOllamaDownloadUrl("https://ollama.com/download/Ollama.dmg"),
+    false,
+  );
+});
 
 async function fixture({ grants = true } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-ai-test-"));

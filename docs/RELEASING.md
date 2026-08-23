@@ -8,11 +8,10 @@ Register dedicated self-hosted GitHub Actions runners with these labels:
 
 - `oscode-release-windows` — Windows 10 or newer, x64
 - `oscode-release-macos` — macOS 12 or newer, Intel or Apple silicon
-- `oscode-release-linux` — Debian or Ubuntu, x64
 
 Each runner should have at least 30 GB free. The workflow stops below 20 GiB. Keep runner operating systems and security updates current; do not reuse a release runner for untrusted pull-request workflows.
 
-The workflow installs Node, pnpm, project dependencies, and Linux packaging tools. Native platform prerequisites still need to exist on the host: PowerShell on Windows, Xcode command-line tools on macOS, and `sudo` access for the Linux packaging-tool step.
+The workflow installs Node, pnpm, and project dependencies. Native platform prerequisites still need to exist on the host: PowerShell on Windows and Xcode command-line tools on macOS.
 
 ## Model access
 
@@ -22,23 +21,20 @@ Native packages never check out or embed model weights. The application download
 
 1. Update and test the source on the default branch.
 2. Create and push a tag whose name begins with `v`, such as `v0.1.0`.
-3. Wait for the **Build osCode** workflow's `quality` and three `desktop` matrix jobs.
+3. Wait for the **Build osCode** workflow's `quality` and two `desktop` matrix jobs.
 4. Open the resulting draft GitHub Release.
-5. Confirm that Windows, macOS, and Linux manifests and SHA-256 files are present and that every listed part was uploaded.
-6. Download one artifact, verify its checksum, and confirm that it contains no `resources/models` directory.
+5. Confirm that the release contains exactly `osCode-Setup-<version>.exe` and `osCode-<version>.dmg`.
+6. Download each artifact, verify GitHub reports a SHA-256 digest, and confirm that neither package contains model weights or an Ollama Desktop installer.
 7. Publish the draft only after native smoke checks and release notes have been reviewed.
 
 The workflow can also be started manually. Manual runs require an existing `v...` tag and upload to a draft for that tag.
 
 ## Outputs
 
-- Windows: NSIS installer, block map, and `latest.yml`
-- macOS: portable ZIP and `latest-mac.yml`
-- Linux: DEB/Snap package and `latest-linux.yml`
+- Windows: `osCode-Setup-<version>.exe`
+- macOS: `osCode-<version>.dmg`
 
-Publish the draft only after the update metadata and its referenced package are present. The GitHub release must not remain a draft for installed clients to discover it, and its semantic version must be newer than the version inside the installed app.
-
-Files at or above GitHub's 2 GiB per-asset limit are divided into numbered parts. Each platform manifest records the original artifact hash, part hashes, and byte sizes. Platform READMEs contain reassembly commands.
+No block map, update YAML, checksum text, manifest, portable ZIP, DEB, or Snap is uploaded. The in-app updater reads the stable GitHub release directly, downloads the complete native package, and checks the SHA-256 digest reported by GitHub. The release must not remain a draft for installed clients to discover it, and its semantic version must be newer than the version inside the installed app. Each package must remain below GitHub's 2 GiB per-asset limit.
 
 ## Signing
 

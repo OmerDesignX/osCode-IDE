@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isTrustedUpdateUrl } from "../dist-electron/main/updater-policy.js";
+import {
+  isNewerVersion,
+  isTrustedUpdateUrl,
+  updateAssetName,
+} from "../dist-electron/main/updater-policy.js";
 
 test("application updates are network silent until the user opts in", () => {
   assert.equal(
@@ -25,4 +29,12 @@ test("application updates accept only the official HTTPS GitHub hosts", () => {
     "https://example.com/latest.yml",
   ])
     assert.equal(isTrustedUpdateUrl(true, url), false);
+});
+
+test("full-package updates select one native release asset", () => {
+  assert.equal(updateAssetName("1.2.3", "win32"), "osCode-Setup-1.2.3.exe");
+  assert.equal(updateAssetName("1.2.3", "darwin"), "osCode-1.2.3.dmg");
+  assert.equal(updateAssetName("1.2.3", "linux"), "");
+  assert.equal(isNewerVersion("0.2.0", "0.1.9"), true);
+  assert.equal(isNewerVersion("0.1.0", "0.1.0"), false);
 });

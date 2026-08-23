@@ -68,6 +68,12 @@ export type AiModel = {
   downloadBytes?: number;
 };
 export type AiModelTier = "small" | "medium" | "large" | "custom";
+export type OllamaCliStatus = {
+  installed: boolean;
+  managed: boolean;
+  version: string;
+  message: string;
+};
 export type AiPermissionKind =
   | "project.read"
   | "project.write"

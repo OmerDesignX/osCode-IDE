@@ -105,6 +105,8 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("ai:choose-executable", engine),
   downloadAiModel: (engine: string, source: string) =>
     ipcRenderer.invoke("ai:download-model", engine, source),
+  ollamaCliStatus: () => ipcRenderer.invoke("ai:ollama-cli-status"),
+  installOllamaCli: () => ipcRenderer.invoke("ai:install-ollama-cli"),
   prepareAiEngine: (engine: string) =>
     ipcRenderer.invoke("ai:prepare-engine", engine),
   aiChat: (request: unknown) => ipcRenderer.invoke("ai:chat", request),

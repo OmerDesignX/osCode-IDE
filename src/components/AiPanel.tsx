@@ -20,6 +20,7 @@ import type {
   AiPermissionScope,
   AiQueueItem,
   AiSchedule,
+  OllamaCliStatus,
 } from "../types";
 
 type Props = {
@@ -224,6 +225,8 @@ export function AiPanel({
   const [modelsOpen, setModelsOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [ollamaPickerOpen, setOllamaPickerOpen] = useState(false);
+  const [ollamaCli, setOllamaCli] = useState<OllamaCliStatus | null>(null);
+  const [ollamaCliBusy, setOllamaCliBusy] = useState(false);
   const [customListOpen, setCustomListOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -378,6 +381,26 @@ export function AiPanel({
     }
   };
 
+  const refreshOllamaCli = async () => {
+    const next = await window.oscode.ollamaCliStatus();
+    setOllamaCli(next);
+    return next;
+  };
+
+  const installOllamaCli = async () => {
+    setOllamaCliBusy(true);
+    try {
+      const next = await window.oscode.installOllamaCli();
+      setOllamaCli(next);
+      setStatus("Ollama CLI ready · local only");
+      onNotice("Ollama CLI is ready");
+    } catch (error) {
+      onNotice(publicAiError(error, "Ollama CLI setup failed"));
+    } finally {
+      setOllamaCliBusy(false);
+    }
+  };
+
   const refreshAgentState = async () => {
     if (!projectName) {
       setAgentState(emptyAgentState);
@@ -428,6 +451,9 @@ export function AiPanel({
     void refreshModels().catch(() => undefined);
     return window.oscode.onAiStatus(setStatus);
   }, []);
+  useEffect(() => {
+    if (ollamaPickerOpen) void refreshOllamaCli().catch(() => undefined);
+  }, [ollamaPickerOpen]);
   useEffect(() => {
     setHistory([]);
     setReview(null);
@@ -1381,6 +1407,26 @@ export function AiPanel({
               <FeatherIcon icon="x" size="17" />
             </button>
           </div>
+          <div className="ai-ollama-cli-status">
+            <div>
+              <b>{ollamaCli?.installed ? "Ollama CLI ready" : "Ollama CLI"}</b>
+              <small>
+                {ollamaCli?.installed
+                  ? "Command line only · local service"
+                  : "Command line only · no desktop app"}
+              </small>
+            </div>
+            {!ollamaCli?.installed && (
+              <button
+                className="primary"
+                disabled={ollamaCliBusy || busy}
+                onClick={() => void installOllamaCli()}
+              >
+                <FeatherIcon icon="download" size="17" />
+                {ollamaCliBusy ? "Downloading…" : "Download CLI"}
+              </button>
+            )}
+          </div>
           <label className="ai-ollama-search">
             <FeatherIcon icon="search" size="17" />
             <input
@@ -2129,20 +2175,12 @@ export function AiPanel({
               </div>
               {engine === "ollama" && (
                 <div className="ai-ollama-pull">
-                  <label>
-                    <span>Ollama model name</span>
-                    <input
-                      value={source}
-                      onChange={(event) => setSource(event.target.value)}
-                      placeholder="qwen3:0.6b"
-                    />
-                  </label>
                   <button
                     className="primary"
-                    disabled={!source.trim() || busy}
-                    onClick={() => void pullOllama()}
+                    onClick={() => openAiPopup("ollama")}
                   >
-                    {busy ? "Pulling…" : "Pull with Ollama"}
+                    <FeatherIcon icon="search" size="17" /> Choose an Ollama
+                    model
                   </button>
                 </div>
               )}

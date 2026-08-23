@@ -1975,6 +1975,8 @@ function registerIpc() {
     (_event, engine: unknown, source: unknown) =>
       aiService.downloadModel(engine, source),
   );
+  ipcMain.handle("ai:ollama-cli-status", () => aiService.ollamaCliStatus());
+  ipcMain.handle("ai:install-ollama-cli", () => aiService.installOllamaCli());
   ipcMain.handle("ai:prepare-engine", (_event, engine: unknown) =>
     aiService.prepareEngine(engine),
   );
@@ -2883,7 +2885,10 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", (event) => {
   appUpdateService?.dispose();
-  if (quittingAfterCleanup) return;
+  if (quittingAfterCleanup) {
+    appUpdateService?.installReadyUpdate();
+    return;
+  }
   platformioService?.stop();
   if (rendererHasUnsavedChanges) {
     event.preventDefault();
@@ -2908,6 +2913,7 @@ app.on("before-quit", (event) => {
     terminals.size === 0 &&
     !agentControlService?.isActive()
   ) {
+    appUpdateService?.installReadyUpdate();
     void aiService.dispose();
     return;
   }

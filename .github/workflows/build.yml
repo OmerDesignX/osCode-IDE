@@ -47,12 +47,8 @@ jobs:
             smoke: pnpm run smoke:run
           - os: oscode-release-macos
             platform: macos
-            command: pnpm exec electron-builder --mac zip --universal --publish never
+            command: pnpm exec electron-builder --mac dmg --universal --publish never
             smoke: pnpm run smoke:run
-          - os: oscode-release-linux
-            platform: linux
-            command: pnpm exec electron-builder --linux deb --x64 --publish never && pnpm exec electron-builder --config build/electron-builder.linux-snap.cjs --linux snap --x64 --publish never
-            smoke: xvfb-run -a pnpm run smoke:run
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -64,12 +60,6 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm run release:check-disk
-      - name: Install Linux packaging tools
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev build-essential xvfb
-          sudo gem install --no-document fpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run format:check
       - run: pnpm test
@@ -88,12 +78,9 @@ jobs:
         run: pnpm run release:stage:windows
       - name: Verify packaged app and native terminal
         run: node scripts/verify-package.mjs ${{ matrix.platform }} --run-smoke
-      - name: Stage macOS release assets
+      - name: Stage macOS release
         if: matrix.platform == 'macos'
         run: pnpm run release:stage:macos
-      - name: Stage Linux release assets
-        if: matrix.platform == 'linux'
-        run: pnpm run release:stage:linux
       - name: Upload verified files to a draft GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         run: node scripts/upload-release-assets.mjs ${{ matrix.platform }} "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}"
