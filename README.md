@@ -1,0 +1,84 @@
+![osCode](assets/logo/oscode-baby-blue.png)
+
+osCode is a calm, cross-platform Electron editor built around project work rather than tool chrome. It uses Manrope for controls, tightly spaced Playfair Display for its identity and headings, Fira Code for source, and Feather icons throughout.
+
+## Included now
+
+- Folder-based project explorer with create, rename, refresh, and recoverable Trash operations, plus a multi-tab Monaco editor
+- Syntax support for Python, TypeScript/JavaScript, C/C++, C#, Java, Rust, Go, HTML, CSS, JSON, Markdown, and shell files
+- Local Markdown Edit, Split, and Preview views with Mermaid diagram rendering and SVG/PNG copy or save controls
+- Save workflow, a dedicated Settings panel, dark/light themes, adjustable interface and code sizes, English/Arabic layouts, movable sidebar, and a baby-blue tonal visual system based on `#89CFF0`
+- Local-only restoration of the last valid project, theme, and editor preferences, with an explicit Close and Forget control
+- Local-first Git initialization and repository removal, status refresh, per-file or all-file staging, commits, branch create/switch/rename/merge/safe-delete controls, tags and stashes, optional remotes with fetch/pull/push/unlink controls, and explicit submodule-link visibility and absorption. Windows packages include checksum-verified MinGit, while macOS/Linux use the operating system's Git package.
+- A searchable Git helpbook backed by the installed Git manual. New repositories receive a private repository-local fallback author automatically when Git has no identity, so the editor never interrupts a commit with an identity form; users can replace it at any time with `git config --local`.
+- Expandable platform shell (PowerShell on Windows, the user's shell on macOS/Linux)
+- Contained Python 3.10, 3.11, and 3.12 runtimes, later-version downloads inside osCode, per-project and named environments, Run/Stop controls, and terminal package installation. Universal macOS releases carry separate Intel and Apple-silicon uv/Python trees and select the matching architecture at runtime.
+- Advanced Mode with Python `pdb` launch, editor suggestions, wrapping and minimap controls, and multiple project environments
+- Resizable project/Git panels, a fixed Git header, and optional Python command help beside the terminal
+- A resizable local AI project agent with downloadable Small, Medium, and Large osCode models; llama.cpp on Windows/Linux/Intel Mac and MLX on Apple silicon; automatic CPU/GPU selection with a remembered override; custom local-model support; multiple searchable chats; goals; steering; queued prompts; local schedules; commands; automatic context compaction; and native or fallback tool calling
+- Native spellcheck for Markdown, text, and prose files, including correction, replace-all, and personal-dictionary actions
+- Searchable, revocable AI permissions for project reads, edits, terminal commands, debugging, web access, a dedicated temporary browser, Computer Control, and PlatformIO. Grants can be used once, for one conversation, or always for the current project. Windows Computer Control uses semantic UI Automation first and a visible foreground-input fallback; macOS uses Accessibility actions with a separate agent-cursor overlay. Reversible edit checkpoints never touch project Git.
+- A persistent top search surface for project text and AI chats, with separated result groups. Active permissions, downloads, browser use, native Computer Control, and network work share a second responsive status slot without replacing search.
+- A native PlatformIO workspace for isolated Core installation and updates, project creation, environment selection, builds, uploads, cleaning, tests, and serial monitoring. PlatformIO telemetry and automatic Core network checks are forcibly disabled; optional daily updates require explicit opt-in.
+- Electron Builder targets for NSIS (Windows), a portable app ZIP (macOS), DEB, and Snap (Linux)
+- Optional application updates from the official osCode GitHub Releases feed. They are off by default, offered once in Notifications, and can be changed later in Settings.
+
+## Supported systems
+
+- Windows 10 or newer on 64-bit Intel or AMD systems
+- macOS 12 Monterey or newer; the universal ZIP supports Intel and Apple silicon Macs
+- Current 64-bit Debian and Ubuntu releases through the DEB or Snap packages
+
+## Development
+
+```sh
+pnpm install
+pnpm dev
+```
+
+The six osCode model variants are maintained in the separate [osCode Models repository](https://github.com/OmerDesignX/osCode-Models), including their checksums, architecture, licenses, quantization, and memory guidance. Model weights are not committed to this source repository and are not embedded in installers. Small, Medium, and Large remain visible in AI Coder; choosing a missing tier downloads only that tier, verifies every file with the repository's SHA-256 manifest, and activates it atomically. Apple-silicon Macs receive MLX; Windows, Linux, and Intel Macs receive GGUF. On Windows, osCode detects NVIDIA independently from the active llama.cpp backend, validates CUDA with `llama-completion --list-devices`, and prefers CUDA 12.4 for its broad driver compatibility. NVIDIA runtime libraries are not embedded in the installer. A user with driver 525 or newer can explicitly add the checksum-pinned official CUDA 12.4 runtime to osCode's private application-data directory; otherwise osCode uses a compatible installed runtime when it validates successfully. Vulkan remains the fallback for compatible NVIDIA, AMD, and Intel GPUs, followed by CPU. A visible top-bar progress indicator can stop any download.
+
+Downloaded models are private application data rather than project files: `%APPDATA%\osCode\models` on Windows, `~/Library/Application Support/osCode/models` on macOS, and `~/.config/osCode/models` on Linux. Removing the app does not silently remove these multi-gigabyte files. Custom models remain references to their original location.
+
+For packaged builds, use the native release artifact: NSIS on Windows, the portable app ZIP on macOS, or DEB/Snap on Debian and Ubuntu. The `release-assets/` directory keeps each operating system in its own folder and documents every verified artifact. Packages contain the editor and local inference runtimes, but no model weights. GitHub updates use [OmerDesignX/osCode-IDE Releases](https://github.com/OmerDesignX/osCode-IDE/releases); each published version must include its package, Electron Builder update metadata (`latest.yml`, `latest-mac.yml`, or `latest-linux.yml`), and the Windows installer block map where applicable.
+
+Maintainers should follow [`docs/RELEASING.md`](docs/RELEASING.md) for native runner prerequisites, version tags, draft review, checksums, and signing.
+
+Do not commit `vendor/models/`, generated release weights, downloaded models, or partial downloads to the application repository. The separate model repository uses Git LFS; osCode downloads only the files described by its pinned public catalogue.
+
+Use `pnpm test` for static checks and regression tests, `pnpm run smoke` for a hidden project/editor/Git/native-terminal check, and `pnpm run build:dir` for an unpacked platform build. The smoke project exercises local identity, branch create/switch/merge/delete, submodule detection and absorption, commit, a file-based local remote, push, and pull without contacting the network. CI tests the source build, creates each native package, verifies the packaged `node-pty` addon and expected release formats, then launches the unpacked packaged application through the same UI, Git, and terminal smoke test. The macOS release is a universal ZIP containing the complete `.app`; users may run it after unzipping or drag it into Applications without an installer. macOS signing and notarization must run on macOS or a macOS CI runner. Linux DEB/Snap artifacts are built and inspected on Linux CI so native terminal binaries and package metadata come from the target platform.
+
+`build/icon.png` is the canonical application icon. Public transparent PNG wordmarks live in `assets/logo` in white, black, and baby blue. The baby-blue brand color is `#89CFF0`, with lighter and darker tonal shades used for accessible interface states.
+
+## Keyboard shortcuts
+
+- `Ctrl/Cmd+O` — open a folder
+- `Ctrl/Cmd+N` — create a file
+- `Ctrl/Cmd+S` — save the active file
+- `Ctrl/Cmd+Backtick` — toggle the terminal
+- `Ctrl/Cmd+Shift+L` — toggle dark/light theme
+- `Ctrl/Cmd+Shift+A` — toggle Advanced Mode
+
+On Windows and Linux, press `Alt` to reveal the compact native application menu. Production builds intentionally omit reload and developer-tool commands.
+
+The Snap uses the stable Core 22 build path and classic confinement because a general-purpose editor must open arbitrary user-selected folders and invoke the user's Git and shell executables. Publishing a classic snap requires manual Snap Store review. Configure platform signing, notarization, and final release metadata before distributing production binaries.
+
+## Architecture and safety
+
+The renderer has no Node access. A sandboxed preload exposes narrow, validated IPC operations; file reads and writes are constrained to the opened project. Monaco and its language workers are bundled locally, so editing does not depend on a CDN. Git commands use argument arrays rather than a shell, and remote destinations are restricted to HTTPS, SSH, SCP-style SSH, or explicit file URLs. Release builds prepare checksum-verified `uv` and contained Python runtimes for their target platform. Later Python versions are installed only after the user asks for them. AI file tools reject traversal and symbolic-link escapes. Writes default to explicit approval, and terminal tools use executable-plus-argument arrays without a shell, a restricted command list, a project-only working directory, short timeouts, output limits, and a scrubbed environment. The dedicated agent browser uses a temporary sandboxed Electron session, denies device permissions and pop-ups, blocks credentials and private-network pages, and erases storage when closed.
+
+Native Computer Control remains off until the user enables it and grants a matching permission. On Windows, the bundled Microsoft helper invokes UI Automation patterns or sets values without taking focus where the application permits it; mouse-simulation or `SendInput` is a last resort and is labelled **foreground pointer** in the top status area. On macOS, osCode's bundled helper uses the Accessibility API and draws an independent overlay cursor without moving the user's hardware pointer. macOS asks for operating-system Accessibility approval. Terminals, credential managers, authentication tools, system security controls, and native confirmations are blocked. Escape aborts the current native helper and closes its overlay. Linux continues to support Computer Control inside osCode and the dedicated agent browser; arbitrary desktop-app control is withheld until the desktop's user-approved RemoteDesktop portal is available through a bundled, distro-compatible implementation. No kernel driver is installed on any platform.
+
+The model cannot use a capability until a matching permission grant exists. Opening another project resets files, edits, web, browser, and Computer Control to their safe defaults. A context meter shows the selected token budget and older chat is summarized locally before it fills. PyTorch/MLX packages run from a separate application-data environment rather than any project Python environment.
+
+## Privacy
+
+osCode contains no telemetry or analytics. Renderer HTTP and HTTPS requests are blocked. Local model inference, prompts, chat history, images, code, screenshots, Accessibility trees, and Computer Control actions remain on the computer. The Windows Computer Control child process is always launched with both `WINAPP_CLI_TELEMETRY_OPTOUT=1` and `DOTNET_CLI_TELEMETRY_OPTOUT=1`. Web, browser, file, edit, and Computer Control capabilities start off for every opened project. Optional AI web access requires both its visible toggle and a matching permission grant; only explicit search queries and requested public HTTPS page URLs leave the computer. Active network use is shown beside the global search bar. Local/private addresses, credentials, non-HTTPS public pages, large responses, and redirect chains are blocked. PlatformIO runs with `PLATFORMIO_SETTING_ENABLE_TELEMETRY=false`, and its stored telemetry setting is also disabled after installation. The remembered project, editor preferences, model references, downloaded model weights, chats, goals, queues, schedules, scoped permission grants, AI checkpoints, and each project's interpreter selection are stored only in the application-data directory; absolute interpreter paths are never written into the project or Git. The remembered project can be cleared from the explorer toolbar. Network activity occurs only when the user explicitly downloads an osCode model, grants AI web or browser access, asks Git to contact a configured remote, installs or updates a runtime or engine, fetches PlatformIO project packages, pulls a named model with local Ollama, or opts into application updates. Application updates contact only the official GitHub Releases feed and are disabled until the user accepts the one-time prompt or enables them in Settings. Every model and PlatformIO download is visible and cancellable. PlatformIO automatic updates are disabled unless the user opts in.
+
+## Contributing and security
+
+Contributions are welcome; see `CONTRIBUTING.md`. Please report vulnerabilities using the private process in `SECURITY.md` rather than a public issue.
+
+## License
+
+MIT — see `LICENSE`.

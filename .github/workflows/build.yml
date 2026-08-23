@@ -1,0 +1,101 @@
+name: Build osCode
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing v-tag to receive verified native assets
+        required: true
+        type: string
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run format:check
+      - run: pnpm test
+
+  desktop:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: quality
+    permissions:
+      contents: write
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: oscode-release-windows
+            platform: windows
+            command: pnpm exec electron-builder --win nsis --x64 --publish never
+            smoke: pnpm run smoke:run
+          - os: oscode-release-macos
+            platform: macos
+            command: pnpm exec electron-builder --mac zip --universal --publish never
+            smoke: pnpm run smoke:run
+          - os: oscode-release-linux
+            platform: linux
+            command: pnpm exec electron-builder --linux deb --x64 --publish never && pnpm exec electron-builder --config build/electron-builder.linux-snap.cjs --linux snap --x64 --publish never
+            smoke: xvfb-run -a pnpm run smoke:run
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm run release:check-disk
+      - name: Install Linux packaging tools
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential xvfb
+          sudo gem install --no-document fpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run format:check
+      - run: pnpm test
+      - run: pnpm run native:check
+      - run: pnpm run git:prepare
+      - run: pnpm run python:prepare
+      - run: pnpm run llama:prepare
+      - run: pnpm run computer:prepare
+      - run: pnpm exec vite build
+      - run: ${{ matrix.smoke }}
+      - run: ${{ matrix.command }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Stage Windows release
+        if: matrix.platform == 'windows'
+        run: pnpm run release:stage:windows
+      - name: Verify packaged app and native terminal
+        run: node scripts/verify-package.mjs ${{ matrix.platform }} --run-smoke
+      - name: Stage macOS release assets
+        if: matrix.platform == 'macos'
+        run: pnpm run release:stage:macos
+      - name: Stage Linux release assets
+        if: matrix.platform == 'linux'
+        run: pnpm run release:stage:linux
+      - name: Upload verified files to a draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        run: node scripts/upload-release-assets.mjs ${{ matrix.platform }} "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}"
+        env:
+          GH_TOKEN: ${{ github.token }}

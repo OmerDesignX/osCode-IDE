@@ -1,0 +1,247 @@
+{
+  "name": "oscode",
+  "version": "0.1.0",
+  "description": "A calm, cross-platform code editor",
+  "desktopName": "studio.oscode.editor.desktop",
+  "main": "dist-electron/main/index.js",
+  "author": "osCode contributors",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"npm:dev:electron\"",
+    "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "build": "tsc -b && vite build && electron-builder --publish never",
+    "build:dir": "tsc -b && vite build && electron-builder --dir --publish never",
+    "typecheck": "tsc -b --pretty false",
+    "test": "tsc -b --pretty false && node --test scripts/*.test.mjs",
+    "smoke": "tsc -b --pretty false && vite build && electron . --smoke-test",
+    "smoke:run": "electron . --smoke-test",
+    "ai:verify": "tsc -b --pretty false && node scripts/verify-local-ai.mjs",
+    "native:check": "node scripts/check-native.mjs",
+    "git:prepare": "node scripts/prepare-git.mjs",
+    "python:prepare": "node scripts/prepare-python.mjs",
+    "llama:prepare": "node scripts/prepare-llama.mjs",
+    "computer:prepare": "node scripts/prepare-computer-control.mjs",
+    "release:check-disk": "node scripts/check-release-disk.mjs",
+    "release:stage:macos": "node scripts/stage-native-release.mjs macos",
+    "release:stage:linux": "node scripts/stage-native-release.mjs linux",
+    "release:stage:windows": "node scripts/stage-windows-release.mjs",
+    "format": "prettier --write . --ignore-unknown",
+    "format:check": "prettier --check . --ignore-unknown",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource/fira-code": "^5.1.1",
+    "@fontsource/manrope": "^5.1.1",
+    "@fontsource/playfair-display": "^5.1.1",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "dompurify": "3.4.13",
+    "electron-updater": "^6.8.9",
+    "feather-icons": "^4.29.2",
+    "marked": "^18.0.9",
+    "mermaid": "^11.16.1",
+    "monaco-editor": "^0.56.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@microsoft/winappcli": "0.5.0",
+    "@types/feather-icons": "^4.29.4",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.12",
+    "prettier": "^3.9.6",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.1",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "studio.oscode.editor",
+    "productName": "osCode",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "OmerDesignX",
+        "repo": "osCode-IDE"
+      }
+    ],
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "mac": {
+      "icon": "build/icon.png",
+      "minimumSystemVersion": "12.0",
+      "extraResources": [
+        {
+          "from": "vendor/uv",
+          "to": "uv"
+        },
+        {
+          "from": "vendor/python",
+          "to": "python"
+        },
+        {
+          "from": "vendor/llama/darwin-arm64",
+          "to": "llama/darwin-arm64"
+        },
+        {
+          "from": "vendor/llama/darwin-x64",
+          "to": "llama/darwin-x64"
+        },
+        {
+          "from": "vendor/llama/LICENSE",
+          "to": "llama/LICENSE"
+        },
+        {
+          "from": "vendor/computer-control/darwin-universal",
+          "to": "computer-control/darwin-universal"
+        }
+      ],
+      "target": [
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "vendor/git/win32-x64",
+          "to": "git"
+        },
+        {
+          "from": "vendor/uv",
+          "to": "uv"
+        },
+        {
+          "from": "vendor/python",
+          "to": "python"
+        },
+        {
+          "from": "vendor/llama/win32-x64",
+          "to": "llama",
+          "filter": [
+            "llama-completion.exe",
+            "*.dll",
+            "!llama-server-impl.dll"
+          ]
+        },
+        {
+          "from": "vendor/llama/win32-x64-vulkan",
+          "to": "llama/vulkan",
+          "filter": [
+            "llama-completion.exe",
+            "llama-cli.exe",
+            "*.dll",
+            "OSCODE_RUNTIME.json"
+          ]
+        },
+        {
+          "from": "vendor/llama/win32-x64-cuda-13.3",
+          "to": "llama/cuda-system-13",
+          "filter": [
+            "llama-completion.exe",
+            "llama-cli.exe",
+            "*.dll",
+            "OSCODE_RUNTIME.json"
+          ]
+        },
+        {
+          "from": "vendor/llama/win32-x64-cuda-12.4",
+          "to": "llama/cuda-system-12",
+          "filter": [
+            "llama-completion.exe",
+            "llama-cli.exe",
+            "*.dll",
+            "OSCODE_RUNTIME.json"
+          ]
+        },
+        {
+          "from": "vendor/llama/LICENSE",
+          "to": "llama/LICENSE"
+        },
+        {
+          "from": "node_modules/@microsoft/winappcli/bin/win-x64",
+          "to": "computer-control/win32-x64"
+        },
+        {
+          "from": "node_modules/@microsoft/winappcli/LICENSE",
+          "to": "computer-control/WINAPP-LICENSE"
+        }
+      ],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "vendor/uv",
+          "to": "uv"
+        },
+        {
+          "from": "vendor/python",
+          "to": "python"
+        },
+        {
+          "from": "vendor/llama/linux-x64",
+          "to": "llama/linux-x64"
+        },
+        {
+          "from": "vendor/llama/linux-x64-vulkan",
+          "to": "llama/linux-x64-vulkan"
+        },
+        {
+          "from": "vendor/llama/LICENSE",
+          "to": "llama/LICENSE"
+        }
+      ],
+      "target": [
+        "deb"
+      ],
+      "category": "Development",
+      "synopsis": "A calm, capable code editor",
+      "executableName": "oscode",
+      "syncDesktopName": true,
+      "maintainer": "osCode contributors <noreply@github.com>"
+    },
+    "snapcraft": {
+      "base": "core22",
+      "core22": {
+        "confinement": "classic",
+        "summary": "A calm, capable code editor",
+        "allowNativeWayland": true
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

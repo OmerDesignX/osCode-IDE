@@ -1,0 +1,580 @@
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+const [platform, ...flags] = process.argv.slice(2);
+if (!["windows", "macos", "linux"].includes(platform))
+  throw new Error(
+    "Usage: node scripts/verify-package.mjs <windows|macos|linux> [--run-smoke]",
+  );
+
+const release = path.resolve(process.env.OSCODE_PACKAGE_DIR || "release");
+const walk = (root, depth = 8) => {
+  if (depth < 0) return [];
+  const result = [];
+  for (const item of readdirSync(root, { withFileTypes: true })) {
+    const full = path.join(root, item.name);
+    if (item.isDirectory()) result.push(...walk(full, depth - 1));
+    else if (item.isFile()) result.push(full);
+  }
+  return result;
+};
+const releaseFiles = walk(release);
+const relative = (file) => path.relative(release, file).replaceAll("\\", "/");
+const requireLargeFile = (file, label, minimum = 100_000) => {
+  if (!file || statSync(file).size < minimum)
+    throw new Error(`${label} is missing or unexpectedly small`);
+  return file;
+};
+const first = (predicate) => releaseFiles.find(predicate);
+const all = (predicate) => releaseFiles.filter(predicate);
+const hasMagic = (file, bytes) => {
+  const header = readFileSync(file).subarray(0, bytes.length);
+  return bytes.every((value, index) => header[index] === value);
+};
+const hasBytesAt = (file, offset, bytes) => {
+  const value = readFileSync(file).subarray(offset, offset + bytes.length);
+  return bytes.every((expected, index) => value[index] === expected);
+};
+const pythonExecutables = (root) =>
+  walk(root).filter((file) =>
+    process.platform === "win32"
+      ? /[\\/]python(?:3(?:\.\d+)?)?\.exe$/i.test(file)
+      : /[\\/]python3(?:\.\d+)?$/.test(file),
+  );
+
+let appRoot;
+let executable;
+let artifacts;
+if (platform === "windows") {
+  appRoot = path.join(release, "win-unpacked");
+  executable = path.join(appRoot, "osCode.exe");
+  artifacts = all(
+    (file) =>
+      /^osCode Setup .+\.exe$/i.test(path.basename(file)) &&
+      !relative(file).includes("/"),
+  );
+} else if (platform === "linux") {
+  appRoot = path.join(release, "linux-unpacked");
+  executable = path.join(appRoot, "oscode");
+  artifacts = [
+    first((file) => /^oscode[_-].*\.deb$/i.test(path.basename(file))),
+    first((file) => /\.snap$/i.test(file)),
+  ].filter(Boolean);
+} else {
+  executable = first((file) =>
+    /osCode\.app\/Contents\/MacOS\/osCode$/.test(relative(file)),
+  );
+  appRoot = path.resolve(executable, "..", "..", "..");
+  artifacts = [first((file) => /\.zip$/i.test(file))].filter(Boolean);
+}
+
+requireLargeFile(executable, `${platform} application executable`, 1_000_000);
+const resourcesRoot =
+  platform === "macos"
+    ? path.join(appRoot, "Contents", "Resources")
+    : path.join(appRoot, "resources");
+const asar = requireLargeFile(
+  path.join(resourcesRoot, "app.asar"),
+  `${platform} app.asar`,
+  1_000_000,
+);
+if (existsSync(path.join(resourcesRoot, "models")))
+  throw new Error(
+    "Model weights must not be embedded in the application package",
+  );
+const nativeRoot = path.join(
+  resourcesRoot,
+  "app.asar.unpacked",
+  "node_modules",
+  "node-pty",
+);
+const nativeFiles = walk(nativeRoot).filter((file) => file.endsWith(".node"));
+let bundledGit;
+if (platform === "windows") {
+  const pty = nativeFiles.find((file) =>
+    /prebuilds[\\/]win32-x64[\\/]pty\.node$/i.test(file),
+  );
+  if (!pty || !hasMagic(pty, [0x4d, 0x5a]))
+    throw new Error("Windows x64 node-pty prebuild is missing or invalid");
+  bundledGit = requireLargeFile(
+    path.join(resourcesRoot, "git", "cmd", "git.exe"),
+    "Bundled MinGit launcher",
+    40_000,
+  );
+  if (!hasMagic(bundledGit, [0x4d, 0x5a]))
+    throw new Error("Bundled MinGit launcher is not a Windows binary");
+  const bundledGitCore = requireLargeFile(
+    path.join(resourcesRoot, "git", "mingw64", "bin", "git.exe"),
+    "Bundled MinGit core executable",
+    1_000_000,
+  );
+  if (!hasMagic(bundledGitCore, [0x4d, 0x5a]))
+    throw new Error("Bundled MinGit core is not a Windows binary");
+  const computerControlRoot = path.join(
+    resourcesRoot,
+    "computer-control",
+    "win32-x64",
+  );
+  const computerControl = requireLargeFile(
+    path.join(computerControlRoot, "winapp.exe"),
+    "Bundled Windows Computer Control helper",
+    10_000_000,
+  );
+  if (!hasMagic(computerControl, [0x4d, 0x5a]))
+    throw new Error(
+      "Bundled Windows Computer Control helper is not a PE binary",
+    );
+  requireLargeFile(
+    path.join(computerControlRoot, "libSkiaSharp.dll"),
+    "Bundled Computer Control graphics dependency",
+    1_000_000,
+  );
+  requireLargeFile(
+    path.join(resourcesRoot, "computer-control", "WINAPP-LICENSE"),
+    "Bundled Computer Control license",
+    500,
+  );
+  const computerControlCheck = spawnSync(
+    computerControl,
+    ["ui", "list-windows", "--json"],
+    {
+      cwd: computerControlRoot,
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        WINAPP_CLI_TELEMETRY_OPTOUT: "1",
+        DOTNET_CLI_TELEMETRY_OPTOUT: "1",
+      },
+    },
+  );
+  if (computerControlCheck.status !== 0)
+    throw new Error("Bundled Windows Computer Control helper failed to start");
+  try {
+    if (!Array.isArray(JSON.parse(computerControlCheck.stdout.trim())))
+      throw new Error("not an array");
+  } catch {
+    throw new Error(
+      "Bundled Windows Computer Control helper returned invalid JSON",
+    );
+  }
+  const bundledUvPath = walk(path.join(resourcesRoot, "uv", "win32-x64")).find(
+    (file) => /[\\/]uv\.exe$/i.test(file),
+  );
+  if (!bundledUvPath) throw new Error("Bundled uv executable is missing");
+  const bundledUv = requireLargeFile(
+    bundledUvPath,
+    "Bundled uv executable",
+    5_000_000,
+  );
+  if (!hasMagic(bundledUv, [0x4d, 0x5a]))
+    throw new Error("Bundled uv is not a Windows binary");
+  const bundledLlama = requireLargeFile(
+    path.join(resourcesRoot, "llama", "llama-completion.exe"),
+    "Bundled llama.cpp command",
+    8_000,
+  );
+  if (!hasMagic(bundledLlama, [0x4d, 0x5a]))
+    throw new Error("Bundled llama.cpp command is not a Windows binary");
+  for (const dependency of [
+    "llama-completion-impl.dll",
+    "llama-common.dll",
+    "llama.dll",
+    "ggml.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+  ]) {
+    requireLargeFile(
+      path.join(resourcesRoot, "llama", dependency),
+      `Bundled llama.cpp dependency ${dependency}`,
+      5_000,
+    );
+  }
+  const llamaCheck = spawnSync(bundledLlama, ["--version"], {
+    cwd: path.dirname(bundledLlama),
+    encoding: "utf8",
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  const llamaVersionOutput = `${llamaCheck.stdout || ""}\n${llamaCheck.stderr || ""}`;
+  if (llamaCheck.status !== 0 || !/build\s+\d+/i.test(llamaVersionOutput))
+    throw new Error("Bundled llama.cpp command failed its dependency check");
+  const vulkanRoot = path.join(resourcesRoot, "llama", "vulkan");
+  const vulkanLlama = requireLargeFile(
+    path.join(vulkanRoot, "llama-completion.exe"),
+    "Bundled llama.cpp Vulkan command",
+    8_000,
+  );
+  for (const dependency of [
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "ggml-vulkan.dll",
+  ])
+    requireLargeFile(
+      path.join(vulkanRoot, dependency),
+      `Bundled Vulkan dependency ${dependency}`,
+      5_000,
+    );
+  const vulkanCheck = spawnSync(vulkanLlama, ["--version"], {
+    cwd: vulkanRoot,
+    encoding: "utf8",
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (
+    vulkanCheck.status !== 0 ||
+    !/build\s+\d+/i.test(
+      `${vulkanCheck.stdout || ""}\n${vulkanCheck.stderr || ""}`,
+    )
+  )
+    throw new Error("Bundled llama.cpp Vulkan command failed to start");
+  for (const cuda of [{ version: "13" }, { version: "12" }]) {
+    const cudaRoot = path.join(
+      resourcesRoot,
+      "llama",
+      `cuda-system-${cuda.version}`,
+    );
+    const cudaLlama = requireLargeFile(
+      path.join(cudaRoot, "llama-completion.exe"),
+      `Bundled llama.cpp CUDA ${cuda.version} command`,
+      8_000,
+    );
+    for (const dependency of [
+      "vcruntime140.dll",
+      "vcruntime140_1.dll",
+      "msvcp140.dll",
+      "ggml-cuda.dll",
+    ])
+      requireLargeFile(
+        path.join(cudaRoot, dependency),
+        `Bundled CUDA ${cuda.version} dependency ${dependency}`,
+        5_000,
+      );
+    const cudaCheck = spawnSync(cudaLlama, ["--version"], {
+      cwd: cudaRoot,
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    if (
+      cudaCheck.status !== 0 ||
+      !/build\s+\d+/i.test(
+        `${cudaCheck.stdout || ""}\n${cudaCheck.stderr || ""}`,
+      )
+    )
+      throw new Error(
+        `Bundled llama.cpp CUDA ${cuda.version} command failed to start`,
+      );
+    const embeddedNvidiaRuntime = releaseFiles.filter(
+      (file) =>
+        file.startsWith(cudaRoot) &&
+        /[\\/]cu(?:dart|blas(?:Lt)?)64_\d+\.dll$/i.test(file),
+    );
+    if (embeddedNvidiaRuntime.length)
+      throw new Error("NVIDIA CUDA runtime libraries must not be packaged");
+  }
+  const serverArtifacts = releaseFiles.filter((file) =>
+    /[\\/](?:(?:llama|ggml-rpc)-server\.exe|llama-server-impl\.dll)$/i.test(
+      file,
+    ),
+  );
+  if (serverArtifacts.length)
+    throw new Error("Server runtime artifacts must not be packaged");
+  const containedPython = pythonExecutables(
+    path.join(resourcesRoot, "python", "win32-x64"),
+  );
+  for (const version of ["3.10", "3.11", "3.12"]) {
+    const ready = containedPython.some((python) => {
+      const check = spawnSync(
+        python,
+        [
+          "-c",
+          "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ],
+        {
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      return check.status === 0 && check.stdout.trim() === version;
+    });
+    if (!ready) throw new Error(`Contained Python ${version} is missing`);
+  }
+} else if (platform === "linux") {
+  const pty = nativeFiles.find(
+    (file) =>
+      /(?:build[\\/]Release|prebuilds[\\/]linux-x64)/i.test(file) &&
+      hasMagic(file, [0x7f, 0x45, 0x4c, 0x46]),
+  );
+  if (!pty) throw new Error("Linux x64 node-pty ELF addon is missing");
+  const linuxLlamaRoot = path.join(resourcesRoot, "llama", "linux-x64");
+  const linuxLlama = requireLargeFile(
+    path.join(linuxLlamaRoot, "llama-completion"),
+    "Bundled Linux llama.cpp command",
+    8_000,
+  );
+  if (!hasMagic(linuxLlama, [0x7f, 0x45, 0x4c, 0x46]))
+    throw new Error("Bundled Linux llama.cpp command is not an ELF binary");
+  const linuxLlamaCheck = spawnSync(linuxLlama, ["--version"], {
+    cwd: linuxLlamaRoot,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (
+    linuxLlamaCheck.status !== 0 ||
+    !/build\s+\d+/i.test(
+      `${linuxLlamaCheck.stdout || ""}\n${linuxLlamaCheck.stderr || ""}`,
+    )
+  )
+    throw new Error("Bundled Linux llama.cpp command failed its version check");
+  if (existsSync(path.join(linuxLlamaRoot, "llama-server")))
+    throw new Error(
+      "The Linux llama.cpp server executable must not be packaged",
+    );
+  const linuxUv = requireLargeFile(
+    path.join(resourcesRoot, "uv", "linux-x64", "uv"),
+    "Bundled Linux uv command",
+    5_000_000,
+  );
+  if (!hasMagic(linuxUv, [0x7f, 0x45, 0x4c, 0x46]))
+    throw new Error("Bundled Linux uv command is not an ELF binary");
+  const linuxUvCheck = spawnSync(linuxUv, ["--version"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (linuxUvCheck.status !== 0 || !/^uv\s+\d+/i.test(linuxUvCheck.stdout))
+    throw new Error("Bundled Linux uv command failed its version check");
+  const linuxPython = pythonExecutables(
+    path.join(resourcesRoot, "python", "linux-x64"),
+  );
+  for (const version of ["3.10", "3.11", "3.12"]) {
+    const ready = linuxPython.some((python) => {
+      if (!hasMagic(python, [0x7f, 0x45, 0x4c, 0x46])) return false;
+      const check = spawnSync(
+        python,
+        [
+          "-c",
+          "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      return check.status === 0 && check.stdout.trim() === version;
+    });
+    if (!ready) throw new Error(`Contained Linux Python ${version} is missing`);
+  }
+} else {
+  const infoPlist = path.join(appRoot, "Contents", "Info.plist");
+  if (!existsSync(infoPlist)) throw new Error("macOS Info.plist is missing");
+  const minimumSystem = spawnSync(
+    "plutil",
+    ["-extract", "LSMinimumSystemVersion", "raw", "-o", "-", infoPlist],
+    { encoding: "utf8", timeout: 10_000 },
+  );
+  if (minimumSystem.status !== 0 || minimumSystem.stdout.trim() !== "12.0")
+    throw new Error("macOS package must require Monterey 12.0 or newer");
+  const appArchitectures = spawnSync("lipo", ["-archs", executable], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (
+    appArchitectures.status !== 0 ||
+    !/\bx86_64\b/.test(appArchitectures.stdout) ||
+    !/\barm64\b/.test(appArchitectures.stdout)
+  )
+    throw new Error("macOS application executable is not universal");
+  const macComputerControl = requireLargeFile(
+    path.join(
+      resourcesRoot,
+      "computer-control",
+      "darwin-universal",
+      "oscode-computer-control",
+    ),
+    "Bundled macOS Computer Control helper",
+    10_000,
+  );
+  const helperArchitectures = spawnSync(
+    "lipo",
+    ["-archs", macComputerControl],
+    {
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  if (
+    helperArchitectures.status !== 0 ||
+    !/\bx86_64\b/.test(helperArchitectures.stdout) ||
+    !/\barm64\b/.test(helperArchitectures.stdout)
+  )
+    throw new Error("macOS Computer Control helper is not universal");
+  const helperList = spawnSync(macComputerControl, ["list"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  try {
+    if (
+      helperList.status !== 0 ||
+      !Array.isArray(JSON.parse(helperList.stdout))
+    )
+      throw new Error("invalid helper output");
+  } catch {
+    throw new Error(
+      "macOS Computer Control helper failed its local list check",
+    );
+  }
+  for (const architecture of ["darwin-x64", "darwin-arm64"]) {
+    const cpuType = architecture.endsWith("arm64")
+      ? [0x0c, 0x00, 0x00, 0x01]
+      : [0x07, 0x00, 0x00, 0x01];
+    const pty = nativeFiles.find((file) =>
+      new RegExp(`prebuilds[\\\\/]${architecture}[\\\\/]pty\\.node$`, "i").test(
+        file,
+      ),
+    );
+    if (
+      !pty ||
+      !hasMagic(pty, [0xcf, 0xfa, 0xed, 0xfe]) ||
+      !hasBytesAt(pty, 4, cpuType)
+    )
+      throw new Error(
+        `macOS ${architecture} node-pty prebuild is missing or invalid`,
+      );
+    const llamaRoot = path.join(resourcesRoot, "llama", architecture);
+    const llama = requireLargeFile(
+      path.join(llamaRoot, "llama-completion"),
+      `Bundled ${architecture} llama.cpp command`,
+      8_000,
+    );
+    if (
+      !hasMagic(llama, [0xcf, 0xfa, 0xed, 0xfe]) ||
+      !hasBytesAt(llama, 4, cpuType)
+    )
+      throw new Error(
+        `${architecture} llama.cpp command is not a Mach-O binary`,
+      );
+    if (existsSync(path.join(llamaRoot, "llama-server")))
+      throw new Error(
+        `The ${architecture} llama.cpp server executable must not be packaged`,
+      );
+    const uv = requireLargeFile(
+      path.join(resourcesRoot, "uv", architecture, "uv"),
+      `Bundled ${architecture} uv command`,
+      5_000_000,
+    );
+    if (!hasMagic(uv, [0xcf, 0xfa, 0xed, 0xfe]) || !hasBytesAt(uv, 4, cpuType))
+      throw new Error(`${architecture} uv command has the wrong architecture`);
+    const pythons = pythonExecutables(
+      path.join(resourcesRoot, "python", architecture),
+    );
+    for (const version of ["3.10", "3.11", "3.12"]) {
+      const python = pythons.find(
+        (candidate) =>
+          candidate.includes(`cpython-${version}`) &&
+          hasMagic(candidate, [0xcf, 0xfa, 0xed, 0xfe]) &&
+          hasBytesAt(candidate, 4, cpuType),
+      );
+      if (!python)
+        throw new Error(
+          `Contained ${architecture} Python ${version} is missing`,
+        );
+    }
+  }
+  const nativeLlamaRoot = path.join(
+    resourcesRoot,
+    "llama",
+    `darwin-${process.arch}`,
+  );
+  const nativeLlama = path.join(nativeLlamaRoot, "llama-completion");
+  const nativeLlamaCheck = spawnSync(nativeLlama, ["--version"], {
+    cwd: nativeLlamaRoot,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (
+    nativeLlamaCheck.status !== 0 ||
+    !/build\s+\d+/i.test(
+      `${nativeLlamaCheck.stdout || ""}\n${nativeLlamaCheck.stderr || ""}`,
+    )
+  )
+    throw new Error("Native macOS llama.cpp command failed its version check");
+  const nativeUv = path.join(
+    resourcesRoot,
+    "uv",
+    `darwin-${process.arch}`,
+    "uv",
+  );
+  const nativeUvCheck = spawnSync(nativeUv, ["--version"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (nativeUvCheck.status !== 0 || !/^uv\s+\d+/i.test(nativeUvCheck.stdout))
+    throw new Error("Native macOS uv command failed its version check");
+  const nativePython = pythonExecutables(
+    path.join(resourcesRoot, "python", `darwin-${process.arch}`),
+  );
+  for (const version of ["3.10", "3.11", "3.12"]) {
+    const ready = nativePython.some((python) => {
+      const check = spawnSync(
+        python,
+        [
+          "-c",
+          "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      return check.status === 0 && check.stdout.trim() === version;
+    });
+    if (!ready) throw new Error(`Native macOS Python ${version} failed to run`);
+  }
+}
+
+const expectedArtifactCount = platform === "linux" ? 2 : 1;
+if (artifacts.length !== expectedArtifactCount)
+  throw new Error(`${platform} release artifacts are incomplete`);
+const asarModifiedAt = statSync(asar).mtimeMs;
+for (const artifact of artifacts) {
+  requireLargeFile(
+    artifact,
+    `${platform} ${path.extname(artifact)} artifact`,
+    1_000_000,
+  );
+  if (
+    platform !== "linux" &&
+    statSync(artifact).mtimeMs + 5_000 < asarModifiedAt
+  )
+    throw new Error(
+      `${platform} ${path.extname(artifact)} artifact is older than app.asar`,
+    );
+}
+
+if (flags.includes("--run-smoke")) {
+  const command = platform === "linux" ? "xvfb-run" : executable;
+  const args =
+    platform === "linux"
+      ? ["-a", executable, "--no-sandbox", "--smoke-test"]
+      : ["--smoke-test"];
+  const smoke = spawnSync(command, args, { stdio: "inherit" });
+  if (smoke.error) throw smoke.error;
+  if (smoke.status !== 0)
+    throw new Error(`Packaged ${platform} smoke test exited ${smoke.status}`);
+}
+
+console.log(
+  JSON.stringify(
+    {
+      platform,
+      executable: relative(executable),
+      asarBytes: statSync(asar).size,
+      nativeAddons: nativeFiles.map(relative),
+      modelWeights: "downloaded on demand to application data",
+      bundledGit: bundledGit ? relative(bundledGit) : "system package",
+      artifacts: artifacts.map(relative),
+      smoke: flags.includes("--run-smoke") ? "passed" : "not requested",
+    },
+    null,
+    2,
+  ),
+);
