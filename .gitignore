@@ -7,6 +7,7 @@ local-builds/
 vendor/git/
 vendor/uv/
 vendor/python/
+vendor/computer-control/
 vendor/models/
 vendor/llama/*
 !vendor/llama/LICENSE

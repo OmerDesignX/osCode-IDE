@@ -26,6 +26,8 @@ import { AgentStateStore } from "./agent-state.js";
 import {
   bundledModels,
   hardwareProfile,
+  localAiEngine,
+  mlxRuntimeSupported,
   systemCudaBin,
 } from "./bundled-models.js";
 import { downloadModelVariant } from "./model-catalog.js";
@@ -1240,10 +1242,7 @@ export class LocalAiService {
       throw new Error("Choose Small, Medium, or Large");
     if (this.downloadController)
       throw new Error("Another model download is already running");
-    const runtime =
-      process.platform === "darwin" && process.arch === "arm64"
-        ? "mlx"
-        : "llamacpp";
+    const runtime = localAiEngine();
     const controller = new AbortController();
     this.downloadController = controller;
     const label = tier[0].toUpperCase() + tier.slice(1);
@@ -1379,8 +1378,10 @@ export class LocalAiService {
       await this.ensureOllama();
       return "Ollama is ready";
     }
-    if (engine === "mlx" && process.platform !== "darwin")
-      throw new Error("MLX is available on Apple silicon Macs");
+    if (engine === "mlx" && !mlxRuntimeSupported())
+      throw new Error(
+        "MLX needs Apple silicon with macOS 14 or newer. osCode uses GGUF on this Mac instead.",
+      );
     if (engine === "llamacpp") {
       const executable = await this.bundledLlamaExecutable();
       if (!executable)
@@ -1413,7 +1414,7 @@ export class LocalAiService {
     }
     const packages =
       engine === "mlx"
-        ? ["mlx-lm", "huggingface_hub"]
+        ? ["mlx-lm==0.31.3", "mlx==0.32.1", "huggingface_hub"]
         : ["torch==2.7.1", "transformers", "huggingface_hub", "accelerate"];
     const label = engine === "mlx" ? "MLX" : "PyTorch";
     this.options.status(`Installing ${label} locally…`);
@@ -1477,6 +1478,12 @@ export class LocalAiService {
         .trim()
         .split(/\r?\n/);
       return `PyTorch is ready (${runtime === "CPU" ? availability : `CUDA ${runtime} · ${availability}`})`;
+    }
+    if (engine === "mlx") {
+      await exec(python, ["-c", "import mlx, mlx_lm; print('MLX ready')"], {
+        timeout: 30_000,
+        windowsHide: true,
+      });
     }
     return `${label} is ready in the isolated AI environment`;
   }
@@ -2423,20 +2430,20 @@ export class LocalAiService {
         throw new Error("File editing is disabled for this chat");
       const content = cleanText(call.arguments.content, 1_000_000);
       const file = await this.projectPath(call.arguments.path, true);
-      const relative = path.relative(this.root(), file).replace(/\\/g, "/");
+      const root = await fs.realpath(this.root());
+      const relative = path.relative(root, file).replace(/\\/g, "/");
       await this.requirePermission("project.write", chatId, relative);
       if (editMode === "ask") {
         const id = crypto.randomUUID();
         this.pendingEdits.set(id, {
           id,
-          root: await fs.realpath(this.root()),
+          root,
           path: relative,
           content,
         });
         pending.push({ id, path: relative });
         return `Waiting for approval to save ${relative}`;
       }
-      const root = await fs.realpath(this.root());
       const before = await fs.readFile(file, "utf8").catch(() => null);
       await this.history.record(root, relative, before, content);
       await fs.mkdir(path.dirname(file), { recursive: true });
@@ -2470,8 +2477,11 @@ export class LocalAiService {
     computerAccess: boolean,
     goal: string,
   ) {
+    const projectWriteAccess = fileAccess && editMode !== "read-only";
     return [
       "You are osCode's local coding assistant. Work only inside the open project.",
+      `CAPABILITY STATE FOR THIS REQUEST (authoritative and more recent than every earlier assistant message): project read=${fileAccess ? "GRANTED" : "NOT GRANTED"}; project write=${projectWriteAccess ? "GRANTED" : "NOT GRANTED"}; web=${webAccess ? "GRANTED" : "NOT GRANTED"}; browser=${browserAccess ? "GRANTED" : "NOT GRANTED"}; computer control=${computerAccess ? "GRANTED" : "NOT GRANTED"}.`,
+      "When a capability is GRANTED, use its tool immediately when needed. Never ask the user for that permission in prose, never wait for typed confirmation, and ignore any earlier assistant statement claiming that permission is missing. When a capability is NOT GRANTED, call the needed tool exactly once so osCode can show its permission control.",
       "Respond directly to the user's latest request while preserving the conversation context. Inspect files before making claims about project code. Keep replies concise and state files changed only when files actually changed.",
       "Format final answers as clean GitHub-style Markdown with short paragraphs, lists only when useful, fenced code blocks with language names, and no raw HTML.",
       "For greetings or casual conversation, reply naturally in one short sentence and ask what the user wants to work on. Do not announce permissions, project state, web state, model details, or capabilities unless the user asks.",
@@ -2498,9 +2508,9 @@ export class LocalAiService {
         ? "Computer Control is enabled for approved visible applications. List and inspect controls before acting. Prefer semantic accessibility actions. A Windows fallback can take over the foreground pointer; macOS shows a separate agent cursor for Accessibility actions. Never operate terminals, credentials, system security controls, or native confirmations. The user can press Escape to stop."
         : "Computer Control is off. If the task requires a visible application, call the needed computer tool once so osCode can ask the user for permission. Never operate terminals, credentials, security controls, or native confirmations.",
       editMode === "auto"
-        ? "You may edit files with write_file when the user asks for a change."
+        ? "Project writing is granted. Use write_file when the user asks for a change; files save automatically."
         : editMode === "ask"
-          ? "Use write_file for requested changes. osCode will ask the user before saving them."
+          ? "Project writing is granted. Use write_file for requested changes; osCode handles the separate save review without conversational permission requests."
           : "Editing is disabled; explain changes without writing files.",
       "For multi-step work: set a goal once, inspect relevant files, make one concrete change at a time, run the smallest useful check, repair failures, and only then report completion.",
       "A run_command result with exitCode 0 is successful verification evidence. Do not repeat that command. If a goal is active, call complete_goal with the exact command and result, then give the final answer.",
@@ -2756,11 +2766,26 @@ export class LocalAiService {
         );
       }
       const python = this.aiPython();
-      await fs.access(python).catch(() => {
-        throw new Error(
-          `Prepare the ${request.engine === "mlx" ? "MLX" : "PyTorch"} engine in Models first`,
-        );
-      });
+      if (request.engine === "mlx") {
+        if (!mlxRuntimeSupported())
+          throw new Error(
+            "MLX needs Apple silicon with macOS 14 or newer. Select an osCode GGUF model on this Mac.",
+          );
+        const ready = await exec(python, ["-c", "import mlx_lm"], {
+          timeout: 30_000,
+          windowsHide: true,
+        })
+          .then(() => true)
+          .catch(() => false);
+        if (!ready) {
+          this.options.status("Preparing MLX for first use…");
+          await this.prepareEngine("mlx");
+        }
+      } else {
+        await fs.access(python).catch(() => {
+          throw new Error("Prepare the PyTorch engine in Models first");
+        });
+      }
       const worker = `import json,sys\nr=json.load(sys.stdin)\nmsgs=r['messages']\nmodel_id=r['model']\nengine=r['engine']\nhardware=r.get('hardware','auto')\nif engine=='mlx':\n from mlx_lm import load,generate\n m,t=load(model_id)\n p=t.apply_chat_template(msgs,tokenize=False,add_generation_prompt=True) if hasattr(t,'apply_chat_template') else '\\n'.join(x['role']+': '+x.get('content','') for x in msgs)\n out=generate(m,t,prompt=p,max_tokens=1200,verbose=False)\nelse:\n import torch\n from transformers import AutoTokenizer,AutoModelForCausalLM\n t=AutoTokenizer.from_pretrained(model_id,local_files_only=True)\n device_map='cpu' if hardware=='cpu' else 'auto'\n m=AutoModelForCausalLM.from_pretrained(model_id,torch_dtype='auto',device_map=device_map,local_files_only=True)\n p=t.apply_chat_template(msgs,tokenize=False,add_generation_prompt=True) if getattr(t,'chat_template',None) else '\\n'.join(x['role']+': '+x.get('content','') for x in msgs)+'\\nassistant:'\n x=t(p,return_tensors='pt').to(m.device)\n with torch.inference_mode(): y=m.generate(**x,max_new_tokens=1200,do_sample=False)\n out=t.decode(y[0][x['input_ids'].shape[1]:],skip_special_tokens=True)\njson.dump({'content':out},sys.stdout)`;
       const runWorker = async () => {
         const child = spawn(python, ["-c", worker], {

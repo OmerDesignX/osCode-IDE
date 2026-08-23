@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AiHardwareProfile, AiModel, AiModelTier } from "../types.js";
-import { modelVariants } from "./model-catalog.js";
+import { filesForVariant, modelVariants } from "./model-catalog.js";
 
 const exec = promisify(execFile);
 const tiers: Array<Exclude<AiModelTier, "custom">> = [
@@ -55,10 +55,22 @@ function requiredMemory(tier: Exclude<AiModelTier, "custom">, bytes: number) {
   return Math.max(floor, bytes * 1.35 + 3 * 1024 ** 3);
 }
 
-export function localAiEngine() {
-  return process.platform === "darwin" && process.arch === "arm64"
-    ? "mlx"
-    : "llamacpp";
+export function mlxRuntimeSupported(
+  platform = process.platform,
+  arch = process.arch,
+  release = os.release(),
+) {
+  if (platform !== "darwin" || arch !== "arm64") return false;
+  const darwinMajor = Number.parseInt(release.split(".", 1)[0] || "0", 10);
+  return Number.isFinite(darwinMajor) && darwinMajor >= 23;
+}
+
+export function localAiEngine(
+  platform = process.platform,
+  arch = process.arch,
+  release = os.release(),
+) {
+  return mlxRuntimeSupported(platform, arch, release) ? "mlx" : "llamacpp";
 }
 
 async function findGguf(directory: string, tier: string) {
@@ -86,16 +98,45 @@ async function findGguf(directory: string, tier: string) {
   return matches[0] || "";
 }
 
-async function findMlx(directory: string, tier: string) {
-  const entries = await fs
-    .readdir(directory, { withFileTypes: true })
-    .catch(() => [] as import("node:fs").Dirent[]);
-  const folder = entries.find(
-    (entry) =>
-      entry.isDirectory() &&
-      new RegExp(`osCode-MLX-${tier}-`, "i").test(entry.name),
+async function findMlx(
+  directory: string,
+  variant: (typeof modelVariants)[number],
+) {
+  const modelRoot = path.join(directory, variant.folder);
+  const required = filesForVariant(variant).map((file) => path.basename(file));
+  const ready = await Promise.all(
+    required.map((file) =>
+      fs
+        .stat(path.join(modelRoot, file))
+        .then((value) => value.isFile() && value.size > 0)
+        .catch(() => false),
+    ),
   );
-  return folder ? path.join(directory, folder.name) : "";
+  if (ready.some((value) => !value)) return "";
+  try {
+    const index = JSON.parse(
+      await fs.readFile(
+        path.join(modelRoot, "model.safetensors.index.json"),
+        "utf8",
+      ),
+    ) as { weight_map?: Record<string, unknown> };
+    const referenced = new Set(
+      Object.values(index.weight_map || {}).filter(
+        (value): value is string => typeof value === "string",
+      ),
+    );
+    const expectedShards = required.filter((file) =>
+      file.endsWith(".safetensors"),
+    );
+    if (
+      referenced.size !== expectedShards.length ||
+      expectedShards.some((file) => !referenced.has(file))
+    )
+      return "";
+  } catch {
+    return "";
+  }
+  return modelRoot;
 }
 
 export async function bundledModels(modelsRoot: string): Promise<AiModel[]> {
@@ -110,7 +151,7 @@ export async function bundledModels(modelsRoot: string): Promise<AiModel[]> {
     const installedPath =
       engine === "llamacpp"
         ? await findGguf(path.join(modelsRoot, "gguf"), tier)
-        : await findMlx(path.join(modelsRoot, "mlx"), tier);
+        : await findMlx(path.join(modelsRoot, "mlx"), catalog);
     const bytes = installedPath
       ? engine === "llamacpp"
         ? await directoryBytes(path.dirname(installedPath))
@@ -361,7 +402,7 @@ export async function hardwareProfile(
   llamaRoot?: string,
   acceleratorRoot?: string,
 ): Promise<AiHardwareProfile> {
-  if (process.platform === "darwin" && process.arch === "arm64")
+  if (mlxRuntimeSupported())
     return {
       platform: process.platform,
       arch: process.arch,

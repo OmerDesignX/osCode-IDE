@@ -48,6 +48,11 @@ const assets = {
     sha256: "cbfac1e655d550df2515bac060b6410f9ed6aabc7df014353481608ac514b6dd",
   },
 };
+const sourceAsset = {
+  name: "llama.cpp-b10517.tar.gz",
+  url: "https://github.com/ggml-org/llama.cpp/archive/refs/tags/b10517.tar.gz",
+  sha256: "eff311dd10ee35647ebe9b129f51bb44965bc968bf5a723b074c430d450c4a10",
+};
 
 const hashFile = async (file) => {
   const hash = createHash("sha256");
@@ -57,7 +62,8 @@ const hashFile = async (file) => {
 
 const download = async (asset, destination) => {
   const response = await fetch(
-    `https://github.com/ggml-org/llama.cpp/releases/download/${version}/${asset.name}`,
+    asset.url ||
+      `https://github.com/ggml-org/llama.cpp/releases/download/${version}/${asset.name}`,
     { redirect: "follow" },
   );
   if (!response.ok || !response.body)
@@ -279,6 +285,194 @@ if (process.platform === "win32") {
     [assets["win32-x64-cuda-12.4"]],
     ["ggml-cuda.dll"],
   );
+  process.exit(0);
+}
+
+if (process.platform === "darwin") {
+  const deploymentTarget = "12.0";
+  const downloadRoot = path.join(root, "work", "llama-runtime-archives");
+  const sourceArchive = path.join(downloadRoot, sourceAsset.name);
+  const sourceRoot = path.join(root, "work", `llama-${version}-source`);
+
+  const run = (command, args, timeout = 300_000) => {
+    const result = spawnSync(command, args, {
+      cwd: root,
+      stdio: "inherit",
+      timeout,
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0)
+      throw new Error(`${command} exited with status ${result.status}`);
+  };
+  const macRuntimeReady = async (targetName) => {
+    const target = path.join(root, "vendor", "llama", targetName);
+    const completion = path.join(target, "llama-completion");
+    try {
+      const metadata = JSON.parse(
+        await readFile(path.join(target, "OSCODE_RUNTIME.json"), "utf8"),
+      );
+      if (
+        metadata.version !== version ||
+        metadata.source !== sourceAsset.name ||
+        metadata.sha256 !== sourceAsset.sha256 ||
+        metadata.deploymentTarget !== deploymentTarget ||
+        metadata.commit !== "dc72703fc"
+      )
+        return false;
+      if (!(await stat(completion)).isFile()) return false;
+      const expectedArchitecture = targetName.endsWith("arm64")
+        ? "arm64"
+        : "x86_64";
+      const architectures = spawnSync("xcrun", ["lipo", "-archs", completion], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      if (
+        architectures.status !== 0 ||
+        architectures.stdout.trim() !== expectedArchitecture
+      )
+        return false;
+      const dependencies = spawnSync("xcrun", ["otool", "-L", completion], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      if (
+        dependencies.status !== 0 ||
+        dependencies.stdout
+          .split(/\r?\n/)
+          .slice(1)
+          .some((line) => {
+            const dependency = line.trim().split(/\s+/, 1)[0] || "";
+            return (
+              dependency &&
+              !dependency.startsWith("/System/Library/") &&
+              !dependency.startsWith("/usr/lib/")
+            );
+          })
+      )
+        return false;
+      const build = spawnSync("xcrun", ["vtool", "-show-build", completion], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      return (
+        build.status === 0 &&
+        new RegExp(`\\bminos ${deploymentTarget.replace(".", "\\.")}\\b`).test(
+          build.stdout,
+        )
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  const missingTargets = [];
+  for (const targetName of targets) {
+    if (await macRuntimeReady(targetName))
+      console.log(
+        `Verified the Monterey-compatible ${targetName} llama.cpp runtime`,
+      );
+    else missingTargets.push(targetName);
+  }
+  if (missingTargets.length === 0) process.exit(0);
+
+  await mkdir(downloadRoot, { recursive: true });
+  if (
+    !(await stat(sourceArchive).catch(() => null))?.isFile() ||
+    (await hashFile(sourceArchive)) !== sourceAsset.sha256
+  ) {
+    await rm(sourceArchive, { force: true });
+    await download(sourceAsset, sourceArchive);
+  }
+  await rm(sourceRoot, { recursive: true, force: true });
+  await mkdir(sourceRoot, { recursive: true });
+  run("tar", ["-xzf", sourceArchive, "-C", sourceRoot, "--strip-components=1"]);
+
+  for (const targetName of missingTargets) {
+    const architecture = targetName.endsWith("arm64") ? "arm64" : "x86_64";
+    const buildRoot = path.join(root, "work", `llama-${version}-${targetName}`);
+    const target = path.join(root, "vendor", "llama", targetName);
+    await rm(buildRoot, { recursive: true, force: true });
+    run("cmake", [
+      "-S",
+      sourceRoot,
+      "-B",
+      buildRoot,
+      "-DCMAKE_BUILD_TYPE=Release",
+      `-DCMAKE_OSX_ARCHITECTURES=${architecture}`,
+      `-DCMAKE_OSX_DEPLOYMENT_TARGET=${deploymentTarget}`,
+      "-DBUILD_SHARED_LIBS=OFF",
+      "-DGGML_NATIVE=OFF",
+      "-DGGML_BLAS=OFF",
+      "-DGGML_ACCELERATE=OFF",
+      `-DGGML_METAL=${architecture === "arm64" ? "ON" : "OFF"}`,
+      `-DGGML_METAL_EMBED_LIBRARY=${architecture === "arm64" ? "ON" : "OFF"}`,
+      "-DLLAMA_BUILD_NUMBER=10517",
+      "-DLLAMA_BUILD_COMMIT=dc72703fc",
+      "-DLLAMA_BUILD_TESTS=OFF",
+      "-DLLAMA_BUILD_SERVER=OFF",
+      "-DLLAMA_BUILD_APP=OFF",
+      "-DLLAMA_BUILD_UI=OFF",
+      "-DLLAMA_OPENSSL=OFF",
+      "-DLLAMA_CURL=OFF",
+    ]);
+    run(
+      "cmake",
+      [
+        "--build",
+        buildRoot,
+        "--config",
+        "Release",
+        "--target",
+        "llama-completion",
+        "--parallel",
+        "4",
+      ],
+      900_000,
+    );
+    const built = await findFile(buildRoot, "llama-completion");
+    if (!built) throw new Error(`${targetName} llama-completion was not built`);
+    await rm(target, { recursive: true, force: true });
+    await mkdir(target, { recursive: true });
+    const completion = path.join(target, "llama-completion");
+    await cp(built, completion);
+    await cp(path.join(sourceRoot, "LICENSE"), path.join(target, "LICENSE"));
+    await chmod(completion, 0o755);
+    await writeFile(
+      path.join(target, "OSCODE_RUNTIME.json"),
+      `${JSON.stringify(
+        {
+          version,
+          source: sourceAsset.name,
+          sha256: sourceAsset.sha256,
+          deploymentTarget,
+          commit: "dc72703fc",
+          architecture,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    if (!(await macRuntimeReady(targetName)))
+      throw new Error(
+        `${targetName} llama.cpp runtime is not compatible with macOS ${deploymentTarget}`,
+      );
+    if (architecture === process.arch) {
+      const check = spawnSync(completion, ["--version"], {
+        cwd: target,
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      if (
+        check.status !== 0 ||
+        !/build\s+10517/i.test(`${check.stdout || ""}\n${check.stderr || ""}`)
+      )
+        throw new Error(`${targetName} llama.cpp runtime failed to start`);
+    }
+    console.log(
+      `Prepared ${targetName} llama.cpp ${version} for macOS ${deploymentTarget}+`,
+    );
+  }
   process.exit(0);
 }
 

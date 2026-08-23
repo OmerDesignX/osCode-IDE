@@ -15,6 +15,7 @@ import type {
   AiHistoryEntry,
   AiModel,
   AiModelTier,
+  AiPipelineState,
   AiPermissionKind,
   AiPermissionRequest,
   AiPermissionScope,
@@ -223,6 +224,13 @@ export function AiPanel({
   >("");
   const [status, setStatus] = useState("Ready · local only");
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [tierPickerOpen, setTierPickerOpen] = useState(false);
+  const [pipelineState, setPipelineState] = useState<AiPipelineState>({
+    state: "idle",
+    label: "",
+    position: 0,
+    activeProject: "",
+  });
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [ollamaPickerOpen, setOllamaPickerOpen] = useState(false);
   const [ollamaCli, setOllamaCli] = useState<OllamaCliStatus | null>(null);
@@ -260,6 +268,7 @@ export function AiPanel({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const queueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const steeringRef = useRef(false);
+  const tierPickerInitialized = useRef(false);
 
   type AiPopup = "workspace" | "history" | "permissions" | "models" | "ollama";
   const closeAiPopups = () => {
@@ -456,8 +465,32 @@ export function AiPanel({
 
   useEffect(() => {
     void refreshModels().catch(() => undefined);
-    return window.oscode.onAiStatus(setStatus);
+    const offStatus = window.oscode.onAiStatus(setStatus);
+    const offPipeline = window.oscode.onAiPipelineState(setPipelineState);
+    return () => {
+      offStatus();
+      offPipeline();
+    };
   }, []);
+  useEffect(() => {
+    if (!modelsReady || tierPickerInitialized.current) return;
+    tierPickerInitialized.current = true;
+    const configured = models.some(
+      (item) =>
+        item.path === model &&
+        item.installed !== false &&
+        item.supported !== false,
+    );
+    setTierPickerOpen(!configured);
+  }, [modelsReady, models, model]);
+  useEffect(() => {
+    if (
+      selectedModel &&
+      selectedModel.installed !== false &&
+      selectedModel.supported !== false
+    )
+      setTierPickerOpen(false);
+  }, [selectedModel?.path]);
   useEffect(() => {
     if (ollamaPickerOpen) void refreshOllamaCli().catch(() => undefined);
   }, [ollamaPickerOpen]);
@@ -615,6 +648,7 @@ export function AiPanel({
       onModel(preferred.path);
       onContextLimit(recommendedActiveContext(preferred, hardware));
       setAddMenuOpen(false);
+      setTierPickerOpen(false);
       setStatus(
         `${selected.length} custom model${selected.length === 1 ? "" : "s"} ready`,
       );
@@ -641,6 +675,7 @@ export function AiPanel({
       setModelsOpen(false);
       setAddMenuOpen(false);
       setCustomListOpen(false);
+      setTierPickerOpen(false);
       setStatus(`${added.name} is ready`);
       onNotice(`${added.name} is ready and selected`);
     } catch (error) {
@@ -679,6 +714,7 @@ export function AiPanel({
     setModelsOpen(false);
     setAddMenuOpen(false);
     setCustomListOpen(false);
+    setTierPickerOpen(false);
     setStatus(`${item.name} selected`);
     onNotice(`${item.name} is ready and selected`);
   };
@@ -748,6 +784,58 @@ export function AiPanel({
     await refreshAgentState();
   };
 
+  const ensureCapabilityPermissions = async (
+    currentChatId: string,
+    capabilities: typeof capabilityRef.current,
+  ) => {
+    const desired: Array<{ kind: AiPermissionKind; detail: string }> = [];
+    if (capabilities.fileAccess) {
+      desired.push({
+        kind: "project.read",
+        detail: "Files is enabled for this project",
+      });
+      if (capabilities.editMode !== "read-only")
+        desired.push({
+          kind: "project.write",
+          detail: "Edits is enabled for this project",
+        });
+    }
+    if (capabilities.webAccess)
+      desired.push({
+        kind: "web.search",
+        detail: "Web is enabled for this chat",
+      });
+    if (capabilities.browserAccess)
+      desired.push({
+        kind: "browser.control",
+        detail: "Browser is enabled for this chat",
+      });
+    if (capabilities.computerAccess)
+      desired.push({
+        kind: "computer.control",
+        detail: "Control is enabled for this chat",
+      });
+    if (!desired.length) return;
+    const state = await window.oscode.aiAgentState();
+    let granted = false;
+    for (const permission of desired) {
+      const exists = state.permissions.some(
+        (item) =>
+          item.kind === permission.kind &&
+          (item.scope === "always" || item.chatId === currentChatId),
+      );
+      if (exists) continue;
+      await window.oscode.grantAiPermission(
+        permission.kind,
+        "conversation",
+        currentChatId,
+        permission.detail,
+      );
+      granted = true;
+    }
+    if (granted) await refreshAgentState();
+  };
+
   const scheduleQueueRun = (delay = 150) => {
     if (queueTimer.current) clearTimeout(queueTimer.current);
     queueTimer.current = setTimeout(() => {
@@ -792,6 +880,7 @@ export function AiPanel({
     try {
       const activeCapabilities = capabilityOverride || capabilityRef.current;
       const requestSummary = continuation?.contextSummary ?? contextSummary;
+      await ensureCapabilityPermissions(currentChatId, activeCapabilities);
       await saveConversation(next, requestSummary);
       const response = await window.oscode.aiChat({
         chatId: currentChatId,
@@ -1171,6 +1260,7 @@ export function AiPanel({
         onModel(downloaded.path);
         onContextLimit(recommendedActiveContext(downloaded, hardware));
         setStatus(`${downloaded.name} ready`);
+        setTierPickerOpen(false);
       } catch (error) {
         onNotice(publicAiError(error, "Model download failed"));
       } finally {
@@ -1182,6 +1272,7 @@ export function AiPanel({
     onModel(selected.path);
     onContextLimit(recommendedActiveContext(selected, hardware));
     setStatus(`${selected.name} selected`);
+    setTierPickerOpen(false);
   };
 
   const popoverStyle = expanded
@@ -1246,61 +1337,101 @@ export function AiPanel({
         </div>
       </div>
 
-      <div className="ai-tier-picker" aria-label="osCode model size">
-        {(["small", "medium", "large"] as const).map((tier) => {
-          const item =
-            tierModels.find(
-              (entry) =>
-                osCodeGgufTier(entry) === tier && entry.supported !== false,
-            ) || tierModels.find((entry) => osCodeGgufTier(entry) === tier);
-          return (
-            <button
-              key={tier}
-              className={item?.path === model ? "active" : ""}
-              disabled={
-                !item ||
-                item.supported === false ||
-                Boolean(downloadingTier) ||
-                busy
-              }
-              title={item?.supportReason || `${item?.name || tier} model`}
-              onClick={() => void selectBundledTier(tier)}
-            >
-              <b>{tier[0].toUpperCase() + tier.slice(1)}</b>
-              <span>
-                {item?.supported === false ? (
-                  "Not supported"
-                ) : item?.installed ? (
-                  "Ready"
-                ) : downloadingTier === tier ? (
-                  "Downloading…"
-                ) : (
-                  <>
-                    <FeatherIcon icon="download" size="12" /> Download
-                  </>
-                )}
-              </span>
-            </button>
-          );
-        })}
-        <button
-          className={
-            selectedModel && osCodeGgufTier(selectedModel) === null
-              ? "active"
-              : ""
-          }
-          onClick={() => {
-            const willOpen = !customListOpen;
-            closeAiPopups();
-            setCustomListOpen(willOpen);
-          }}
+      <button
+        className="ai-tier-toggle"
+        type="button"
+        aria-expanded={tierPickerOpen}
+        aria-controls="ai-model-size-picker"
+        onClick={() => {
+          setTierPickerOpen((current) => !current);
+          setCustomListOpen(false);
+        }}
+      >
+        <span>
+          <b>{selectedModel?.name || "Choose a local model"}</b>
+          <small>
+            {selectedModel?.installed === false
+              ? "Download required"
+              : selectedModel
+                ? "Ready"
+                : "Small, Medium, Large, or Custom"}
+          </small>
+        </span>
+        <FeatherIcon
+          icon={tierPickerOpen ? "chevron-up" : "chevron-down"}
+          size="18"
+        />
+      </button>
+
+      {tierPickerOpen && (
+        <div
+          id="ai-model-size-picker"
+          className="ai-tier-picker"
+          aria-label="osCode model size"
         >
-          <b>Custom</b>
-          <span>
-            {customModels.length ? `${customModels.length} added` : "Add model"}
-          </span>
-        </button>
-      </div>
+          {(["small", "medium", "large"] as const).map((tier) => {
+            const item =
+              tierModels.find(
+                (entry) =>
+                  osCodeGgufTier(entry) === tier && entry.supported !== false,
+              ) || tierModels.find((entry) => osCodeGgufTier(entry) === tier);
+            return (
+              <button
+                key={tier}
+                className={item?.path === model ? "active" : ""}
+                disabled={
+                  !item ||
+                  item.supported === false ||
+                  Boolean(downloadingTier) ||
+                  busy
+                }
+                title={item?.supportReason || `${item?.name || tier} model`}
+                onClick={() => void selectBundledTier(tier)}
+              >
+                <b>{tier[0].toUpperCase() + tier.slice(1)}</b>
+                <span>
+                  {item?.supported === false ? (
+                    "Not supported"
+                  ) : item?.installed ? (
+                    "Ready"
+                  ) : downloadingTier === tier ? (
+                    "Downloading…"
+                  ) : (
+                    <>
+                      <FeatherIcon icon="download" size="12" /> Download
+                    </>
+                  )}
+                </span>
+              </button>
+            );
+          })}
+          <button
+            className={
+              selectedModel && osCodeGgufTier(selectedModel) === null
+                ? "active"
+                : ""
+            }
+            onClick={() => {
+              const willOpen = !customListOpen;
+              closeAiPopups();
+              setCustomListOpen(willOpen);
+            }}
+          >
+            <b>Custom</b>
+            <span>
+              {customModels.length
+                ? `${customModels.length} added`
+                : "Add model"}
+            </span>
+          </button>
+        </div>
+      )}
+      {pipelineState.state === "waiting" && (
+        <div className="ai-pipeline-banner" role="status" aria-live="polite">
+          <FeatherIcon icon="clock" size="17" />
+          <span>{pipelineState.label}</span>
+        </div>
+      )}
       <span className="sr-only" data-ai-selected-model aria-live="polite">
         {selectedModel?.name || "Selecting a local model"}
       </span>
@@ -1325,6 +1456,7 @@ export function AiPanel({
                 onModel(item.path);
                 onContextLimit(recommendedActiveContext(item, hardware));
                 setCustomListOpen(false);
+                setTierPickerOpen(false);
               }}
             >
               <span>
@@ -1359,7 +1491,7 @@ export function AiPanel({
               <small>Add a file or folder; shards are detected</small>
             </span>
           </button>
-          {window.oscode.platform === "darwin" && (
+          {hardware?.engine === "mlx" && (
             <button onClick={() => void chooseLocal("mlx")}>
               <FeatherIcon icon="folder" size="18" />
               <span>
@@ -2097,11 +2229,8 @@ export function AiPanel({
                   <option value="llamacpp">llama.cpp</option>
                   <option value="ollama">Ollama</option>
                   <option value="pytorch">PyTorch</option>
-                  <option
-                    value="mlx"
-                    disabled={window.oscode.platform !== "darwin"}
-                  >
-                    MLX · Apple silicon
+                  <option value="mlx" disabled={hardware?.engine !== "mlx"}>
+                    MLX · Apple silicon · macOS 14+
                   </option>
                 </select>
               </label>

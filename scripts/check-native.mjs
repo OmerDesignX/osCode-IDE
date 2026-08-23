@@ -11,6 +11,35 @@ if (typeof nodePty.spawn !== "function") {
 
 console.log(`node-pty is available for ${process.platform}-${process.arch}`);
 
+if (process.platform !== "win32") {
+  const shell = process.env.SHELL || "/bin/sh";
+  const terminalOutput = await new Promise((resolve, reject) => {
+    let output = "";
+    const terminal = nodePty.spawn(shell, ["-c", "printf oscode-pty-ready"], {
+      cwd: process.cwd(),
+      env: process.env,
+      cols: 80,
+      rows: 24,
+      name: "xterm-256color",
+    });
+    const timeout = setTimeout(() => {
+      terminal.kill();
+      reject(new Error("node-pty terminal check timed out"));
+    }, 10_000);
+    terminal.onData((data) => (output += data));
+    terminal.onExit(({ exitCode }) => {
+      clearTimeout(timeout);
+      if (exitCode === 0) resolve(output);
+      else reject(new Error(`node-pty terminal exited with ${exitCode}`));
+    });
+  });
+  if (!String(terminalOutput).includes("oscode-pty-ready"))
+    throw new Error("node-pty terminal returned unexpected output");
+  console.log(
+    `node-pty terminal launched for ${process.platform}-${process.arch}`,
+  );
+}
+
 function run(executable, args, env = {}) {
   return new Promise((resolve, reject) => {
     let stdout = "";

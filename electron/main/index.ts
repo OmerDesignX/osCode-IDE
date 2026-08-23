@@ -20,6 +20,7 @@ import os from "node:os";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as pty from "node-pty";
 import type {
   AiEngine,
@@ -66,7 +67,15 @@ const windowContexts = new Map<number, WindowContext>();
 let aiProjectRoot = "";
 let aiExecutionOwner: WebContents | null = null;
 let aiExecutionTail: Promise<void> = Promise.resolve();
-let aiQueueDepth = 0;
+type AiPipelineEntry = {
+  id: number;
+  sender: WebContents;
+  projectName: string;
+  state: "waiting" | "running";
+};
+let aiPipelineSequence = 0;
+const aiPipelineEntries: AiPipelineEntry[] = [];
+const aiProjectContexts = new AsyncLocalStorage<string>();
 const terminals = new Map<string, pty.IPty>();
 const terminalOwners = new Map<string, WebContents>();
 const terminalDisposals = new Map<string, Promise<void>>();
@@ -109,35 +118,76 @@ function setSenderProject(event: IpcMainInvokeEvent, root: string) {
   if (context) context.projectRoot = root;
   projectRoot = root;
 }
+function currentAiProjectRoot() {
+  return aiProjectContexts.getStore() || aiProjectRoot || projectRoot;
+}
+function withSenderAiProject<T>(event: IpcMainInvokeEvent, operation: () => T) {
+  const context = activateSender(event);
+  return aiProjectContexts.run(context?.projectRoot || "", operation);
+}
+function publishAiPipelineStates() {
+  const running = aiPipelineEntries.find((entry) => entry.state === "running");
+  const waiting = aiPipelineEntries.filter(
+    (entry) => entry.state === "waiting",
+  );
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+    const senderId = window.webContents.id;
+    if (running?.sender.id === senderId) {
+      window.webContents.send("ai:pipeline-state", {
+        state: "running",
+        label: `AI is working in ${running.projectName}`,
+        position: 0,
+        activeProject: running.projectName,
+      });
+      continue;
+    }
+    const ownRequest = waiting.find((entry) => entry.sender.id === senderId);
+    if (ownRequest) {
+      const position = waiting.indexOf(ownRequest) + 1;
+      window.webContents.send("ai:pipeline-state", {
+        state: "waiting",
+        label: running
+          ? `Waiting for AI in ${running.projectName} to finish · position ${position}`
+          : `Waiting for the shared AI pipeline · position ${position}`,
+        position,
+        activeProject: running?.projectName || "",
+      });
+      continue;
+    }
+    window.webContents.send("ai:pipeline-state", {
+      state: "idle",
+      label: "",
+      position: 0,
+      activeProject: running?.projectName || "",
+    });
+  }
+}
 function queueAiRequest(event: IpcMainInvokeEvent, request: unknown) {
   const context = activateSender(event);
   const requestedRoot = context?.projectRoot || "";
   const projectName = requestedRoot ? path.basename(requestedRoot) : "project";
-  aiQueueDepth += 1;
-  if (aiQueueDepth > 1)
-    broadcastToRenderers("agent:activity", {
-      kind: "queue",
-      label: `${projectName} is queued while another project uses AI`,
-      active: true,
-      network: false,
-      cancellable: false,
-    });
+  const entry: AiPipelineEntry = {
+    id: ++aiPipelineSequence,
+    sender: event.sender,
+    projectName,
+    state: "waiting",
+  };
+  aiPipelineEntries.push(entry);
+  publishAiPipelineStates();
   const run = aiExecutionTail.then(async () => {
-    aiProjectRoot = requestedRoot;
-    aiExecutionOwner = event.sender.isDestroyed() ? null : event.sender;
-    const ownerWindow = event.sender.isDestroyed()
-      ? null
-      : BrowserWindow.fromWebContents(event.sender);
-    if (ownerWindow && !ownerWindow.isDestroyed()) mainWindow = ownerWindow;
-    broadcastToRenderers("agent:activity", {
-      kind: "queue",
-      label: `AI is working in ${projectName}`,
-      active: true,
-      network: false,
-      cancellable: true,
-    });
     try {
-      return await aiService.chat(request);
+      if (event.sender.isDestroyed())
+        throw new Error("The window closed before its AI request could start");
+      entry.state = "running";
+      aiProjectRoot = requestedRoot;
+      aiExecutionOwner = event.sender;
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      if (ownerWindow && !ownerWindow.isDestroyed()) mainWindow = ownerWindow;
+      publishAiPipelineStates();
+      return await aiProjectContexts.run(requestedRoot, () =>
+        aiService.chat(request),
+      );
     } finally {
       aiProjectRoot = "";
       if (aiExecutionOwner === event.sender) aiExecutionOwner = null;
@@ -147,17 +197,9 @@ function queueAiRequest(event: IpcMainInvokeEvent, request: unknown) {
         projectRoot =
           windowContexts.get(focused.webContents.id)?.projectRoot || "";
       }
-      aiQueueDepth = Math.max(0, aiQueueDepth - 1);
-      broadcastToRenderers("agent:activity", {
-        kind: "queue",
-        label:
-          aiQueueDepth > 0
-            ? `${aiQueueDepth} AI request${aiQueueDepth === 1 ? "" : "s"} waiting`
-            : "AI queue is ready",
-        active: aiQueueDepth > 0,
-        network: false,
-        cancellable: aiQueueDepth > 0,
-      });
+      const index = aiPipelineEntries.findIndex((item) => item.id === entry.id);
+      if (index >= 0) aiPipelineEntries.splice(index, 1);
+      publishAiPipelineStates();
     }
   });
   aiExecutionTail = run.then(
@@ -1668,6 +1710,7 @@ function createApplicationMenu() {
       label: "File",
       submenu: [
         {
+          id: "file-new-window",
           label: "New Window",
           accelerator: "CmdOrCtrl+Shift+N",
           click: () => createWindow(true, false),
@@ -1943,97 +1986,80 @@ function registerIpc() {
   ipcMain.handle("ai:download-oscode-model", (_event, tier: unknown) =>
     aiService.downloadOsCodeModel(tier),
   );
-  ipcMain.handle("ai:agent-state", (event) => {
-    activateSender(event);
-    return aiService.getAgentState();
-  });
-  ipcMain.handle("ai:create-chat", (event, title: unknown) => {
-    activateSender(event);
-    return aiService.createChat(title);
-  });
+  ipcMain.handle("ai:agent-state", (event) =>
+    withSenderAiProject(event, () => aiService.getAgentState()),
+  );
+  ipcMain.handle("ai:create-chat", (event, title: unknown) =>
+    withSenderAiProject(event, () => aiService.createChat(title)),
+  );
   ipcMain.handle(
     "ai:save-chat",
-    (event, id: unknown, messages: unknown, contextSummary: unknown) => {
-      activateSender(event);
-      return aiService.saveChat(id, messages, contextSummary);
-    },
+    (event, id: unknown, messages: unknown, contextSummary: unknown) =>
+      withSenderAiProject(event, () =>
+        aiService.saveChat(id, messages, contextSummary),
+      ),
   );
-  ipcMain.handle("ai:delete-chat", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.deleteChat(id);
-  });
+  ipcMain.handle("ai:delete-chat", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.deleteChat(id)),
+  );
   ipcMain.handle(
     "ai:set-goal",
-    (event, chatId: unknown, text: unknown, automatic: unknown) => {
-      activateSender(event);
-      return aiService.setGoal(chatId, text, automatic);
-    },
+    (event, chatId: unknown, text: unknown, automatic: unknown) =>
+      withSenderAiProject(event, () =>
+        aiService.setGoal(chatId, text, automatic),
+      ),
   );
-  ipcMain.handle("ai:complete-goal", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.completeGoal(id);
-  });
-  ipcMain.handle("ai:remove-goal", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.removeGoal(id);
-  });
+  ipcMain.handle("ai:complete-goal", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.completeGoal(id)),
+  );
+  ipcMain.handle("ai:remove-goal", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.removeGoal(id)),
+  );
   ipcMain.handle(
     "ai:add-queue",
-    (event, chatId: unknown, prompt: unknown, runAt: unknown) => {
-      activateSender(event);
-      return aiService.addQueue(chatId, prompt, runAt);
-    },
+    (event, chatId: unknown, prompt: unknown, runAt: unknown) =>
+      withSenderAiProject(event, () =>
+        aiService.addQueue(chatId, prompt, runAt),
+      ),
   );
-  ipcMain.handle("ai:update-queue", (event, id: unknown, status: unknown) => {
-    activateSender(event);
-    return aiService.updateQueue(id, status);
-  });
-  ipcMain.handle("ai:prioritize-queue", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.prioritizeQueue(id);
-  });
-  ipcMain.handle("ai:remove-queue", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.removeQueue(id);
-  });
+  ipcMain.handle("ai:update-queue", (event, id: unknown, status: unknown) =>
+    withSenderAiProject(event, () => aiService.updateQueue(id, status)),
+  );
+  ipcMain.handle("ai:prioritize-queue", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.prioritizeQueue(id)),
+  );
+  ipcMain.handle("ai:remove-queue", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.removeQueue(id)),
+  );
   ipcMain.handle(
     "ai:add-schedule",
     (
-      _event,
+      event,
       chatId: unknown,
       prompt: unknown,
       nextRunAt: unknown,
       cadence: unknown,
-    ) => {
-      activateSender(_event);
-      return aiService.addSchedule(chatId, prompt, nextRunAt, cadence);
-    },
+    ) =>
+      withSenderAiProject(event, () =>
+        aiService.addSchedule(chatId, prompt, nextRunAt, cadence),
+      ),
   );
-  ipcMain.handle("ai:remove-schedule", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.removeSchedule(id);
-  });
-  ipcMain.handle("ai:collect-due", (event) => {
-    activateSender(event);
-    return aiService.collectDueSchedules();
-  });
+  ipcMain.handle("ai:remove-schedule", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.removeSchedule(id)),
+  );
+  ipcMain.handle("ai:collect-due", (event) =>
+    withSenderAiProject(event, () => aiService.collectDueSchedules()),
+  );
   ipcMain.handle(
     "ai:grant-permission",
-    (
-      event,
-      kind: unknown,
-      scope: unknown,
-      chatId: unknown,
-      detail: unknown,
-    ) => {
-      activateSender(event);
-      return aiService.grantPermission(kind, scope, chatId, detail);
-    },
+    (event, kind: unknown, scope: unknown, chatId: unknown, detail: unknown) =>
+      withSenderAiProject(event, () =>
+        aiService.grantPermission(kind, scope, chatId, detail),
+      ),
   );
-  ipcMain.handle("ai:revoke-permission", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.revokePermission(id);
-  });
+  ipcMain.handle("ai:revoke-permission", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.revokePermission(id)),
+  );
   ipcMain.handle("ai:remove-model", (_event, id: unknown) =>
     aiService.removeModel(id),
   );
@@ -2171,21 +2197,22 @@ function registerIpc() {
     try {
       return await queueAiRequest(event, request);
     } finally {
-      broadcastToRenderers("ai:status", "Ready · local only");
+      if (!event.sender.isDestroyed())
+        event.sender.send("ai:status", "Ready · local only");
     }
   });
-  ipcMain.handle("ai:resolve-edits", (_event, ids: unknown, approve: unknown) =>
-    aiService.resolveEdits(ids, approve),
+  ipcMain.handle("ai:resolve-edits", (event, ids: unknown, approve: unknown) =>
+    withSenderAiProject(event, () => aiService.resolveEdits(ids, approve)),
   );
-  ipcMain.handle("ai:list-history", (event) => {
-    activateSender(event);
-    return aiService.listHistory();
-  });
-  ipcMain.handle("ai:revert-history", (event, id: unknown) => {
-    activateSender(event);
-    return aiService.revertHistory(id);
-  });
-  ipcMain.handle("ai:stop", () => aiService.stop());
+  ipcMain.handle("ai:list-history", (event) =>
+    withSenderAiProject(event, () => aiService.listHistory()),
+  );
+  ipcMain.handle("ai:revert-history", (event, id: unknown) =>
+    withSenderAiProject(event, () => aiService.revertHistory(id)),
+  );
+  ipcMain.handle("ai:stop", (event) =>
+    aiExecutionOwner?.id === event.sender.id ? aiService.stop() : false,
+  );
   ipcMain.handle("agent:stop-control", () => agentControlService.stop());
   ipcMain.handle("agent:browser-snapshot", () =>
     agentControlService.browserSnapshot(),
@@ -2437,6 +2464,16 @@ function registerIpc() {
         }
       }
     } else if (action === "commit") {
+      const state = await gitState();
+      const staged = state.files.some(
+        (entry) => entry.index !== " " && entry.index !== "?",
+      );
+      if (!staged)
+        throw new Error(
+          state.files.length
+            ? "Stage at least one changed file before committing"
+            : "There are no changes to commit",
+        );
       await ensureLocalGitIdentity();
       await git(["commit", "-m", payload || "Update project"]);
     } else if (action === "remote") {
@@ -3101,7 +3138,7 @@ app.whenReady().then(async () => {
   );
   agentControlService = new AgentControlService(
     () => mainWindow,
-    () => aiProjectRoot || projectRoot,
+    currentAiProjectRoot,
     (activity) => broadcastToRenderers("agent:activity", activity),
     false,
   );
@@ -3112,7 +3149,7 @@ app.whenReady().then(async () => {
     llamaRoot: app.isPackaged
       ? path.join(process.resourcesPath, "llama")
       : path.join(app.getAppPath(), "vendor", "llama"),
-    getProjectRoot: () => aiProjectRoot || projectRoot,
+    getProjectRoot: currentAiProjectRoot,
     getUv: uvExecutable,
     getPython: async () => {
       const runtimes = await containedPythonList();
@@ -3123,10 +3160,9 @@ app.whenReady().then(async () => {
     },
     status: (message) => broadcastToRenderers("ai:status", message),
     activity: (activity) => broadcastToRenderers("agent:activity", activity),
-    platformioState: () =>
-      platformioService.state(aiProjectRoot || projectRoot),
+    platformioState: () => platformioService.state(currentAiProjectRoot()),
     platformioRun: (action, environment) =>
-      platformioService.run(action, environment, aiProjectRoot || projectRoot),
+      platformioService.run(action, environment, currentAiProjectRoot()),
     browserOpen: (url) => agentControlService.openBrowser(url),
     browserInspect: () => agentControlService.inspectBrowser(),
     browserClick: (query) => agentControlService.clickBrowser(query),

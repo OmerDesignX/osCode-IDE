@@ -5327,7 +5327,7 @@ textarea,
 .notification-row .notification-choice button.primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: var(--accentText);
+  color: var(--onaccent);
 }
 .settings-note {
   margin: 8px 0 0;
@@ -6484,4 +6484,170 @@ textarea,
   padding: 3px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent) 18%, var(--panel2));
+}
+
+/* macOS uses taller native text metrics, so narrow panels need room to wrap. */
+.app[data-platform="darwin"] .empty-side {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 24px 16px;
+}
+.app[data-platform="darwin"] .empty-side p {
+  margin: 12px 0 14px;
+}
+.app[data-platform="darwin"] .empty-side .primary,
+.app[data-platform="darwin"] .empty-side .quiet {
+  min-height: 40px;
+  justify-content: center;
+}
+.app[data-platform="darwin"] .empty-side .path-divider {
+  margin: 16px 0 10px;
+}
+.app[data-platform="darwin"] .empty-side .path-field {
+  min-height: 40px;
+}
+.app[data-platform="darwin"] .empty-side .quiet {
+  margin-top: 8px;
+}
+.app[data-platform="darwin"] .ai-tier-picker {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+.app[data-platform="darwin"] .ai-tier-picker button {
+  min-height: 62px;
+  gap: 4px;
+  padding: 9px 8px;
+}
+.app[data-platform="darwin"] .ai-tier-picker b {
+  font-size: 14px;
+}
+.app[data-platform="darwin"] .ai-tier-picker span {
+  overflow: visible;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
+}
+.app[data-platform="darwin"] .ai-custom-list,
+.app[data-platform="darwin"] .ai-add-menu {
+  top: 208px;
+}
+.app[data-platform="darwin"] .ai-capability-bar {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  overflow: visible;
+  padding: 8px 12px 10px;
+}
+.app[data-platform="darwin"] .ai-capability-bar > button {
+  width: 100%;
+  min-width: 0;
+  height: 48px;
+  padding: 6px 8px;
+}
+.app[data-platform="darwin"] .ai-capability-bar > button > span {
+  max-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+}
+.app[data-platform="darwin"] .ai-capability-divider {
+  display: none;
+}
+.app[data-platform="darwin"] .ai-panel.expanded .ai-tier-picker {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.app[data-platform="darwin"] .ai-panel.expanded .ai-custom-list,
+.app[data-platform="darwin"] .ai-panel.expanded .ai-add-menu {
+  top: 112px;
+}
+.app[data-platform="darwin"] .ai-panel.expanded .ai-capability-bar {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+/* Native macOS traffic lights live in their own draggable row above app UI. */
+.mac-titlebar-safe-area {
+  display: none;
+}
+.app[data-platform="darwin"] .mac-titlebar-safe-area {
+  display: block;
+  height: 30px;
+  min-height: 30px;
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  -webkit-app-region: drag;
+}
+
+/* One compact, cross-platform model selector that can stay out of the chat. */
+.ai-tier-toggle {
+  width: calc(100% - 20px);
+  min-height: 44px;
+  margin: 8px 10px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+}
+.ai-tier-toggle:hover,
+.ai-tier-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.ai-tier-toggle > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.ai-tier-toggle b,
+.ai-tier-toggle small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-tier-toggle b {
+  font-size: 13px;
+}
+.ai-tier-toggle small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.ai-tier-toggle > svg {
+  flex: none;
+  color: var(--accent);
+}
+.ai-pipeline-banner {
+  margin: 7px 10px 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--text);
+  line-height: 1.35;
+}
+.ai-pipeline-banner svg {
+  flex: none;
+  color: var(--accent);
+}
+.ai-custom-list,
+.ai-add-menu,
+.app[data-platform="darwin"] .ai-panel.expanded .ai-custom-list,
+.app[data-platform="darwin"] .ai-panel.expanded .ai-add-menu {
+  top: 160px;
+}
+.app[data-platform="darwin"] .ai-custom-list,
+.app[data-platform="darwin"] .ai-add-menu {
+  top: 256px;
 }

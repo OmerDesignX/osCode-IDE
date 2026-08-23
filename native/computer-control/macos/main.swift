@@ -58,15 +58,15 @@ private func accessibilityReady() -> Bool {
   return AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
 }
 
-private func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
+private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
   var value: CFTypeRef?
-  guard AXUIElementCopyAttributeValue(element, name, &value) == .success else {
+  guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else {
     return nil
   }
   return value
 }
 
-private func stringAttribute(_ element: AXUIElement, _ name: CFString) -> String? {
+private func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
   if let string = attribute(element, name) as? String { return string }
   if let number = attribute(element, name) as? NSNumber { return number.stringValue }
   return nil
@@ -184,7 +184,7 @@ case "inspect":
   emit(Array(visible))
 case "invoke", "click":
   let element = matchingElement(application, query: query)
-  let result = AXUIElementPerformAction(element, kAXPressAction)
+  let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
   guard result == .success else {
     fail("That control does not expose a safe Accessibility action")
   }
@@ -192,9 +192,9 @@ case "invoke", "click":
 case "set-value", "type":
   let element = matchingElement(application, query: query)
   var settable = DarwinBoolean(false)
-  guard AXUIElementIsAttributeSettable(element, kAXValueAttribute, &settable) == .success,
+  guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
         settable.boolValue,
-        AXUIElementSetAttributeValue(element, kAXValueAttribute, text as CFTypeRef) == .success else {
+        AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef) == .success else {
     fail("That field does not expose a safe Accessibility value action")
   }
   emit(["action": "set-value", "target": target, "control": snapshot(element)])

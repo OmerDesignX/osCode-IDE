@@ -5,6 +5,20 @@ import {
   modelRepository,
   modelVariants,
 } from "../dist-electron/main/model-catalog.js";
+import {
+  localAiEngine,
+  mlxRuntimeSupported,
+} from "../dist-electron/main/bundled-models.js";
+
+test("runtime selection keeps MLX on supported Apple silicon and GGUF everywhere else", () => {
+  assert.equal(mlxRuntimeSupported("darwin", "arm64", "23.0.0"), true);
+  assert.equal(localAiEngine("darwin", "arm64", "23.0.0"), "mlx");
+  assert.equal(mlxRuntimeSupported("darwin", "arm64", "22.6.0"), false);
+  assert.equal(localAiEngine("darwin", "arm64", "22.6.0"), "llamacpp");
+  assert.equal(localAiEngine("darwin", "x64", "25.0.0"), "llamacpp");
+  assert.equal(localAiEngine("win32", "x64", "10.0.0"), "llamacpp");
+  assert.equal(localAiEngine("linux", "x64", "6.8.0"), "llamacpp");
+});
 
 test("the public model catalogue maps one selectable tier per runtime", () => {
   assert.equal(modelRepository, "https://github.com/OmerDesignX/osCode-Models");

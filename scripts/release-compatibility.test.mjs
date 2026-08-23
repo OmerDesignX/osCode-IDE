@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -12,6 +12,10 @@ test("release metadata keeps the requested desktop compatibility", () => {
   assert.equal(manifest.build.mac.minimumSystemVersion, "12.0");
   assert.deepEqual(manifest.build.mac.target, ["dmg"]);
   assert.equal(manifest.build.mac.artifactName, "osCode-${version}.${ext}");
+  assert.equal(
+    manifest.build.mac.x64ArchFiles,
+    "**/node-pty/prebuilds/darwin-*/**",
+  );
   assert.equal(
     manifest.build.win.artifactName,
     "osCode-Setup-${version}.${ext}",
@@ -41,15 +45,16 @@ test("brand assets use the baby-blue palette and a production icon", () => {
 test("native releases package local inference runtimes without model weights or a server", () => {
   const manifest = JSON.parse(read("package.json"));
   const windowsResources = manifest.build.win.extraResources;
-  const macResources = manifest.build.mac.extraResources.map(
-    ({ from }) => from,
-  );
+  const macResources = manifest.build.mac.extraResources;
   const linuxResources = manifest.build.linux.extraResources.map(
     ({ from }) => from,
   );
-  assert.ok(macResources.includes("vendor/llama/darwin-arm64"));
-  assert.ok(macResources.includes("vendor/llama/darwin-x64"));
-  assert.ok(!macResources.some((value) => value.includes("vendor/models")));
+  assert.deepEqual(macResources, []);
+  const afterPack = read("build/after-pack.cjs");
+  assert.match(afterPack, /context\.arch !== UNIVERSAL_ARCH/);
+  assert.match(afterPack, /vendor\/llama\/darwin-arm64/);
+  assert.match(afterPack, /vendor\/llama\/darwin-x64/);
+  assert.doesNotMatch(afterPack, /vendor\/models/);
   assert.deepEqual(
     windowsResources.find(({ from }) => from === "vendor/llama/win32-x64")
       ?.filter,
@@ -95,6 +100,13 @@ test("native releases package local inference runtimes without model weights or 
   assert.doesNotMatch(prepareLlama, /cudart-llama-bin-win-cuda/);
   assert.doesNotMatch(prepareLlama, /keep[\s\S]*llama-server/);
   assert.match(prepareLlama, /llama-server-impl\.dll/);
+  assert.match(
+    prepareLlama,
+    /CMAKE_OSX_DEPLOYMENT_TARGET=\$\{deploymentTarget\}/,
+  );
+  assert.match(prepareLlama, /deploymentTarget = "12\.0"/);
+  assert.match(prepareLlama, /GGML_ACCELERATE=OFF/);
+  assert.match(prepareLlama, /LLAMA_OPENSSL=OFF/);
 
   const aiService = read("electron/main/ai.ts");
   assert.match(
@@ -114,6 +126,10 @@ test("native releases package local inference runtimes without model weights or 
     /NVIDIA CUDA runtime libraries must not be packaged/,
   );
   assert.match(read("scripts/verify-package.mjs"), /Server runtime artifacts/);
+  assert.match(
+    read("scripts/verify-package.mjs"),
+    /requires macOS \$\{versions\.join\("\/"\)\}/,
+  );
   assert.match(read("electron/main/bundled-models.ts"), /accelerator: "cuda"/);
   assert.match(read("electron/main/bundled-models.ts"), /cuda-system-/);
   assert.match(read("electron/main/bundled-models.ts"), /CUDA_PATH/);
@@ -138,6 +154,8 @@ test("native releases package local inference runtimes without model weights or 
   const preparePython = read("scripts/prepare-python.mjs");
   assert.match(preparePython, /\["darwin-arm64", "darwin-x64"\]/);
   assert.match(preparePython, /cpython-\$\{pythonVersion\}-macos-/);
+  assert.match(preparePython, /makePythonAliasesPortable/);
+  assert.match(preparePython, /fs\.symlink\(portableTarget/);
   assert.match(
     read("electron/main/index.ts"),
     /return path\.join\(root, `\$\{process\.platform\}-\$\{process\.arch\}`\)/,
@@ -149,14 +167,12 @@ test("native Computer Control is local, permissioned, and packaged", () => {
   const windowsResources = manifest.build.win.extraResources.map(
     ({ from }) => from,
   );
-  const macResources = manifest.build.mac.extraResources.map(
-    ({ from }) => from,
-  );
+  const afterPack = read("build/after-pack.cjs");
   assert.equal(manifest.devDependencies["@microsoft/winappcli"], "0.5.0");
   assert.ok(
     windowsResources.includes("node_modules/@microsoft/winappcli/bin/win-x64"),
   );
-  assert.ok(macResources.includes("vendor/computer-control/darwin-universal"));
+  assert.match(afterPack, /vendor\/computer-control\/darwin-universal/);
 
   const control = read("electron/main/agent-control.ts");
   assert.match(control, /WINAPP_CLI_TELEMETRY_OPTOUT: "1"/);
@@ -179,27 +195,30 @@ test("native Computer Control is local, permissioned, and packaged", () => {
     read("scripts/prepare-computer-control.mjs"),
     /x86_64-apple-macos12/,
   );
-  assert.match(
-    read(".github/workflows/build.yml"),
-    /pnpm run computer:prepare/,
-  );
+  assert.match(read("scripts/build-macos-release.mjs"), /computer:prepare/);
 });
 
-test("release workflow uses native runners and publishes verified packages", () => {
-  const workflow = read(".github/workflows/build.yml");
-  assert.match(workflow, /permissions:\s+contents: read/);
-  assert.match(workflow, /desktop:[\s\S]*permissions:\s+contents: write/);
-  for (const label of ["oscode-release-windows", "oscode-release-macos"])
-    assert.match(workflow, new RegExp(label));
-  assert.doesNotMatch(
-    workflow,
-    /oscode-release-linux|--linux|release:stage:linux/,
+test("manual release build preserves the verified native package pipeline", () => {
+  assert.equal(
+    existsSync(path.join(root, ".github", "workflows", "build.yml")),
+    false,
   );
-  assert.match(workflow, /electron-builder --mac dmg --universal/);
-  assert.match(workflow, /pnpm run llama:prepare/);
-  assert.match(workflow, /pnpm run release:check-disk/);
-  assert.doesNotMatch(workflow, /linux:package-models|models:prepare/);
-  assert.match(workflow, /scripts\/upload-release-assets\.mjs/);
+  const macBuild = read("scripts/build-macos-release.mjs");
+  for (const command of [
+    "release:check-disk",
+    "format:check",
+    "python:prepare",
+    "llama:prepare",
+    "terminal:prepare",
+    "computer:prepare",
+    "native:check",
+    "release:stage:macos",
+  ])
+    assert.match(macBuild, new RegExp(command));
+  assert.match(macBuild, /"--mac"[\s\S]*"--universal"/);
+  assert.match(macBuild, /verify-package\.mjs[\s\S]*"macos"/);
+  assert.match(macBuild, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
+  assert.match(read("docs/RELEASING.md"), /pnpm run release:build:macos/);
 
   const stageNative = read("scripts/stage-native-release.mjs");
   assert.match(stageNative, /`osCode-\$\{manifest\.version\}\.dmg`/);
@@ -254,5 +273,6 @@ test("model tiers are downloaded on demand from the separate verified catalogue"
         from.includes("vendor/models"),
       ),
     );
+  assert.doesNotMatch(read("build/after-pack.cjs"), /vendor\/models/);
   assert.equal(manifest.build.nsis.include, undefined);
 });

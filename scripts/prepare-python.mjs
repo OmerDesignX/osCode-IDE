@@ -26,6 +26,24 @@ const platformTargets =
     : [platformKey];
 const readyMarker = "3.10\n3.11\n3.12";
 
+const makePythonAliasesPortable = async (pythonRoot) => {
+  for (const entry of await fs.readdir(pythonRoot, { withFileTypes: true })) {
+    if (!entry.isSymbolicLink()) continue;
+    const alias = path.join(pythonRoot, entry.name);
+    const target = await fs.readlink(alias);
+    if (!path.isAbsolute(target)) continue;
+
+    const portableTarget = path.basename(target);
+    const localTarget = path.join(pythonRoot, portableTarget);
+    const targetStats = await fs.stat(localTarget);
+    if (!targetStats.isDirectory())
+      throw new Error(`Python alias target is not a directory: ${localTarget}`);
+    await fs.unlink(alias);
+    await fs.symlink(portableTarget, alias, "dir");
+    console.log(`Made Python alias portable: ${entry.name}`);
+  }
+};
+
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-python-"));
 try {
   const findUv = async (directory) => {
@@ -93,6 +111,8 @@ try {
   for (const targetKey of platformTargets) {
     const pythonRoot = path.join(root, "python", targetKey);
     const readyPath = path.join(pythonRoot, ".oscode-ready");
+    await fs.mkdir(pythonRoot, { recursive: true });
+    await makePythonAliasesPortable(pythonRoot);
     try {
       const ready = await fs.readFile(readyPath, "utf8");
       if (ready.trim() === readyMarker.trim()) {
@@ -109,7 +129,6 @@ try {
             `cpython-${pythonVersion}-macos-${targetKey.endsWith("arm64") ? "aarch64" : "x86_64"}-none`,
         )
       : ["3.10", "3.11", "3.12"];
-    await fs.mkdir(pythonRoot, { recursive: true });
     const install = spawnSync(
       nativeUv,
       ["python", "install", "--install-dir", pythonRoot, ...pythonRequests],
@@ -127,6 +146,7 @@ try {
       throw new Error(
         `Python runtime preparation exited ${install.status} for ${targetKey}`,
       );
+    await makePythonAliasesPortable(pythonRoot);
     await fs.writeFile(readyPath, readyMarker, "utf8");
     console.log(
       `Prepared Python 3.10, 3.11, and 3.12 for ${targetKey} with uv ${version}`,

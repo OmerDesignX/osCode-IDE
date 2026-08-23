@@ -125,6 +125,11 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.on("agent:activity", listener);
     return () => ipcRenderer.removeListener("agent:activity", listener);
   },
+  onAiPipelineState: (callback: (state: unknown) => void) => {
+    const listener = (_event: unknown, state: unknown) => callback(state);
+    ipcRenderer.on("ai:pipeline-state", listener);
+    return () => ipcRenderer.removeListener("ai:pipeline-state", listener);
+  },
   resolveAiEdits: (ids: string[], approve: boolean) =>
     ipcRenderer.invoke("ai:resolve-edits", ids, approve),
   listAiHistory: () => ipcRenderer.invoke("ai:list-history"),

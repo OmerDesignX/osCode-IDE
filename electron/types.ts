@@ -68,6 +68,12 @@ export type AiModel = {
   downloadBytes?: number;
 };
 export type AiModelTier = "small" | "medium" | "large" | "custom";
+export type AiPipelineState = {
+  state: "idle" | "waiting" | "running";
+  label: string;
+  position: number;
+  activeProject: string;
+};
 export type OllamaCliStatus = {
   installed: boolean;
   managed: boolean;

@@ -42,6 +42,33 @@ const pythonExecutables = (root) =>
       ? /[\\/]python(?:3(?:\.\d+)?)?\.exe$/i.test(file)
       : /[\\/]python3(?:\.\d+)?$/.test(file),
   );
+const requireMacOs12Compatible = (file, label) => {
+  const build = spawnSync("xcrun", ["vtool", "-show-build", file], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (build.status !== 0)
+    throw new Error(`${label} has no readable macOS deployment target`);
+  let versions = [...build.stdout.matchAll(/\bminos\s+(\d+(?:\.\d+)+)/g)].map(
+    (match) => match[1],
+  );
+  if (!versions.length)
+    versions = [
+      ...build.stdout.matchAll(
+        /cmd LC_VERSION_MIN_MACOSX[\s\S]*?\bversion\s+(\d+(?:\.\d+)+)/g,
+      ),
+    ].map((match) => match[1]);
+  if (!versions.length)
+    throw new Error(`${label} does not declare a macOS deployment target`);
+  const newerThanMonterey = versions.some((version) => {
+    const [major = 0, minor = 0] = version.split(".").map(Number);
+    return major > 12 || (major === 12 && minor > 0);
+  });
+  if (newerThanMonterey)
+    throw new Error(
+      `${label} requires macOS ${versions.join("/")} instead of macOS 12.0 or older`,
+    );
+};
 
 let appRoot;
 let executable;
@@ -69,7 +96,11 @@ if (platform === "windows") {
   artifacts = [first((file) => /\.dmg$/i.test(file))].filter(Boolean);
 }
 
-requireLargeFile(executable, `${platform} application executable`, 1_000_000);
+requireLargeFile(
+  executable,
+  `${platform} application executable`,
+  platform === "macos" ? 50_000 : 1_000_000,
+);
 const resourcesRoot =
   platform === "macos"
     ? path.join(appRoot, "Contents", "Resources")
@@ -376,6 +407,7 @@ if (platform === "windows") {
   );
   if (minimumSystem.status !== 0 || minimumSystem.stdout.trim() !== "12.0")
     throw new Error("macOS package must require Monterey 12.0 or newer");
+  requireMacOs12Compatible(executable, "macOS application executable");
   const appArchitectures = spawnSync("lipo", ["-archs", executable], {
     encoding: "utf8",
     timeout: 10_000,
@@ -410,6 +442,7 @@ if (platform === "windows") {
     !/\barm64\b/.test(helperArchitectures.stdout)
   )
     throw new Error("macOS Computer Control helper is not universal");
+  requireMacOs12Compatible(macComputerControl, "macOS Computer Control helper");
   const helperList = spawnSync(macComputerControl, ["list"], {
     encoding: "utf8",
     timeout: 10_000,
@@ -442,6 +475,22 @@ if (platform === "windows") {
       throw new Error(
         `macOS ${architecture} node-pty prebuild is missing or invalid`,
       );
+    requireMacOs12Compatible(pty, `${architecture} node-pty prebuild`);
+    const spawnHelper = requireLargeFile(
+      path.join(path.dirname(pty), "spawn-helper"),
+      `${architecture} node-pty spawn helper`,
+      5_000,
+    );
+    if (
+      !hasMagic(spawnHelper, [0xcf, 0xfa, 0xed, 0xfe]) ||
+      !hasBytesAt(spawnHelper, 4, cpuType) ||
+      (statSync(spawnHelper).mode & 0o111) === 0
+    )
+      throw new Error(`${architecture} node-pty spawn helper is invalid`);
+    requireMacOs12Compatible(
+      spawnHelper,
+      `${architecture} node-pty spawn helper`,
+    );
     const llamaRoot = path.join(resourcesRoot, "llama", architecture);
     const llama = requireLargeFile(
       path.join(llamaRoot, "llama-completion"),
@@ -455,6 +504,7 @@ if (platform === "windows") {
       throw new Error(
         `${architecture} llama.cpp command is not a Mach-O binary`,
       );
+    requireMacOs12Compatible(llama, `${architecture} llama.cpp command`);
     if (existsSync(path.join(llamaRoot, "llama-server")))
       throw new Error(
         `The ${architecture} llama.cpp server executable must not be packaged`,
@@ -466,6 +516,7 @@ if (platform === "windows") {
     );
     if (!hasMagic(uv, [0xcf, 0xfa, 0xed, 0xfe]) || !hasBytesAt(uv, 4, cpuType))
       throw new Error(`${architecture} uv command has the wrong architecture`);
+    requireMacOs12Compatible(uv, `${architecture} uv command`);
     const pythons = pythonExecutables(
       path.join(resourcesRoot, "python", architecture),
     );
@@ -480,6 +531,10 @@ if (platform === "windows") {
         throw new Error(
           `Contained ${architecture} Python ${version} is missing`,
         );
+      requireMacOs12Compatible(
+        python,
+        `Contained ${architecture} Python ${version}`,
+      );
     }
   }
   const nativeLlamaRoot = path.join(
@@ -491,7 +546,7 @@ if (platform === "windows") {
   const nativeLlamaCheck = spawnSync(nativeLlama, ["--version"], {
     cwd: nativeLlamaRoot,
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: 30_000,
   });
   if (
     nativeLlamaCheck.status !== 0 ||

@@ -287,6 +287,38 @@ test("Git commits use a private repository-local fallback without an author dial
     main,
     /ensureLocalGitIdentity[\s\S]*--local[\s\S]*users\.noreply\.local/,
   );
+  assert.match(
+    app,
+    /!git\.files\.some\([\s\S]*file\.index !== " " && file\.index !== "\?"/,
+  );
+  assert.match(main, /There are no changes to commit/);
+  assert.match(main, /Stage at least one changed file before committing/);
+});
+
+test("accent buttons keep dark readable text and macOS narrow panels wrap cleanly", () => {
+  assert.doesNotMatch(styles, /accentText/);
+  assert.match(
+    styles,
+    /\.notification-row \.notification-choice button\.primary\s*\{[\s\S]*color: var\(--onaccent\)/,
+  );
+  assert.match(app, /data-platform=\{window\.oscode\.platform\}/);
+  assert.match(
+    styles,
+    /macOS uses taller native text metrics[\s\S]*\.ai-tier-picker\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    styles,
+    /\.app\[data-platform="darwin"\] \.ai-capability-bar\s*\{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/,
+  );
+});
+
+test("Apple-silicon MLX repairs its isolated runtime before first inference", () => {
+  assert.match(aiMain, /Preparing MLX for first use/);
+  assert.match(aiMain, /await this\.prepareEngine\("mlx"\)/);
+  assert.match(aiMain, /mlx-lm==0\.31\.3/);
+  assert.match(aiMain, /mlx==0\.32\.1/);
+  assert.match(aiMain, /macOS 14 or newer/);
+  assert.match(ai, /hardware\?\.engine === "mlx"/);
 });
 
 test("terminal controls wrap with even icon padding", () => {
@@ -320,18 +352,62 @@ test("packaged builds cannot be redirected by an inherited dev-server URL", () =
     main,
     /const devUrl = app\.isPackaged \? undefined : process\.env\.VITE_DEV_SERVER_URL/,
   );
-  assert.match(main, /else window\.loadFile\(path\.join\(app\.getAppPath\(\), "dist\/index\.html"\)\)/);
+  assert.match(
+    main,
+    /else window\.loadFile\(path\.join\(app\.getAppPath\(\), "dist\/index\.html"\)\)/,
+  );
 });
 
 test("project windows share one model queue while keeping project chats separate", () => {
   assert.match(main, /new Map<number, WindowContext>/);
+  assert.match(main, /id: "file-new-window"/);
   assert.match(main, /label: "New Window"/);
   assert.match(main, /queueAiRequest\(event, request\)/);
-  assert.match(main, /AI is working in \$\{projectName\}/);
+  assert.match(main, /const aiPipelineEntries: AiPipelineEntry\[\] = \[\]/);
+  assert.match(main, /new AsyncLocalStorage<string>\(\)/);
+  assert.match(main, /withSenderAiProject/);
+  assert.match(main, /aiProjectContexts\.run\(requestedRoot/);
+  assert.match(main, /publishAiPipelineStates\(\)/);
+  assert.match(main, /"ai:pipeline-state"/);
+  assert.match(main, /state: "waiting"/);
+  assert.match(main, /position/);
+  assert.match(main, /AI is working in \$\{running\.projectName\}/);
+  assert.match(main, /aiExecutionOwner\?\.id === event\.sender\.id/);
   assert.match(main, /Another project is already running Python/);
   assert.match(main, /broadcastToRenderers\("preferences:changed"/);
   assert.match(app, /onPreferencesChanged/);
   assert.match(app, /next\.kind === "queue"/);
+});
+
+test("macOS traffic lights have a dedicated row above cross-platform app chrome", () => {
+  assert.match(app, /className="mac-titlebar-safe-area"/);
+  assert.match(
+    styles,
+    /\.app\[data-platform="darwin"\] \.mac-titlebar-safe-area\s*\{[\s\S]*height: 30px;[\s\S]*-webkit-app-region: drag/,
+  );
+  assert.match(styles, /\.mac-titlebar-safe-area\s*\{\s*display: none/);
+});
+
+test("model selector collapses after configuration and queued windows get a banner", () => {
+  assert.match(ai, /className="ai-tier-toggle"/);
+  assert.match(ai, /aria-expanded=\{tierPickerOpen\}/);
+  assert.match(ai, /icon=\{tierPickerOpen \? "chevron-up" : "chevron-down"\}/);
+  assert.match(ai, /setTierPickerOpen\(!configured\)/);
+  assert.match(ai, /setTierPickerOpen\(false\)/);
+  assert.match(ai, /pipelineState\.state === "waiting"/);
+  assert.match(ai, /className="ai-pipeline-banner"/);
+  assert.match(styles, /\.ai-tier-toggle\s*\{/);
+  assert.match(styles, /\.ai-pipeline-banner\s*\{/);
+});
+
+test("enabled capability controls create scoped grants and prompt the model authoritatively", () => {
+  assert.match(ai, /ensureCapabilityPermissions/);
+  assert.match(ai, /"conversation",\s*currentChatId/);
+  assert.match(ai, /kind: "project\.read"/);
+  assert.match(ai, /kind: "project\.write"/);
+  assert.match(aiMain, /CAPABILITY STATE FOR THIS REQUEST/);
+  assert.match(aiMain, /Never ask the user for that permission in prose/);
+  assert.match(aiMain, /await this\.requirePermission\([\s\S]*"project\.read"/);
 });
 
 test("security activity expands into timestamped notifications", () => {

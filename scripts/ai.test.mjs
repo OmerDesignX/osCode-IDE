@@ -9,6 +9,10 @@ import {
   ollamaCliAssetName,
   toolResultForModel,
 } from "../dist-electron/main/ai.js";
+import {
+  filesForVariant,
+  modelVariants,
+} from "../dist-electron/main/model-catalog.js";
 
 test("Ollama setup selects standalone CLI archives and rejects desktop installers", () => {
   assert.equal(ollamaCliAssetName("win32", "x64"), "ollama-windows-amd64.zip");
@@ -649,13 +653,35 @@ test("custom models start at 8k and keep their configured context", async (t) =>
 test("downloaded osCode tiers can be deleted without touching custom models", async (t) => {
   const { root, base, service } = await fixture();
   t.after(() => fs.rm(base, { recursive: true, force: true }));
-  const tierRoot = path.join(root, "models", "gguf", "small");
-  const shard = path.join(
-    tierRoot,
-    "osCode-GGUF-Small-Q4_K_M-00001-of-00002.gguf",
+  const available = (await service.listModels()).find(
+    (item) => item.tier === "small",
   );
+  assert.ok(available);
+  const tierRoot =
+    available.engine === "mlx"
+      ? path.join(root, "models", "mlx", "osCode-MLX-Small-Q5")
+      : path.join(root, "models", "gguf", "small");
+  const variant = modelVariants.find(
+    (item) => item.tier === "small" && item.runtime === available.engine,
+  );
+  assert.ok(variant);
   await fs.mkdir(tierRoot, { recursive: true });
-  await fs.writeFile(shard, "test shard");
+  const files = filesForVariant(variant);
+  const shards = files
+    .map((file) => path.basename(file))
+    .filter((file) => file.endsWith(".safetensors"));
+  for (const file of files) {
+    const name = path.basename(file);
+    const content =
+      name === "model.safetensors.index.json"
+        ? JSON.stringify({
+            weight_map: Object.fromEntries(
+              shards.map((shard, index) => [`weight.${index}`, shard]),
+            ),
+          })
+        : "test model";
+    await fs.writeFile(path.join(tierRoot, name), content);
+  }
   const official = (await service.listModels()).find(
     (item) => item.tier === "small" && item.installed,
   );

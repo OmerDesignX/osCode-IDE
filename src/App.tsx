@@ -406,9 +406,7 @@ export function App() {
     [compareLeftPath, setCompareLeftPath] = useState(""),
     [compareRightPath, setCompareRightPath] = useState(""),
     [comparison, setComparison] = useState<FileComparison | null>(null),
-    [aiEngine, setAiEngine] = useState<AiEngine>(
-      window.oscode.platform === "darwin" ? "mlx" : "llamacpp",
-    ),
+    [aiEngine, setAiEngine] = useState<AiEngine>("llamacpp"),
     [aiModel, setAiModel] = useState(""),
     [aiExecutable, setAiExecutable] = useState(""),
     [aiEditMode, setAiEditMode] = useState<AiEditMode>("ask"),
@@ -1577,7 +1575,12 @@ export function App() {
     }
   };
   return (
-    <div className={`app ${theme}`} dir={locale === "ar" ? "rtl" : "ltr"}>
+    <div
+      className={`app ${theme}`}
+      data-platform={window.oscode.platform}
+      dir={locale === "ar" ? "rtl" : "ltr"}
+    >
+      <div className="mac-titlebar-safe-area" aria-hidden="true" />
       <header className="topbar">
         <div className="brand" aria-label="osCode">
           <img src={osCodeIcon} alt="" aria-hidden="true" />
@@ -2867,7 +2870,21 @@ export function App() {
                           </button>
                           <button
                             className="commit-action"
-                            disabled={!message.trim()}
+                            disabled={
+                              !message.trim() ||
+                              !git.files.some(
+                                (file) =>
+                                  file.index !== " " && file.index !== "?",
+                              )
+                            }
+                            title={
+                              git.files.some(
+                                (file) =>
+                                  file.index !== " " && file.index !== "?",
+                              )
+                                ? "Commit staged changes"
+                                : "Stage a changed file before committing"
+                            }
                             onClick={async () => {
                               if (await gitAction("commit", message))
                                 setMessage("");
