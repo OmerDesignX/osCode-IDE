@@ -26,6 +26,10 @@ const main = await fs.readFile(
   new URL("../electron/main/index.ts", import.meta.url),
   "utf8",
 );
+const aiMain = await fs.readFile(
+  new URL("../electron/main/ai.ts", import.meta.url),
+  "utf8",
+);
 
 test("compare opens a two-file picker and renders distinct file models", () => {
   assert.match(app, /aria-label="Compare two files"/);
@@ -146,6 +150,39 @@ test("AI chat uses a separate neutral canvas and quiet global scrollbars", () =>
     styles,
     /\.app \*::\-webkit-scrollbar-thumb[\s\S]*background: transparent/,
   );
+});
+
+test("AI chat shows a steerable queue and can expand to the full window", () => {
+  assert.match(ai, /className="ai-queue-stack"/);
+  assert.match(ai, />Steer</);
+  assert.match(ai, />Delete</);
+  assert.match(ai, /prioritizeAiQueue\(item\.id\)/);
+  assert.match(ai, /if \(busyRef\.current\) \{[\s\S]*scheduleQueueRun\(250\)/);
+  assert.match(
+    ai,
+    /finally \{[\s\S]*busyRef\.current = false;[\s\S]*scheduleQueueRun\(\)/,
+  );
+  assert.match(ai, /icon=\{expanded \? "minimize-2" : "maximize-2"\}/);
+  assert.match(
+    ai,
+    /className=\{`ai-panel\$\{expanded \? " expanded" : ""\}`\}/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded\s*\{[\s\S]*position: fixed;[\s\S]*inset: 0;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-queue-stack article\s*\{[\s\S]*grid-template-columns:/,
+  );
+});
+
+test("accelerated llama.cpp lets memory fitting choose GPU layers", () => {
+  assert.match(
+    aiMain,
+    /if \(hardware === "cpu"\) inferenceArguments\.push\("--gpu-layers", "0"\)/,
+  );
+  assert.doesNotMatch(aiMain, /hardware === "cpu" \? "0" : "999"/);
 });
 
 test("agent browser and Computer Control stay visible, permissioned, and stoppable", () => {

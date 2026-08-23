@@ -139,3 +139,25 @@ test("goals, queues, and schedules stay owned by their chat", async (t) => {
     /Chat was not found/,
   );
 });
+
+test("a queued chat message can be promoted without losing the stack", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-chat-steer-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new AgentStateStore(root);
+  const chat = await store.createChat("C:/project");
+  const first = await store.addQueue(chat.id, "Explain the current code");
+  const second = await store.addQueue(chat.id, "Improve the error handling");
+
+  assert.equal(await store.prioritizeQueue(second.id), true);
+  let state = await store.state("C:/project");
+  assert.deepEqual(
+    state.queue.map((item) => item.id),
+    [second.id, first.id],
+  );
+  assert.equal(state.queue[0].prompt, "Improve the error handling");
+
+  await store.updateQueue(second.id, "running");
+  assert.equal(await store.prioritizeQueue(second.id), false);
+  state = await store.state("C:/project");
+  assert.equal(state.queue[0].status, "running");
+});

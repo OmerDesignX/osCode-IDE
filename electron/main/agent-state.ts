@@ -329,6 +329,18 @@ export class AgentStateStore {
     });
   }
 
+  prioritizeQueue(id: string) {
+    return this.update((state) => {
+      const index = state.queue.findIndex(
+        (item) => item.id === id && item.status === "queued",
+      );
+      if (index < 0) return false;
+      const [item] = state.queue.splice(index, 1);
+      state.queue.unshift(item);
+      return true;
+    });
+  }
+
   removeQueue(id: string) {
     return this.update((state) => {
       const length = state.queue.length;

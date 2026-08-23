@@ -228,6 +228,7 @@ export function AiPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [permissionOpen, setPermissionOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState<
     "goal" | "queue" | "schedules"
   >("goal");
@@ -255,6 +256,7 @@ export function AiPanel({
   const endRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const queueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const steeringRef = useRef(false);
 
   type AiPopup = "workspace" | "history" | "permissions" | "models" | "ollama";
   const closeAiPopups = () => {
@@ -336,6 +338,10 @@ export function AiPanel({
   const chatQueue = useMemo(
     () => agentState.queue.filter((item) => item.chatId === chatId),
     [agentState.queue, chatId],
+  );
+  const pendingChatQueue = useMemo(
+    () => chatQueue.filter((item) => item.status === "queued"),
+    [chatQueue],
   );
   const chatSchedules = useMemo(
     () => agentState.schedules.filter((item) => item.chatId === chatId),
@@ -537,10 +543,11 @@ export function AiPanel({
       setAddMenuOpen(false);
       setOllamaPickerOpen(false);
       setCustomListOpen(false);
+      if (expanded) setExpanded(false);
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [browserAccess, computerAccess]);
+  }, [browserAccess, computerAccess, expanded]);
   useEffect(() => {
     const openRequestedChat = (event: Event) => {
       const requested = (event as CustomEvent<string>).detail;
@@ -708,6 +715,14 @@ export function AiPanel({
     await refreshAgentState();
   };
 
+  const scheduleQueueRun = (delay = 150) => {
+    if (queueTimer.current) clearTimeout(queueTimer.current);
+    queueTimer.current = setTimeout(() => {
+      queueTimer.current = null;
+      void runNextQueued();
+    }, delay);
+  };
+
   const runPrompt = async (
     text: string,
     queueId?: string,
@@ -809,23 +824,29 @@ export function AiPanel({
       );
     } catch (error) {
       failed = true;
-      const message = publicAiError(error, "Local AI request failed");
-      const failureMessage: AiChatMessage = {
-        id: globalThis.crypto.randomUUID(),
-        role: "assistant",
-        content: `I couldn't complete that request. ${message}`,
-        createdAt: new Date().toISOString(),
-        assistantName:
-          selectedModel && osCodeGgufTier(selectedModel)
-            ? "osCode"
-            : "Custom Model",
-      };
-      const completed = [...messagesRef.current, failureMessage];
-      messagesRef.current = completed;
-      setMessages(completed);
-      await saveConversation(completed, contextSummary).catch(() => undefined);
-      onNotice(message);
-      setStatus("Stopped");
+      if (steeringRef.current) {
+        setStatus("Steering…");
+      } else {
+        const message = publicAiError(error, "Local AI request failed");
+        const failureMessage: AiChatMessage = {
+          id: globalThis.crypto.randomUUID(),
+          role: "assistant",
+          content: `I couldn't complete that request. ${message}`,
+          createdAt: new Date().toISOString(),
+          assistantName:
+            selectedModel && osCodeGgufTier(selectedModel)
+              ? "osCode"
+              : "Custom Model",
+        };
+        const completed = [...messagesRef.current, failureMessage];
+        messagesRef.current = completed;
+        setMessages(completed);
+        await saveConversation(completed, contextSummary).catch(
+          () => undefined,
+        );
+        onNotice(message);
+        setStatus("Stopped");
+      }
     } finally {
       if (queueId)
         await window.oscode.updateAiQueue(
@@ -834,7 +855,9 @@ export function AiPanel({
         );
       setBusy(false);
       busyRef.current = false;
+      steeringRef.current = false;
       await refreshAgentState().catch(() => undefined);
+      scheduleQueueRun();
     }
   };
 
@@ -911,11 +934,15 @@ export function AiPanel({
         failed ? "Scheduled work needs attention" : "Ready · local only",
       );
       await refreshAgentState().catch(() => undefined);
+      scheduleQueueRun();
     }
   };
 
   const runNextQueued = async () => {
-    if (busyRef.current) return;
+    if (busyRef.current) {
+      scheduleQueueRun(250);
+      return;
+    }
     const nextState = await refreshAgentState();
     const next = nextState.queue.find(
       (item) =>
@@ -934,8 +961,24 @@ export function AiPanel({
         );
         await runBackgroundQueued(nextChat, next, goal?.text || "");
       }
-      queueTimer.current = setTimeout(() => void runNextQueued(), 150);
     }
+  };
+
+  const steerQueued = async (item: AiQueueItem) => {
+    if (!(await window.oscode.prioritizeAiQueue(item.id))) return;
+    if (busyRef.current) {
+      steeringRef.current = true;
+      await window.oscode.stopAi();
+    }
+    setStatus("Steering…");
+    await refreshAgentState();
+    scheduleQueueRun(50);
+  };
+
+  const deleteQueued = async (item: AiQueueItem) => {
+    await window.oscode.removeAiQueue(item.id);
+    await refreshAgentState();
+    setStatus("Queued message removed");
   };
 
   const handleCommand = async (text: string) => {
@@ -997,7 +1040,7 @@ export function AiPanel({
       await window.oscode.addAiQueue(chatId, text.slice(7).trim());
       await refreshAgentState();
       setInput("");
-      queueTimer.current = setTimeout(() => void runNextQueued(), 100);
+      scheduleQueueRun(100);
       return true;
     }
     return false;
@@ -1015,23 +1058,26 @@ export function AiPanel({
       setAttachments([]);
       setStatus("Message queued");
       await refreshAgentState();
+      scheduleQueueRun();
       return;
     }
     const sentAttachments = attachments;
     setAttachments([]);
     await runPrompt(text, undefined, sentAttachments);
-    queueTimer.current = setTimeout(() => void runNextQueued(), 150);
   };
 
   const steer = async () => {
     const text = input.trim();
     if (!busy || !text) return;
+    const item = await window.oscode.addAiQueue(chatId, text);
+    await window.oscode.prioritizeAiQueue(item.id);
+    steeringRef.current = true;
     await window.oscode.stopAi();
-    await window.oscode.addAiQueue(chatId, `Steer the active task: ${text}`);
     setInput("");
     setAttachments([]);
     setStatus("Steering next");
     await refreshAgentState();
+    scheduleQueueRun(50);
   };
 
   const grantPermission = async (scope: AiPermissionScope) => {
@@ -1105,11 +1151,23 @@ export function AiPanel({
     setStatus(`${selected.name} selected`);
   };
 
-  const popoverStyle =
-    side === "right" ? { right: width + 16 } : { left: width + 16 };
+  const popoverStyle = expanded
+    ? {
+        left: "50%",
+        right: "auto",
+        transform: "translateX(-50%)",
+        zIndex: 95,
+      }
+    : side === "right"
+      ? { right: width + 16 }
+      : { left: width + 16 };
 
   return (
-    <aside className="ai-panel" aria-label="Local AI chat" style={{ width }}>
+    <aside
+      className={`ai-panel${expanded ? " expanded" : ""}`}
+      aria-label="Local AI chat"
+      style={expanded ? undefined : { width }}
+    >
       <div className="ai-head">
         <h2>AI Coder</h2>
         <div className="ai-head-actions">
@@ -1142,6 +1200,15 @@ export function AiPanel({
             label="AI settings"
             active={modelsOpen}
             onClick={() => toggleAiPopup("models")}
+          />
+          <IconButton
+            icon={expanded ? "minimize-2" : "maximize-2"}
+            label={expanded ? "Exit full-window chat" : "Open full-window chat"}
+            active={expanded}
+            onClick={() => {
+              closeAiPopups();
+              setExpanded((current) => !current);
+            }}
           />
         </div>
       </div>
@@ -2291,6 +2358,41 @@ export function AiPanel({
             </button>
           </div>
         </div>
+      )}
+
+      {pendingChatQueue.length > 0 && (
+        <section className="ai-queue-stack" aria-label="Queued messages">
+          <header>
+            <b>Queued messages</b>
+            <span>{pendingChatQueue.length}</span>
+          </header>
+          <div>
+            {pendingChatQueue.map((item, index) => (
+              <article key={item.id}>
+                <span className="ai-queue-number">{index + 1}</span>
+                <p title={item.prompt}>{item.prompt}</p>
+                <button
+                  type="button"
+                  className="ai-queue-steer"
+                  title="Stop the current reply and run this message next"
+                  onClick={() => void steerQueued(item)}
+                >
+                  <FeatherIcon icon="corner-up-left" size="15" />
+                  <span>Steer</span>
+                </button>
+                <button
+                  type="button"
+                  className="ai-queue-delete"
+                  title="Delete this queued message"
+                  onClick={() => void deleteQueued(item)}
+                >
+                  <FeatherIcon icon="trash-2" size="15" />
+                  <span>Delete</span>
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
       )}
 
       <div className="ai-capability-bar" aria-label="Agent permissions">

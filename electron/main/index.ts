@@ -1819,6 +1819,9 @@ function registerIpc() {
   ipcMain.handle("ai:update-queue", (_event, id: unknown, status: unknown) =>
     aiService.updateQueue(id, status),
   );
+  ipcMain.handle("ai:prioritize-queue", (_event, id: unknown) =>
+    aiService.prioritizeQueue(id),
+  );
   ipcMain.handle("ai:remove-queue", (_event, id: unknown) =>
     aiService.removeQueue(id),
   );

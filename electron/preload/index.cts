@@ -75,6 +75,8 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("ai:add-queue", chatId, prompt, runAt),
   updateAiQueue: (id: string, status: string) =>
     ipcRenderer.invoke("ai:update-queue", id, status),
+  prioritizeAiQueue: (id: string) =>
+    ipcRenderer.invoke("ai:prioritize-queue", id),
   removeAiQueue: (id: string) => ipcRenderer.invoke("ai:remove-queue", id),
   addAiSchedule: (
     chatId: string,

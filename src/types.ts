@@ -336,6 +336,7 @@ declare global {
         id: string,
         status: AiQueueItem["status"],
       ): Promise<boolean>;
+      prioritizeAiQueue(id: string): Promise<boolean>;
       removeAiQueue(id: string): Promise<boolean>;
       addAiSchedule(
         chatId: string,

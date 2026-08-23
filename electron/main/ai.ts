@@ -2237,48 +2237,48 @@ export class LocalAiService {
           "ASSISTANT:",
         ].join("\n\n");
     await fs.writeFile(promptPath, prompt.slice(-1_500_000), "utf8");
-    const child = spawn(
-      realExecutable,
-      [
-        "-m",
-        realModel,
-        "--file",
-        promptPath,
-        "--n-predict",
-        String(predictionLimit),
-        "--ctx-size",
-        String(contextLimit),
-        "--gpu-layers",
-        hardware === "cpu" ? "0" : "999",
-        "--temp",
-        "0",
-        "--repeat-penalty",
-        "1.05",
-        "--fit",
-        "on",
-        "--no-display-prompt",
-        "--no-warmup",
-        "--no-conversation",
-        "--prompt-cache",
-        cachePath,
-        "--prompt-cache-all",
-        "--color",
-        "off",
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-        cwd: path.dirname(realExecutable),
-        env: {
-          ...(await this.llamaEnvironment(realExecutable)),
-          ...(process.platform === "win32"
-            ? {
-                Path: `${pythonDirectory};${(await this.llamaEnvironment(realExecutable)).Path || ""}`,
-              }
-            : {}),
-        },
+    const inferenceArguments = [
+      "-m",
+      realModel,
+      "--file",
+      promptPath,
+      "--n-predict",
+      String(predictionLimit),
+      "--ctx-size",
+      String(contextLimit),
+      "--temp",
+      "0",
+      "--repeat-penalty",
+      "1.05",
+      "--fit",
+      "on",
+      "--no-display-prompt",
+      "--no-warmup",
+      "--no-conversation",
+      "--prompt-cache",
+      cachePath,
+      "--prompt-cache-all",
+      "--color",
+      "off",
+    ];
+    // With accelerated builds, llama.cpp's --fit can balance model layers and
+    // KV cache against the device's actual free memory. Forcing 999 layers
+    // disables that fitting path and makes a supported 256k context fail on
+    // smaller GPUs before generation starts. CPU mode remains explicit.
+    if (hardware === "cpu") inferenceArguments.push("--gpu-layers", "0");
+    const child = spawn(realExecutable, inferenceArguments, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      cwd: path.dirname(realExecutable),
+      env: {
+        ...(await this.llamaEnvironment(realExecutable)),
+        ...(process.platform === "win32"
+          ? {
+              Path: `${pythonDirectory};${(await this.llamaEnvironment(realExecutable)).Path || ""}`,
+            }
+          : {}),
       },
-    );
+    });
     this.worker = child;
     const output: Buffer[] = [];
     const errors: Buffer[] = [];
@@ -2979,6 +2979,9 @@ export class LocalAiService {
       ? (rawStatus as "queued" | "running" | "complete" | "failed")
       : "failed";
     return this.agentState.updateQueue(cleanText(rawId, 100), status);
+  }
+  prioritizeQueue(rawId: unknown) {
+    return this.agentState.prioritizeQueue(cleanText(rawId, 100));
   }
   removeQueue(rawId: unknown) {
     return this.agentState.removeQueue(cleanText(rawId, 100));

@@ -91,7 +91,11 @@ test("native releases package local inference runtimes without model weights or 
   assert.match(prepareLlama, /llama-server-impl\.dll/);
 
   const aiService = read("electron/main/ai.ts");
-  assert.match(aiService, /hardware === "cpu" \? "0" : "999"/);
+  assert.match(
+    aiService,
+    /if \(hardware === "cpu"\) inferenceArguments\.push\("--gpu-layers", "0"\)/,
+  );
+  assert.doesNotMatch(aiService, /hardware === "cpu" \? "0" : "999"/);
   assert.match(aiService, /current\.acceleratorVersion\?\.startsWith\("12"\)/);
   const bundledModelRuntime = read("electron/main/bundled-models.ts");
   assert.match(bundledModelRuntime, /if \(left\.major === "12"\) return -1/);
@@ -116,7 +120,7 @@ test("native releases package local inference runtimes without model weights or 
     read("electron/main/ai.ts"),
     /download\.pytorch\.org\/whl\/\$\{pytorchCuda/,
   );
-  assert.match(
+  assert.doesNotMatch(
     read("electron/main/ai.ts"),
     /hardware === "cpu" \? "0" : "999"/,
   );
