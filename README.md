@@ -1,6 +1,6 @@
 ![osCode](assets/logo/oscode-baby-blue.png)
 
-osCode is a calm, cross-platform Electron editor built around project work rather than tool chrome. It uses Manrope for controls, tightly spaced Playfair Display for its identity and headings, Fira Code for source, and Feather icons throughout.
+osCode is a local AI coding IDE. It was designed to feature a simple design while being private and removing telemetry found in other IDEs. osCode features osCode Models as its agentic coding AI model. These models were derived from Qwen 3.8 Max and have been rebuilt and reconstructed to fit machines with 8 GB of RAM. This is a cross-platform Electron editor that supports Windows, macOS, and Linux. osCode is designed to be agentic with advanced features such as in-built browser for the AI agent to test and debug code. A further advanced feature, Compute Control, allows the AI agent to take control of the IDE and autonomously action commands. It can also control some desktop apps and I would like to further expand this. Again, all local and private and these features are all turned off by default. You will need to activate them and of course exercise caution as they may be dangerous and the AI model can send, receive, or manipulate data. You can also run your own local AI agent through Llama.cpp, PyTorch, and Ollama.
 
 ## Included now
 
@@ -21,8 +21,6 @@ osCode is a calm, cross-platform Electron editor built around project work rathe
 - Searchable, revocable AI permissions for project reads, edits, terminal commands, debugging, web access, a dedicated temporary browser, Computer Control, and PlatformIO. Grants can be used once, for one conversation, or always for the current project. Windows Computer Control uses semantic UI Automation first and a visible foreground-input fallback; macOS uses Accessibility actions with a separate agent-cursor overlay. Reversible edit checkpoints never touch project Git.
 - A persistent top search surface for project text and AI chats, with separated result groups. Active permissions, downloads, browser use, native Computer Control, and network work share a second responsive status slot without replacing search.
 - A native PlatformIO workspace for isolated Core installation and updates, project creation, environment selection, builds, uploads, cleaning, tests, and serial monitoring. PlatformIO telemetry and automatic Core network checks are forcibly disabled; optional daily updates require explicit opt-in.
-- Public release targets for an NSIS installer on Windows and a drag-to-install DMG on macOS
-- Optional application updates from the official osCode GitHub Releases feed. They are off by default, offered once in Notifications, and can be changed later in Settings.
 
 ## Supported systems
 
@@ -37,19 +35,13 @@ pnpm install
 pnpm dev
 ```
 
-The six osCode model variants are maintained in the separate [osCode Models repository](https://github.com/OmerDesignX/osCode-Models), including their checksums, architecture, licenses, quantization, and memory guidance. Model weights are not committed to this source repository and are not embedded in installers. Small, Medium, and Large remain visible in AI Coder; choosing a missing tier downloads only that tier, verifies every file with the repository's SHA-256 manifest, and activates it atomically. Apple-silicon Macs receive MLX; Windows, Linux, and Intel Macs receive GGUF. On Windows, osCode detects NVIDIA independently from the active llama.cpp backend, validates CUDA with `llama-completion --list-devices`, and prefers CUDA 12.4 for its broad driver compatibility. NVIDIA runtime libraries are not embedded in the installer. A user with driver 525 or newer can explicitly add the checksum-pinned official CUDA 12.4 runtime to osCode's private application-data directory; otherwise osCode uses a compatible installed runtime when it validates successfully. Vulkan remains the fallback for compatible NVIDIA, AMD, and Intel GPUs, followed by CPU. A visible top-bar progress indicator can stop any download.
+The six osCode model variants are maintained in the separate [osCode Models repository](https://github.com/OmerDesignX/osCode-Models), including their checksums, architecture, licenses, quantization, and memory guidance. Model weights are not committed to this source repository and are not embedded in installers. Small, Medium, and Large remain visible in AI Coder; choosing a missing tier downloads only that tier, verifies every file with the repository's SHA-256 manifest, and activates it atomically. Apple-silicon Macs receive MLX; Windows, Linux, and Intel Macs receive GGUF. On Windows, osCode detects NVIDIA independently from the active llama.cpp backend, validates CUDA with `llama-completion --list-devices`, and prefers CUDA 12.4 for its broad driver compatibility. NVIDIA runtime libraries are not embedded in the installer. A user with driver 525 or newer can explicitly add the checksum-pinned official CUDA 12.4 runtime to osCode's private application-data directory; otherwise osCode uses a compatible installed runtime when it validates successfully. Vulkan remains the fallback for compatible NVIDIA, AMD, and Intel GPUs, followed by CPU.
 
 Downloaded models are private application data rather than project files: `%APPDATA%\osCode\models` on Windows, `~/Library/Application Support/osCode/models` on macOS, and `~/.config/osCode/models` on Linux. Removing the app does not silently remove these multi-gigabyte files. Custom models remain references to their original location.
 
-Public releases contain exactly one Windows installer and one macOS DMG. The `release-assets/windows` and `release-assets/macos` folders are staging locations for those native files; generated metadata, block maps, model weights, and Linux packages are not published. GitHub updates use [OmerDesignX/osCode-IDE Releases](https://github.com/OmerDesignX/osCode-IDE/releases), download the complete installer or DMG, and verify GitHub's SHA-256 digest before making it available.
+Public releases contain exactly one Windows installer and one macOS DMG. The `release-assets/windows` and `release-assets/macos` folders are staging locations for those native files. GitHub updates use [OmerDesignX/osCode-IDE Releases](https://github.com/OmerDesignX/osCode-IDE/releases), download the complete installer or DMG.
 
 Maintainers should follow [`docs/RELEASING.md`](docs/RELEASING.md) for native runner prerequisites, version tags, draft review, checksums, and signing.
-
-Do not commit `vendor/models/`, generated release weights, downloaded models, or partial downloads to the application repository. The separate model repository uses Git LFS; osCode downloads only the files described by its pinned public catalogue.
-
-Use `pnpm test` for static checks and regression tests, `pnpm run smoke` for a hidden project/editor/Git/native-terminal check, and `pnpm run build:dir` for an unpacked platform build. The smoke project exercises local identity, branch create/switch/merge/delete, submodule detection and absorption, commit, a file-based local remote, push, and pull without contacting the network. CI tests the source build, creates the Windows installer and universal macOS DMG, verifies the packaged `node-pty` addon, and launches the unpacked application through the same UI, Git, and terminal smoke test. macOS signing and notarization must run on macOS or a macOS CI runner.
-
-`build/icon.png` is the canonical application icon. Public transparent PNG wordmarks live in `assets/logo` in white, black, and baby blue. The baby-blue brand color is `#89CFF0`, with lighter and darker tonal shades used for accessible interface states.
 
 ## Keyboard shortcuts
 
@@ -61,8 +53,6 @@ Use `pnpm test` for static checks and regression tests, `pnpm run smoke` for a h
 - `Ctrl/Cmd+Shift+A` — toggle Advanced Mode
 
 On Windows and Linux, press `Alt` to reveal the compact native application menu. Production builds intentionally omit reload and developer-tool commands.
-
-Configure platform signing, Apple notarization, and final release metadata before distributing production binaries. Linux contributors can build from source on their target distribution; Linux packages are not part of the public binary release.
 
 ## Architecture and safety
 
