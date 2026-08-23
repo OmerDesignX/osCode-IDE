@@ -130,7 +130,7 @@ test("AI file permission removes project access and checkpoints never touch Git"
       false,
       false,
     ),
-    /access is disabled/,
+    /Permission required/,
   );
   await service.runTool(
     {
@@ -159,6 +159,76 @@ test("AI file permission removes project access and checkpoints never touch Git"
   assert.match(
     await fs.readFile(path.join(root, "src", "index.ts"), "utf8"),
     /value = 1/,
+  );
+});
+
+test("disabled capabilities remain requestable and project questions ask before model inference", async (t) => {
+  const { base, service, chat } = await fixture({ grants: false });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+
+  const names = service
+    .tools("ask", false, false, false, false)
+    .map((item) => item.function.name);
+  for (const name of [
+    "list_files",
+    "read_file",
+    "write_file",
+    "web_search",
+    "web_fetch",
+    "run_command",
+  ])
+    assert.ok(names.includes(name), `${name} should remain requestable`);
+
+  let modelTurns = 0;
+  let resumedMessages = [];
+  service.remoteReply = async (_request, messages) => {
+    modelTurns += 1;
+    resumedMessages = messages;
+    return {
+      content: "This project exports a value from src/index.ts.",
+      toolCalls: [],
+    };
+  };
+  const request = {
+    chatId: chat.id,
+    engine: "llamacpp",
+    model: "fixture.gguf",
+    executable: "",
+    editMode: "ask",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: false,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      { role: "user", content: "Can you tell me how this code works?" },
+    ],
+  };
+  const waiting = await service.chat({ ...request, resumePermission: false });
+  assert.equal(modelTurns, 0);
+  assert.equal(waiting.permissionRequest.kind, "project.read");
+  assert.match(waiting.content, /permission to read the project/i);
+
+  await service.grantPermission(
+    "project.read",
+    "conversation",
+    chat.id,
+    "Inspect the open project",
+  );
+  const resumed = await service.chat({
+    ...request,
+    fileAccess: true,
+    resumePermission: true,
+  });
+  assert.equal(modelTurns, 1);
+  assert.match(resumed.content, /exports a value/);
+  assert.ok(
+    resumedMessages.some(
+      (message) =>
+        message.role === "tool" && /src\/index\.ts/.test(message.content),
+    ),
   );
 });
 

@@ -3187,6 +3187,97 @@ textarea,
   background: color-mix(in srgb, var(--accent) 18%, var(--panel2));
 }
 
+/* Final AI spacing: compact enough for the side panel, with readable labels. */
+.ai-capability-bar {
+  min-height: 62px;
+  display: grid;
+  grid-template-columns:
+    minmax(48px, 1fr) minmax(48px, 1fr) minmax(46px, 1fr) 1px
+    minmax(56px, 1.08fr) minmax(54px, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  overflow: visible;
+}
+.ai-capability-bar > button {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 46px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 6px;
+}
+.ai-capability-bar > button > span {
+  display: block !important;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 11px !important;
+  font-weight: 600;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-capability-divider {
+  width: 1px;
+  height: 34px;
+  margin: 0;
+  background: var(--line);
+}
+.ai-capability-bar > button::after {
+  display: block;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: 210px;
+  padding: 7px 9px;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  transform: translate(-50%, 3px);
+}
+.ai-capability-bar > button:nth-last-child(-n + 2)::after {
+  right: 0;
+  left: auto;
+  transform: translateY(3px);
+}
+.ai-capability-bar > button:hover::after,
+.ai-capability-bar > button:focus-visible::after {
+  transform: translate(-50%, 0);
+}
+.ai-capability-bar > button:nth-last-child(-n + 2):hover::after,
+.ai-capability-bar > button:nth-last-child(-n + 2):focus-visible::after {
+  transform: translateY(0);
+}
+
+.ai-history-title {
+  min-height: 66px;
+  margin: 0;
+  padding: 18px 20px 16px;
+}
+.ai-history-title h3 {
+  margin: 0;
+  line-height: 1.2;
+}
+.ai-model-popover .ai-history-title,
+.ai-history-popover .ai-history-title,
+.ai-permission-popover .ai-history-title,
+.ai-agent-popover .ai-history-title {
+  top: 0;
+  margin: 0;
+  padding: 18px 20px 16px;
+}
+.ai-model-popover .ai-model-manager,
+.ai-permission-tools,
+.ai-permission-list {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
 /* Readable capability controls and consistent chat spacing. */
 .ai-head {
   min-height: 58px;
@@ -6100,6 +6191,50 @@ textarea,
 }
 
 /* Final interaction overrides must follow the legacy compatibility rules. */
+.ai-capability-bar {
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  align-self: stretch;
+  box-sizing: border-box;
+  gap: 8px;
+  padding: 7px 12px 9px;
+}
+.ai-capability-bar > button {
+  width: auto;
+  min-width: 58px;
+  height: 42px;
+  flex: 0 0 auto;
+  padding: 5px 9px;
+}
+.ai-capability-bar > button > span {
+  display: block !important;
+  max-width: 76px;
+  overflow: hidden;
+  font-size: 12px !important;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-capability-divider {
+  height: 30px;
+  margin-inline: 2px;
+}
+.ai-model-popover .ai-history-title,
+.ai-history-popover .ai-history-title,
+.ai-permission-popover .ai-history-title,
+.ai-agent-popover .ai-history-title {
+  min-height: 62px;
+  box-sizing: border-box;
+  padding: 16px 18px;
+}
+.ai-model-popover .ai-model-manager,
+.ai-permission-tools,
+.ai-permission-list,
+.ai-history-popover .ai-history-body,
+.ai-agent-popover .ai-chat-workspace-layout {
+  box-sizing: border-box;
+}
 .terminal-tabs {
   height: auto;
   min-height: 46px;

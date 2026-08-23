@@ -76,6 +76,8 @@ test("Ollama uses its focused model picker and manual engine choices are not aut
   assert.match(ai, /const nextEngine = event\.target\.value as AiEngine/);
   assert.match(ai, /nextEngine === "ollama".*openAiPopup\("ollama"\)/s);
   assert.doesNotMatch(ai, /onEngine\("ollama"\);\s*openAiPopup\("models"\)/);
+  assert.match(ai, /is ready and selected/);
+  assert.match(ai, /setSource\(""\);[\s\S]*setOllamaPickerOpen\(false\)/);
 });
 
 test("user chat identity is an icon and compact controls cannot wrap labels", () => {
@@ -173,6 +175,29 @@ test("agent browser and Computer Control stay visible, permissioned, and stoppab
   assert.match(app, /setAiWebAccess\(false\)/);
   assert.match(app, /setAiBrowserAccess\(false\)/);
   assert.match(app, /setAiComputerAccess\(false\)/);
+});
+
+test("AI capability controls have readable spacing and explanatory hover text", () => {
+  for (const explanation of [
+    "read project files",
+    "change project files",
+    "search public pages",
+    "open and test pages",
+    "use approved visible apps",
+  ])
+    assert.match(ai, new RegExp(explanation));
+  assert.match(
+    styles,
+    /Final AI spacing[\s\S]*\.ai-capability-bar\s*\{[\s\S]*grid-template-columns:[\s\S]*padding: 8px 12px 10px/,
+  );
+  assert.match(
+    styles,
+    /\.ai-history-title\s*\{[\s\S]*min-height: 66px;[\s\S]*padding: 18px 20px 16px/,
+  );
+  assert.match(
+    styles,
+    /Final interaction overrides[\s\S]*\.ai-capability-bar\s*\{[\s\S]*width: 100%;[\s\S]*padding: 7px 12px 9px/,
+  );
 });
 
 test("Git history exposes safe actions from every commit row", () => {

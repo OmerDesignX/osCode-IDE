@@ -265,6 +265,7 @@ export function AiPanel({
     setAddMenuOpen(false);
     setOllamaPickerOpen(false);
     setCustomListOpen(false);
+    setSource("");
   };
   const openAiPopup = (popup: AiPopup) => {
     closeAiPopups();
@@ -293,6 +294,13 @@ export function AiPanel({
   } | null>(null);
   const temporaryPermissionIds = useRef<string[]>([]);
   const manualEngine = useRef<AiEngine | null>(null);
+  const capabilityRef = useRef({
+    editMode,
+    fileAccess,
+    webAccess,
+    browserAccess,
+    computerAccess,
+  });
 
   const tierModels = useMemo(
     () => models.filter((item) => osCodeGgufTier(item) !== null),
@@ -446,6 +454,15 @@ export function AiPanel({
     busyRef.current = busy;
   }, [busy]);
   useEffect(() => {
+    capabilityRef.current = {
+      editMode,
+      fileAccess,
+      webAccess,
+      browserAccess,
+      computerAccess,
+    };
+  }, [editMode, fileAccess, webAccess, browserAccess, computerAccess]);
+  useEffect(() => {
     chatIdRef.current = chatId;
   }, [chatId]);
   useEffect(() => {
@@ -581,7 +598,11 @@ export function AiPanel({
       onContextLimit(recommendedActiveContext(added, hardware));
       setSource("");
       setOllamaPickerOpen(false);
+      setModelsOpen(false);
+      setAddMenuOpen(false);
+      setCustomListOpen(false);
       setStatus(`${added.name} is ready`);
+      onNotice(`${added.name} is ready and selected`);
     } catch (error) {
       onNotice(publicAiError(error, "Ollama pull failed"));
     } finally {
@@ -615,7 +636,11 @@ export function AiPanel({
     onContextLimit(recommendedActiveContext(item, hardware));
     setSource("");
     setOllamaPickerOpen(false);
+    setModelsOpen(false);
+    setAddMenuOpen(false);
+    setCustomListOpen(false);
     setStatus(`${item.name} selected`);
+    onNotice(`${item.name} is ready and selected`);
   };
 
   const remove = async (item: AiModel) => {
@@ -691,6 +716,7 @@ export function AiPanel({
       messages: AiChatMessage[];
       contextSummary: string;
     },
+    capabilityOverride?: typeof capabilityRef.current,
   ) => {
     const currentChatId = chatIdRef.current;
     if ((!text.trim() && !continuation) || busyRef.current || !currentChatId)
@@ -716,6 +742,7 @@ export function AiPanel({
     if (queueId) await window.oscode.updateAiQueue(queueId, "running");
     let failed = false;
     try {
+      const activeCapabilities = capabilityOverride || capabilityRef.current;
       const requestSummary = continuation?.contextSummary ?? contextSummary;
       await saveConversation(next, requestSummary);
       const response = await window.oscode.aiChat({
@@ -724,11 +751,11 @@ export function AiPanel({
         model,
         executable,
         messages: next,
-        editMode,
-        fileAccess,
-        webAccess,
-        browserAccess,
-        computerAccess,
+        editMode: activeCapabilities.editMode,
+        fileAccess: activeCapabilities.fileAccess,
+        webAccess: activeCapabilities.webAccess,
+        browserAccess: activeCapabilities.browserAccess,
+        computerAccess: activeCapabilities.computerAccess,
         resumePermission: Boolean(continuation),
         contextLimit,
         hardware: hardwarePreference,
@@ -747,9 +774,7 @@ export function AiPanel({
             : "Custom Model",
       };
       const retained = response.retainedMessages || next;
-      const completed = response.permissionRequest
-        ? retained
-        : [...retained, assistant];
+      const completed = [...retained, assistant];
       messagesRef.current = completed;
       setMessages(completed);
       if (response.changedFiles.length) await onChanged(response.changedFiles);
@@ -757,7 +782,7 @@ export function AiPanel({
       setPendingEdits(response.pendingEdits);
       setPermissionRequest(response.permissionRequest || null);
       permissionContinuation.current = response.permissionRequest
-        ? { messages: retained, contextSummary: response.contextSummary }
+        ? { messages: completed, contextSummary: response.contextSummary }
         : null;
       setContextSummary(response.contextSummary);
       setUsage(response.usage);
@@ -784,7 +809,22 @@ export function AiPanel({
       );
     } catch (error) {
       failed = true;
-      onNotice(publicAiError(error, "Local AI request failed"));
+      const message = publicAiError(error, "Local AI request failed");
+      const failureMessage: AiChatMessage = {
+        id: globalThis.crypto.randomUUID(),
+        role: "assistant",
+        content: `I couldn't complete that request. ${message}`,
+        createdAt: new Date().toISOString(),
+        assistantName:
+          selectedModel && osCodeGgufTier(selectedModel)
+            ? "osCode"
+            : "Custom Model",
+      };
+      const completed = [...messagesRef.current, failureMessage];
+      messagesRef.current = completed;
+      setMessages(completed);
+      await saveConversation(completed, contextSummary).catch(() => undefined);
+      onNotice(message);
       setStatus("Stopped");
     } finally {
       if (queueId)
@@ -1004,9 +1044,36 @@ export function AiPanel({
     );
     if (scope === "once") temporaryPermissionIds.current.push(grant.id);
     const continuation = permissionContinuation.current;
+    const nextCapabilities = { ...capabilityRef.current };
+    if (
+      permissionRequest.kind === "project.read" ||
+      permissionRequest.kind === "project.write" ||
+      permissionRequest.kind === "platformio.run"
+    )
+      nextCapabilities.fileAccess = true;
+    if (
+      permissionRequest.kind === "project.write" &&
+      nextCapabilities.editMode === "read-only"
+    )
+      nextCapabilities.editMode = "ask";
+    if (permissionRequest.kind === "web.search")
+      nextCapabilities.webAccess = true;
+    if (permissionRequest.kind === "browser.control")
+      nextCapabilities.browserAccess = true;
+    if (permissionRequest.kind === "computer.control")
+      nextCapabilities.computerAccess = true;
+    if (scope !== "once") {
+      capabilityRef.current = nextCapabilities;
+      onFileAccess(nextCapabilities.fileAccess);
+      onEditMode(nextCapabilities.editMode);
+      onWebAccess(nextCapabilities.webAccess);
+      onBrowserAccess(nextCapabilities.browserAccess);
+      onComputerAccess(nextCapabilities.computerAccess);
+    }
     setPermissionRequest(null);
     await refreshAgentState();
-    if (continuation) await runPrompt("", undefined, [], continuation);
+    if (continuation)
+      await runPrompt("", undefined, [], continuation, nextCapabilities);
   };
 
   const selectBundledTier = async (tier: Exclude<AiModelTier, "custom">) => {
@@ -1239,7 +1306,10 @@ export function AiPanel({
             <b>Ollama models</b>
             <button
               aria-label="Close Ollama models"
-              onClick={() => setOllamaPickerOpen(false)}
+              onClick={() => {
+                setSource("");
+                setOllamaPickerOpen(false);
+              }}
             >
               <FeatherIcon icon="x" size="17" />
             </button>
@@ -2228,7 +2298,8 @@ export function AiPanel({
           className={fileAccess ? "enabled" : ""}
           aria-pressed={fileAccess}
           aria-label={`File access: ${fileAccess ? "on" : "off"}`}
-          data-tooltip={`Files ${fileAccess ? "on" : "off"}`}
+          title={`Files ${fileAccess ? "on" : "off"}: allow osCode to read project files`}
+          data-tooltip={`Files ${fileAccess ? "on" : "off"}: read project files`}
           onClick={() => onFileAccess(!fileAccess)}
         >
           <FeatherIcon
@@ -2244,7 +2315,8 @@ export function AiPanel({
           disabled={!fileAccess}
           aria-pressed={fileAccess && editMode === "auto"}
           aria-label={`Editing: ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}`}
-          data-tooltip={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "auto" : "ask"}`}
+          title={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}: allow osCode to change project files`}
+          data-tooltip={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "auto-save" : "ask first"}: change files`}
           onClick={() => onEditMode(editMode === "ask" ? "auto" : "ask")}
         >
           <FeatherIcon
@@ -2259,7 +2331,8 @@ export function AiPanel({
           className={webAccess ? "enabled network" : ""}
           aria-pressed={webAccess}
           aria-label={`Web access: ${webAccess ? "on" : "off"}`}
-          data-tooltip={`Web ${webAccess ? "on" : "off"}`}
+          title={`Web ${webAccess ? "on" : "off"}: allow public searches and HTTPS pages`}
+          data-tooltip={`Web ${webAccess ? "on" : "off"}: search public pages`}
           onClick={() => {
             const next = !webAccess;
             onWebAccess(next);
@@ -2274,7 +2347,8 @@ export function AiPanel({
           className={browserAccess ? "enabled" : ""}
           aria-pressed={browserAccess}
           aria-label={`Dedicated agent browser: ${browserAccess ? "on" : "off"}`}
-          data-tooltip={`Browser ${browserAccess ? "on" : "off"}: lets the AI open and test pages in an isolated browser`}
+          title={`Browser ${browserAccess ? "on" : "off"}: open and test pages in an isolated browser`}
+          data-tooltip={`Browser ${browserAccess ? "on" : "off"}: open and test pages`}
           onClick={() => {
             const next = !browserAccess;
             onBrowserAccess(next);
@@ -2288,7 +2362,8 @@ export function AiPanel({
           className={computerAccess ? "enabled" : ""}
           aria-pressed={computerAccess}
           aria-label={`Computer Control: ${computerAccess ? "on" : "off"}`}
-          data-tooltip={`Computer Control ${computerAccess ? "on" : "off"}: lets the AI operate approved visible apps`}
+          title={`Computer Control ${computerAccess ? "on" : "off"}: operate approved visible apps`}
+          data-tooltip={`Control ${computerAccess ? "on" : "off"}: use approved visible apps`}
           onClick={() => {
             const next = !computerAccess;
             onComputerAccess(next);
