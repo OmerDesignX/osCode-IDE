@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { LocalAiService } from "../dist-electron/main/ai.js";
+import {
+  LocalAiService,
+  toolResultForModel,
+} from "../dist-electron/main/ai.js";
 
 async function fixture({ grants = true } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-ai-test-"));
@@ -79,10 +82,29 @@ test("AI tools stay in the project and can edit when enabled", async (t) => {
     false,
     chat.id,
   );
-  assert.deepEqual([...changed], ["src/index.ts"]);
+  await service.runTool(
+    {
+      name: "write_file",
+      arguments: {
+        path: "src/generated/result.ts",
+        content: "export const generated = true;\n",
+      },
+    },
+    true,
+    changed,
+    [],
+    true,
+    false,
+    chat.id,
+  );
+  assert.deepEqual([...changed], ["src/index.ts", "src/generated/result.ts"]);
   assert.match(
     await fs.readFile(path.join(root, "src", "index.ts"), "utf8"),
     /value = 2/,
+  );
+  assert.match(
+    await fs.readFile(path.join(root, "src", "generated", "result.ts"), "utf8"),
+    /generated = true/,
   );
   await assert.rejects(
     service.runTool(
@@ -96,6 +118,27 @@ test("AI tools stay in the project and can edit when enabled", async (t) => {
     ),
     /inside the open project|outside the project/,
   );
+});
+
+test("successful command results tell small models to stop repeating verification", () => {
+  const saved = toolResultForModel("write_file", "Saved src/index.ts");
+  assert.match(saved, /Do not rewrite it again/);
+  assert.match(saved, /verification next/);
+
+  const success = toolResultForModel(
+    "run_command",
+    JSON.stringify({ exitCode: 0, stdout: "10\n", stderr: "" }),
+  );
+  assert.match(success, /VERIFIED/);
+  assert.match(success, /Do not run the same command again/);
+  assert.match(success, /complete_goal/);
+
+  const failure = toolResultForModel(
+    "run_command",
+    JSON.stringify({ exitCode: 1, stdout: "", stderr: "failed" }),
+  );
+  assert.match(failure, /change the code or command/);
+  assert.match(failure, /do not repeat the same failing call unchanged/);
 });
 
 test("AI write tool obeys the edit permission", async (t) => {
