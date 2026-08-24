@@ -6,7 +6,10 @@ ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 node "$SCRIPT_DIR/sync-version.mjs"
 cd "$ROOT"
-pnpm install --frozen-lockfile
+CI=true \
+  PNPM_DISABLE_SELF_UPDATE_CHECK=true \
+  NO_UPDATE_NOTIFIER=true \
+  pnpm install --frozen-lockfile --prefer-offline
 pnpm run release:check-disk
 pnpm run format:check
 pnpm test

@@ -39,8 +39,35 @@ const makePythonAliasesPortable = async (pythonRoot) => {
     if (!targetStats.isDirectory())
       throw new Error(`Python alias target is not a directory: ${localTarget}`);
     await fs.unlink(alias);
-    await fs.symlink(portableTarget, alias, "dir");
-    console.log(`Made Python alias portable: ${entry.name}`);
+    if (process.platform === "win32") {
+      // Windows directory symlinks require Developer Mode or elevation, and
+      // junctions retain an absolute path that breaks after packaging. Make
+      // the version-neutral alias the real directory instead.
+      await fs.rename(localTarget, alias);
+      console.log(`Materialized portable Python alias: ${entry.name}`);
+    } else {
+      await fs.symlink(portableTarget, alias, "dir");
+      console.log(`Made Python alias portable: ${entry.name}`);
+    }
+  }
+
+  if (process.platform === "win32") {
+    // Recover cleanly if an earlier run removed an alias before a privileged
+    // symlink operation failed.
+    for (const entry of await fs.readdir(pythonRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const match = entry.name.match(
+        /^cpython-(3\.\d+)\.\d+-(windows-(?:x86_64|aarch64)-none)$/,
+      );
+      if (!match) continue;
+      const alias = path.join(pythonRoot, `cpython-${match[1]}-${match[2]}`);
+      try {
+        await fs.access(alias);
+      } catch {
+        await fs.rename(path.join(pythonRoot, entry.name), alias);
+        console.log(`Recovered portable Python alias: ${path.basename(alias)}`);
+      }
+    }
   }
 };
 
