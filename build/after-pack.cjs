@@ -1,20 +1,24 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
-const UNIVERSAL_ARCH = 4;
+const X64_ARCH = 1;
+const ARM64_ARCH = 3;
 
 /**
- * Add architecture-specific macOS runtimes after electron-builder has merged
- * the x64 and arm64 app bundles. Copying them into each temporary app causes
- * @electron/universal to follow Python symlinks and reject otherwise identical
- * runtime trees.
+ * Add only the runtime tree matching this macOS package. The Computer Control
+ * helper stays universal because it is small and uses the same stable resource
+ * path on both architectures.
  */
 module.exports = async function afterPack(context) {
-  if (
-    context.electronPlatformName !== "darwin" ||
-    context.arch !== UNIVERSAL_ARCH
-  )
-    return;
+  if (context.electronPlatformName !== "darwin") return;
+  const architecture =
+    context.arch === ARM64_ARCH
+      ? "arm64"
+      : context.arch === X64_ARCH
+        ? "x64"
+        : "";
+  if (!architecture)
+    throw new Error(`Unsupported macOS package architecture: ${context.arch}`);
 
   const projectRoot = context.packager.projectDir;
   const appName = `${context.packager.appInfo.productFilename}.app`;
@@ -24,13 +28,11 @@ module.exports = async function afterPack(context) {
     "Contents",
     "Resources",
   );
+  const target = `darwin-${architecture}`;
   const resources = [
-    ["vendor/uv/darwin-arm64", "uv/darwin-arm64"],
-    ["vendor/uv/darwin-x64", "uv/darwin-x64"],
-    ["vendor/python/darwin-arm64", "python/darwin-arm64"],
-    ["vendor/python/darwin-x64", "python/darwin-x64"],
-    ["vendor/llama/darwin-arm64", "llama/darwin-arm64"],
-    ["vendor/llama/darwin-x64", "llama/darwin-x64"],
+    [`vendor/uv/${target}`, `uv/${target}`],
+    [`vendor/python/${target}`, `python/${target}`],
+    [`vendor/llama/${target}`, `llama/${target}`],
     ["vendor/llama/LICENSE", "llama/LICENSE"],
     [
       "vendor/computer-control/darwin-universal",
@@ -50,5 +52,7 @@ module.exports = async function afterPack(context) {
     });
   }
 
-  console.log("Added both Monterey-compatible macOS runtime trees");
+  console.log(
+    `Added the Monterey-compatible ${architecture} macOS runtime tree`,
+  );
 };

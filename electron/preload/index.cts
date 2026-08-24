@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld("oscode", {
   aiChat: (request: unknown) => ipcRenderer.invoke("ai:chat", request),
   stopAgentControl: () => ipcRenderer.invoke("agent:stop-control"),
   agentBrowserSnapshot: () => ipcRenderer.invoke("agent:browser-snapshot"),
+  showAgentBrowser: () => ipcRenderer.invoke("agent:browser-show"),
   stopCurrentActivity: () => ipcRenderer.invoke("activity:stop"),
   onAgentActivity: (callback: (activity: unknown) => void) => {
     const listener = (_event: unknown, activity: unknown) => callback(activity);
@@ -139,6 +140,11 @@ contextBridge.exposeInMainWorld("oscode", {
     const listener = (_event: unknown, status: string) => callback(status);
     ipcRenderer.on("ai:status", listener);
     return () => ipcRenderer.removeListener("ai:status", listener);
+  },
+  onAiAction: (callback: (action: unknown) => void) => {
+    const listener = (_event: unknown, action: unknown) => callback(action);
+    ipcRenderer.on("ai:action", listener);
+    return () => ipcRenderer.removeListener("ai:action", listener);
   },
   setSpellcheck: (enabled: boolean) =>
     ipcRenderer.invoke("spellcheck:set", enabled),
@@ -185,6 +191,8 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("python:install", version),
   createVenv: (interpreter: string, name?: string) =>
     ipcRenderer.invoke("python:create-venv", interpreter, name),
+  installPythonPackage: (interpreter: string, packageSpec: string) =>
+    ipcRenderer.invoke("python:install-package", interpreter, packageSpec),
   runPython: (file: string, interpreter: string, debug?: boolean) =>
     ipcRenderer.invoke("python:run", file, interpreter, debug),
   stopPython: () => ipcRenderer.invoke("python:stop"),

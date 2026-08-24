@@ -1,6 +1,6 @@
 {
   "name": "oscode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A calm, cross-platform code editor",
   "desktopName": "studio.oscode.editor.desktop",
   "main": "dist-electron/main/index.js",
@@ -31,6 +31,7 @@
     "release:build:macos": "node scripts/build-macos-release.mjs",
     "release:stage:macos": "node scripts/stage-native-release.mjs macos",
     "release:stage:windows": "node scripts/stage-windows-release.mjs",
+    "release:stage:linux": "node scripts/stage-linux-release.mjs",
     "format": "prettier --write . --ignore-unknown",
     "format:check": "prettier --check . --ignore-unknown",
     "preview": "vite preview"
@@ -83,10 +84,9 @@
       "THIRD_PARTY_NOTICES.md"
     ],
     "mac": {
-      "icon": "build/icon.png",
+      "icon": "build/icon-macos.icns",
       "minimumSystemVersion": "12.0",
-      "artifactName": "osCode-${version}.${ext}",
-      "x64ArchFiles": "**/node-pty/prebuilds/darwin-*/**",
+      "artifactName": "osCode-${version}-mac-${arch}.${ext}",
       "extraResources": [],
       "target": [
         "dmg"
@@ -172,6 +172,7 @@
     },
     "linux": {
       "icon": "build/icon.png",
+      "artifactName": "osCode-${version}-${arch}.${ext}",
       "extraResources": [
         {
           "from": "vendor/uv",

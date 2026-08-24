@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 
 const root = path.resolve(import.meta.dirname, "..");
+const requireSigned = process.env.OSCODE_REQUIRE_SIGNED === "1";
 
 if (process.platform !== "darwin")
   throw new Error("The macOS release must be built on macOS");
@@ -27,6 +28,7 @@ function run(command, args, env = {}) {
 }
 
 await run("pnpm", ["run", "release:check-disk"]);
+await run("bash", ["releaseScripts/macos/prepare-icon.sh"]);
 await run("pnpm", ["run", "format:check"]);
 await run("pnpm", ["test"]);
 await run("pnpm", ["run", "git:prepare"]);
@@ -39,27 +41,39 @@ await run("pnpm", ["exec", "vite", "build"], {
   NODE_OPTIONS: "--max-old-space-size=4096",
 });
 await run("pnpm", ["run", "smoke:run"]);
-await run(
-  "pnpm",
-  [
-    "exec",
-    "electron-builder",
-    "--mac",
-    "dmg",
-    "--universal",
-    "--publish",
-    "never",
-  ],
-  { CSC_IDENTITY_AUTO_DISCOVERY: "false" },
-);
-await run(process.execPath, [
-  "scripts/verify-package.mjs",
-  "macos",
-  "--run-smoke",
-]);
+for (const architecture of ["arm64", "x64"]) {
+  const packageDirectory = path.join(root, "release", `macos-${architecture}`);
+  await run(
+    "pnpm",
+    [
+      "exec",
+      "electron-builder",
+      "--mac",
+      "dmg",
+      `--${architecture}`,
+      `--config.directories.output=${packageDirectory}`,
+      "--publish",
+      "never",
+    ],
+    requireSigned ? {} : { CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+  );
+  await run(
+    process.execPath,
+    ["scripts/verify-package.mjs", "macos", "--run-smoke"],
+    {
+      OSCODE_EXPECTED_MAC_ARCH: architecture,
+      OSCODE_PACKAGE_DIR: packageDirectory,
+      OSCODE_ALLOW_UNSIGNED: requireSigned ? "0" : "1",
+      // An x64 Electron renderer runs through Rosetta on Apple silicon. The
+      // production bundle's first V8 compilation is much slower there than on
+      // a native Intel Mac, so retain every smoke assertion with more headroom.
+      ...(architecture === "x64" ? { OSCODE_SMOKE_TIMEOUT_MS: "600000" } : {}),
+    },
+  );
+}
 await run("pnpm", ["run", "release:stage:macos"]);
 await fs.rm(path.join(root, "release"), { recursive: true, force: true });
 
 process.stdout.write(
-  "\nmacOS release verified and staged in release-assets/macos; intermediate release folder removed\n",
+  "\nApple-silicon and Intel macOS releases verified and staged in release-assets/macos; intermediate release folder removed\n",
 );

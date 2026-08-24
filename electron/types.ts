@@ -111,6 +111,33 @@ export type AiChatAttachment = {
   mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
   dataUrl: string;
 };
+export type AiActionKind =
+  | "plan"
+  | "permission"
+  | "web"
+  | "browser"
+  | "computer"
+  | "files"
+  | "command"
+  | "goal"
+  | "result";
+export type AiActionStatus =
+  "running" | "completed" | "waiting" | "failed" | "denied";
+export type AiActionEntry = {
+  id: string;
+  chatId: string;
+  kind: AiActionKind;
+  status: AiActionStatus;
+  title: string;
+  detail?: string;
+  tool?: string;
+  query?: string;
+  url?: string;
+  target?: string;
+  websites?: string[];
+  createdAt: string;
+  completedAt?: string;
+};
 export type AiChatMessage = {
   id?: string;
   role: "user" | "assistant";
@@ -119,6 +146,7 @@ export type AiChatMessage = {
   createdAt?: string;
   assistantName?: "osCode" | "Custom Model";
   attachments?: AiChatAttachment[];
+  actions?: AiActionEntry[];
 };
 export type AiChatThread = {
   id: string;
@@ -195,6 +223,7 @@ export type AiChatResponse = {
   retainedMessages?: AiChatMessage[];
   changedFiles: string[];
   toolSteps: string[];
+  actions: AiActionEntry[];
   pendingEdits: Array<{ id: string; path: string }>;
   contextSummary: string;
   usage: { used: number; limit: number; compacted: boolean };

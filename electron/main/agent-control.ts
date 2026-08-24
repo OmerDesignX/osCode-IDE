@@ -161,11 +161,24 @@ function loopbackHost(hostname: string) {
   return host === "localhost" || host === "::1" || host.startsWith("127.");
 }
 
-async function validatedAddress(raw: string, projectRoot: string) {
-  const input = raw
+export function cleanBrowserAddress(raw: string) {
+  let input = raw
     .replace(/[\r\n\0]/g, "")
     .trim()
     .slice(0, 2_000);
+  const first = input.at(0);
+  const last = input.at(-1);
+  if (
+    input.length >= 2 &&
+    first === last &&
+    (first === '"' || first === "'" || first === "`")
+  )
+    input = input.slice(1, -1).trim();
+  return input;
+}
+
+async function validatedAddress(raw: string, projectRoot: string) {
+  const input = cleanBrowserAddress(raw);
   if (!input) throw new Error("Enter a page address");
   let url: URL;
   try {
@@ -675,6 +688,14 @@ export class AgentControlService {
       loading: window.webContents.isLoading(),
       capturedAt: Date.now(),
     };
+  }
+
+  async showBrowser() {
+    const window = this.browser;
+    if (!window || window.isDestroyed()) return null;
+    window.show();
+    window.focus();
+    return this.browserSnapshot();
   }
 
   async clickBrowser(query: string) {

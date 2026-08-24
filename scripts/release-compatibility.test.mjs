@@ -11,19 +11,20 @@ test("release metadata keeps the requested desktop compatibility", () => {
   assert.equal(manifest.devDependencies.electron, "^35.0.0");
   assert.equal(manifest.build.mac.minimumSystemVersion, "12.0");
   assert.deepEqual(manifest.build.mac.target, ["dmg"]);
-  assert.equal(manifest.build.mac.artifactName, "osCode-${version}.${ext}");
   assert.equal(
-    manifest.build.mac.x64ArchFiles,
-    "**/node-pty/prebuilds/darwin-*/**",
+    manifest.build.mac.artifactName,
+    "osCode-${version}-mac-${arch}.${ext}",
   );
+  assert.equal(manifest.build.mac.x64ArchFiles, undefined);
   assert.equal(
     manifest.build.win.artifactName,
     "osCode-Setup-${version}.${ext}",
   );
   assert.equal(manifest.build.nsis.differentialPackage, false);
   assert.ok(manifest.build.win.target[0].arch.includes("x64"));
-  for (const platform of ["mac", "win", "linux"])
-    assert.equal(manifest.build[platform].icon, "build/icon.png");
+  assert.equal(manifest.build.mac.icon, "build/icon-macos.icns");
+  assert.equal(manifest.build.win.icon, "build/icon.png");
+  assert.equal(manifest.build.linux.icon, "build/icon.png");
 
   const readme = read("README.md");
   assert.match(readme, /Windows 10 or newer/);
@@ -39,6 +40,9 @@ test("brand assets use the baby-blue palette and a production icon", () => {
   assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   assert.ok(icon.readUInt32BE(16) >= 1024);
   assert.ok(icon.readUInt32BE(20) >= 1024);
+  const macIcon = readFileSync(path.join(root, "build", "icon-macos.icns"));
+  assert.equal(macIcon.subarray(0, 4).toString("ascii"), "icns");
+  assert.match(read("releaseScripts/macos/prepare-icon.sh"), /icon_512x512@2x/);
   assert.match(read("src/App.tsx"), /Open or create a file/);
 });
 
@@ -51,9 +55,9 @@ test("native releases package local inference runtimes without model weights or 
   );
   assert.deepEqual(macResources, []);
   const afterPack = read("build/after-pack.cjs");
-  assert.match(afterPack, /context\.arch !== UNIVERSAL_ARCH/);
-  assert.match(afterPack, /vendor\/llama\/darwin-arm64/);
-  assert.match(afterPack, /vendor\/llama\/darwin-x64/);
+  assert.match(afterPack, /context\.arch === ARM64_ARCH/);
+  assert.match(afterPack, /context\.arch === X64_ARCH/);
+  assert.match(afterPack, /`vendor\/llama\/\$\{target\}`/);
   assert.doesNotMatch(afterPack, /vendor\/models/);
   assert.deepEqual(
     windowsResources.find(({ from }) => from === "vendor/llama/win32-x64")
@@ -173,6 +177,7 @@ test("native Computer Control is local, permissioned, and packaged", () => {
     windowsResources.includes("node_modules/@microsoft/winappcli/bin/win-x64"),
   );
   assert.match(afterPack, /vendor\/computer-control\/darwin-universal/);
+  assert.match(afterPack, /const target = `darwin-\$\{architecture\}`/);
 
   const control = read("electron/main/agent-control.ts");
   assert.match(control, /WINAPP_CLI_TELEMETRY_OPTOUT: "1"/);
@@ -215,13 +220,37 @@ test("manual release build preserves the verified native package pipeline", () =
     "release:stage:macos",
   ])
     assert.match(macBuild, new RegExp(command));
-  assert.match(macBuild, /"--mac"[\s\S]*"--universal"/);
+  assert.match(macBuild, /\["arm64", "x64"\]/);
+  assert.match(macBuild, /`--\$\{architecture\}`/);
+  assert.doesNotMatch(macBuild, /--universal/);
   assert.match(macBuild, /verify-package\.mjs[\s\S]*"macos"/);
+  assert.match(macBuild, /OSCODE_REQUIRE_SIGNED/);
+  assert.match(macBuild, /OSCODE_ALLOW_UNSIGNED: requireSigned \? "0" : "1"/);
   assert.match(macBuild, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
-  assert.match(read("docs/RELEASING.md"), /pnpm run release:build:macos/);
+  const macWrapper = read("releaseScripts/macos/build.sh");
+  assert.doesNotMatch(macWrapper, /Developer ID Application/);
+  assert.doesNotMatch(macWrapper, /find-identity/);
+  assert.match(
+    read("docs/RELEASING.md"),
+    /bash releaseScripts\/macos\/build\.sh/,
+  );
+  assert.equal(read("releaseScripts/VERSION.txt").trim(), "0.1.1");
+  assert.match(
+    read("releaseScripts/windows/build-windows-10.sh"),
+    /build-windows\.sh/,
+  );
+  assert.match(
+    read("releaseScripts/windows/build-windows-11.sh"),
+    /build-windows\.sh/,
+  );
+  assert.match(read("releaseScripts/linux/build.sh"), /--linux deb --x64/);
+  assert.match(read(".gitignore"), /^\/release\/$/m);
 
   const stageNative = read("scripts/stage-native-release.mjs");
-  assert.match(stageNative, /`osCode-\$\{manifest\.version\}\.dmg`/);
+  assert.match(
+    stageNative,
+    /`osCode-\$\{manifest\.version\}-mac-\$\{architecture\}\.dmg`/,
+  );
   assert.doesNotMatch(
     stageNative,
     /latest-mac|SHA256SUMS|manifest\.json|\.zip/,
@@ -251,8 +280,20 @@ test("manual release build preserves the verified native package pipeline", () =
   );
   assert.match(read("scripts/verify-package.mjs"), /\\\.dmg\$/);
   assert.match(
+    read("scripts/verify-package.mjs"),
+    /platform === "macos" \? 10_000 : 1_000_000/,
+  );
+  assert.match(
+    read("scripts/verify-package.mjs"),
+    /Authority=Developer ID Application:/,
+  );
+  assert.match(
     read("electron/main/index.ts"),
     /app\.commandLine\.hasSwitch\("smoke-test"\)/,
+  );
+  assert.match(
+    read("electron/main/index.ts"),
+    /smokeMode\s*\? processKeyProtector\(app\.getPath\("userData"\)\)/,
   );
 });
 

@@ -7,6 +7,14 @@ if (!["windows", "macos", "linux"].includes(platform))
   throw new Error(
     "Usage: node scripts/verify-package.mjs <windows|macos|linux> [--run-smoke]",
   );
+const expectedMacArch =
+  platform === "macos"
+    ? process.env.OSCODE_EXPECTED_MAC_ARCH || process.arch
+    : "";
+if (platform === "macos" && !["arm64", "x64"].includes(expectedMacArch))
+  throw new Error(
+    `Unsupported expected macOS architecture: ${expectedMacArch}`,
+  );
 
 const release = path.resolve(process.env.OSCODE_PACKAGE_DIR || "release");
 const walk = (root, depth = 8) => {
@@ -93,13 +101,17 @@ if (platform === "windows") {
     /osCode\.app\/Contents\/MacOS\/osCode$/.test(relative(file)),
   );
   appRoot = path.resolve(executable, "..", "..", "..");
-  artifacts = [first((file) => /\.dmg$/i.test(file))].filter(Boolean);
+  artifacts = [
+    first((file) =>
+      new RegExp(`-mac-${expectedMacArch}\\.dmg$`, "i").test(file),
+    ),
+  ].filter(Boolean);
 }
 
 requireLargeFile(
   executable,
   `${platform} application executable`,
-  platform === "macos" ? 50_000 : 1_000_000,
+  platform === "macos" ? 10_000 : 1_000_000,
 );
 const resourcesRoot =
   platform === "macos"
@@ -400,6 +412,29 @@ if (platform === "windows") {
 } else {
   const infoPlist = path.join(appRoot, "Contents", "Info.plist");
   if (!existsSync(infoPlist)) throw new Error("macOS Info.plist is missing");
+  if (process.env.OSCODE_ALLOW_UNSIGNED !== "1") {
+    const signature = spawnSync(
+      "codesign",
+      ["--verify", "--deep", "--strict", appRoot],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (signature.status !== 0)
+      throw new Error("macOS application does not have a valid code signature");
+    const signatureDetails = spawnSync(
+      "codesign",
+      ["--display", "--verbose=4", appRoot],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (
+      signatureDetails.status !== 0 ||
+      !/Authority=Developer ID Application:/i.test(
+        `${signatureDetails.stdout}\n${signatureDetails.stderr}`,
+      )
+    )
+      throw new Error(
+        "macOS application is not signed with Developer ID Application",
+      );
+  }
   const minimumSystem = spawnSync(
     "plutil",
     ["-extract", "LSMinimumSystemVersion", "raw", "-o", "-", infoPlist],
@@ -412,12 +447,16 @@ if (platform === "windows") {
     encoding: "utf8",
     timeout: 10_000,
   });
+  const expectedLipoArch = expectedMacArch === "x64" ? "x86_64" : "arm64";
+  const packagedArchitectures = appArchitectures.stdout.trim().split(/\s+/);
   if (
     appArchitectures.status !== 0 ||
-    !/\bx86_64\b/.test(appArchitectures.stdout) ||
-    !/\barm64\b/.test(appArchitectures.stdout)
+    packagedArchitectures.length !== 1 ||
+    packagedArchitectures[0] !== expectedLipoArch
   )
-    throw new Error("macOS application executable is not universal");
+    throw new Error(
+      `macOS application executable is not ${expectedMacArch}-only`,
+    );
   const macComputerControl = requireLargeFile(
     path.join(
       resourcesRoot,
@@ -458,7 +497,19 @@ if (platform === "windows") {
       "macOS Computer Control helper failed its local list check",
     );
   }
-  for (const architecture of ["darwin-x64", "darwin-arm64"]) {
+  const packagedRuntimeArchitecture = `darwin-${expectedMacArch}`;
+  const excludedRuntimeArchitecture =
+    expectedMacArch === "arm64" ? "darwin-x64" : "darwin-arm64";
+  for (const runtimeKind of ["uv", "python", "llama"])
+    if (
+      existsSync(
+        path.join(resourcesRoot, runtimeKind, excludedRuntimeArchitecture),
+      )
+    )
+      throw new Error(
+        `${excludedRuntimeArchitecture} ${runtimeKind} must not be in the ${expectedMacArch} package`,
+      );
+  for (const architecture of [packagedRuntimeArchitecture]) {
     const cpuType = architecture.endsWith("arm64")
       ? [0x0c, 0x00, 0x00, 0x01]
       : [0x07, 0x00, 0x00, 0x01];
@@ -540,7 +591,7 @@ if (platform === "windows") {
   const nativeLlamaRoot = path.join(
     resourcesRoot,
     "llama",
-    `darwin-${process.arch}`,
+    packagedRuntimeArchitecture,
   );
   const nativeLlama = path.join(nativeLlamaRoot, "llama-completion");
   const nativeLlamaCheck = spawnSync(nativeLlama, ["--version"], {
@@ -558,7 +609,7 @@ if (platform === "windows") {
   const nativeUv = path.join(
     resourcesRoot,
     "uv",
-    `darwin-${process.arch}`,
+    packagedRuntimeArchitecture,
     "uv",
   );
   const nativeUvCheck = spawnSync(nativeUv, ["--version"], {
@@ -568,7 +619,7 @@ if (platform === "windows") {
   if (nativeUvCheck.status !== 0 || !/^uv\s+\d+/i.test(nativeUvCheck.stdout))
     throw new Error("Native macOS uv command failed its version check");
   const nativePython = pythonExecutables(
-    path.join(resourcesRoot, "python", `darwin-${process.arch}`),
+    path.join(resourcesRoot, "python", packagedRuntimeArchitecture),
   );
   for (const version of ["3.10", "3.11", "3.12"]) {
     const ready = nativePython.some((python) => {
@@ -586,7 +637,8 @@ if (platform === "windows") {
   }
 }
 
-const expectedArtifactCount = platform === "linux" ? 2 : 1;
+const expectedArtifactCount =
+  platform === "linux" && !flags.includes("--deb-only") ? 2 : 1;
 if (artifacts.length !== expectedArtifactCount)
   throw new Error(`${platform} release artifacts are incomplete`);
 const asarModifiedAt = statSync(asar).mtimeMs;
@@ -621,6 +673,7 @@ console.log(
   JSON.stringify(
     {
       platform,
+      architecture: platform === "macos" ? expectedMacArch : process.arch,
       executable: relative(executable),
       asarBytes: statSync(asar).size,
       nativeAddons: nativeFiles.map(relative),

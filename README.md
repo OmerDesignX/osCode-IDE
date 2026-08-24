@@ -10,7 +10,7 @@ To install please check releases.
 
 ## Included now
 
-- Folder-based project explorer with create, rename, refresh, and recoverable Trash operations, plus a multi-tab Monaco editor
+- Folder-based project explorer with create, rename, refresh, and recoverable Trash operations, plus a multi-tab Monaco editor whose split panes can independently select any open tab
 - Syntax support for Python, TypeScript/JavaScript, C/C++, C#, Java, Rust, Go, HTML, CSS, JSON, Markdown, and shell files
 - Local Markdown Edit, Split, and Preview views with Mermaid diagram rendering and SVG/PNG copy or save controls
 - Save workflow, a dedicated Settings panel, dark/light themes, adjustable interface and code sizes, English/Arabic layouts, movable sidebar, and a baby-blue tonal visual system based on `#89CFF0`
@@ -18,7 +18,7 @@ To install please check releases.
 - Local-first Git initialization and repository removal, status refresh, per-file or all-file staging, commits, branch create/switch/rename/merge/safe-delete controls, tags and stashes, optional remotes with fetch/pull/push/unlink controls, and explicit submodule-link visibility and absorption. Windows packages include checksum-verified MinGit, while macOS/Linux use the operating system's Git package.
 - A searchable Git helpbook backed by the installed Git manual. New repositories receive a private repository-local fallback author automatically when Git has no identity, so the editor never interrupts a commit with an identity form; users can replace it at any time with `git config --local`.
 - Expandable platform shell (PowerShell on Windows, the user's shell on macOS/Linux)
-- Contained Python 3.10, 3.11, and 3.12 runtimes, later-version downloads inside osCode, per-project and named environments, Run/Stop controls, and terminal package installation. Universal macOS releases carry separate Intel and Apple-silicon uv/Python trees and select the matching architecture at runtime.
+- Contained Python 3.10, 3.11, and 3.12 runtimes, later-version downloads inside osCode, per-project and named environments, Run/Stop controls, and terminal package installation. The separate Intel and Apple-silicon macOS releases each carry their matching uv/Python tree.
 - Advanced Mode with Python `pdb` launch, editor suggestions, wrapping and minimap controls, and multiple project environments
 - Resizable project/Git panels, a fixed Git header, and optional Python command help beside the terminal
 - A resizable local AI project agent with downloadable Small, Medium, and Large osCode models; llama.cpp on Windows/Linux/Intel Mac and MLX on Apple silicon; automatic CPU/GPU selection with a remembered override; custom local-model support; multiple searchable chats; goals; steering; queued prompts; local schedules; commands; automatic context compaction; and native or fallback tool calling
@@ -31,7 +31,7 @@ To install please check releases.
 ## Supported systems
 
 - Windows 10 or newer on 64-bit Intel or AMD systems
-- macOS 12 Monterey or newer; the universal DMG supports Intel and Apple silicon Macs
+- macOS 12 Monterey or newer; choose the Intel x64 or Apple-silicon arm64 DMG for the Mac
 - Current 64-bit Debian and Ubuntu releases can build and run osCode from source
 
 ## Development
@@ -45,9 +45,9 @@ The six osCode model variants are maintained in the separate [osCode Models repo
 
 Downloaded models are private application data rather than project files: `%APPDATA%\osCode\models` on Windows, `~/Library/Application Support/osCode/models` on macOS, and `~/.config/osCode/models` on Linux. Removing the app does not silently remove these multi-gigabyte files. Custom models remain references to their original location.
 
-Public releases contain exactly one Windows installer and one macOS DMG. The `release-assets/windows` and `release-assets/macos` folders are staging locations for those native files. GitHub updates use [OmerDesignX/osCode-IDE Releases](https://github.com/OmerDesignX/osCode-IDE/releases), download the complete installer or DMG.
+Public releases contain exactly one Windows installer and two macOS DMGs, one for Intel x64 and one for Apple-silicon arm64. The `release-assets/windows` and `release-assets/macos` folders are staging locations for those native files. GitHub updates use [OmerDesignX/osCode-IDE Releases](https://github.com/OmerDesignX/osCode-IDE/releases), download the complete installer or matching DMG.
 
-Maintainers should follow [`docs/RELEASING.md`](docs/RELEASING.md) for native runner prerequisites, version tags, draft review, checksums, and signing.
+Maintainers should follow [`docs/RELEASING.md`](docs/RELEASING.md) for native runner prerequisites, per-platform scripts, draft review, checksums, and signing.
 
 ## Keyboard shortcuts
 

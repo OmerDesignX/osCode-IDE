@@ -1,8 +1,8 @@
 node_modules/
 dist/
 dist-electron/
-release/
-release-final/
+/release/
+/release-final/
 local-builds/
 vendor/git/
 vendor/uv/

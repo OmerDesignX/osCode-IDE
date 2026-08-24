@@ -41,7 +41,7 @@ test("Ollama setup selects standalone CLI archives and rejects desktop installer
   );
 });
 
-async function fixture({ grants = true } = {}) {
+async function fixture({ grants = true, status = () => undefined } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-ai-test-"));
   const root = path.join(base, "project");
   await fs.mkdir(path.join(root, "src"), { recursive: true });
@@ -55,7 +55,7 @@ async function fixture({ grants = true } = {}) {
     getProjectRoot: () => root,
     getPython: async () => "python",
     getUv: async () => "uv",
-    status: () => undefined,
+    status,
   });
   const chat = await service.createChat();
   if (grants) {
@@ -74,6 +74,146 @@ async function fixture({ grants = true } = {}) {
   }
   return { root, base, service, chat };
 }
+
+test("Ollama streams reasoning, answer progress, and native tool calls", async (t) => {
+  const statuses = [];
+  const { base, service } = await fixture({
+    status: (value) => statuses.push(value),
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const chunks = [
+    JSON.stringify({
+      message: { thinking: "Inspect the project. " },
+      eval_count: 4,
+      done: false,
+    }),
+    JSON.stringify({
+      message: {
+        content: "I found the next step.",
+        tool_calls: [
+          {
+            id: "call-1",
+            function: {
+              name: "read_file",
+              arguments: { path: "src/index.ts" },
+            },
+          },
+        ],
+      },
+      eval_count: 9,
+      done: true,
+    }),
+  ];
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(JSON.parse(init.body).stream, true);
+    const encoder = new TextEncoder();
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks)
+            controller.enqueue(encoder.encode(`${chunk}\n`));
+          controller.close();
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/x-ndjson" } },
+    );
+  };
+  const reply = await service.remoteReply(
+    {
+      chatId: "chat",
+      engine: "ollama",
+      model: "qwen3:latest",
+      executable: "",
+      messages: [],
+      editMode: "auto",
+      contextLimit: 8192,
+      hardware: "auto",
+      contextSummary: "",
+      fileAccess: true,
+      webAccess: false,
+      browserAccess: false,
+      computerAccess: false,
+      resumePermission: false,
+      goal: "",
+    },
+    [{ role: "user", content: "Inspect src/index.ts" }],
+    service.tools("auto", true, false, false, false),
+  );
+  assert.equal(reply.thinking, "Inspect the project.");
+  assert.equal(reply.content, "I found the next step.");
+  assert.deepEqual(reply.toolCalls, [
+    {
+      id: "call-1",
+      name: "read_file",
+      arguments: { path: "src/index.ts" },
+    },
+  ]);
+  assert.ok(
+    statuses.some((value) => /Reasoning locally.*4 output tokens/.test(value)),
+  );
+  assert.ok(statuses.some((value) => /Answering/.test(value)));
+});
+
+test("permissions and autonomous execution are identical across local engines", async (t) => {
+  for (const engine of ["llamacpp", "mlx", "pytorch", "ollama"]) {
+    const { root, base, service, chat } = await fixture();
+    t.after(() => fs.rm(base, { recursive: true, force: true }));
+    let turn = 0;
+    service.remoteReply = async () => {
+      turn += 1;
+      if (turn === 1)
+        return {
+          content: "I need permission to write project files.",
+          toolCalls: [],
+        };
+      if (turn === 2)
+        return {
+          content: "I should create and test the requested file now.",
+          toolCalls: [],
+        };
+      if (turn === 3)
+        return {
+          content: `<tool_call>{"name":"write_file","arguments":{"path":"src/${engine}.ts","content":"export const engine = '${engine}';\\n"}}</tool_call>`,
+          toolCalls: [],
+        };
+      return { content: `Completed with ${engine}.`, toolCalls: [] };
+    };
+    const result = await service.chat({
+      chatId: chat.id,
+      engine,
+      model: engine === "llamacpp" ? "fixture.gguf" : `fixture-${engine}`,
+      executable: "",
+      editMode: "auto",
+      contextLimit: 8192,
+      hardware: "auto",
+      contextSummary: "",
+      goal: "",
+      fileAccess: true,
+      webAccess: false,
+      browserAccess: false,
+      computerAccess: false,
+      messages: [
+        {
+          role: "user",
+          content: `Create and verify a project file demonstrating the ${engine} engine integration`,
+        },
+      ],
+    });
+    assert.equal(turn, 4, `${engine} should receive both correction turns`);
+    assert.deepEqual(result.changedFiles, [`src/${engine}.ts`]);
+    assert.ok(result.actions.some((action) => action.tool === "set_goal"));
+    assert.ok(result.actions.some((action) => action.tool === "list_files"));
+    assert.ok(result.actions.some((action) => action.tool === "write_file"));
+    assert.match(
+      await fs.readFile(path.join(root, "src", `${engine}.ts`), "utf8"),
+      new RegExp(engine),
+    );
+  }
+});
 
 test("AI tools stay in the project and can edit when enabled", async (t) => {
   const { root, base, service, chat } = await fixture();
@@ -153,10 +293,85 @@ test("AI tools stay in the project and can edit when enabled", async (t) => {
   );
 });
 
-test("successful command results tell small models to stop repeating verification", () => {
+test("JSON project files accept structured content from local model tool calls", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const changed = new Set();
+  const content = {
+    private: true,
+    scripts: { build: "vite build" },
+  };
+  const result = await service.runTool(
+    {
+      name: "write_file",
+      arguments: { path: "package.json", content },
+    },
+    true,
+    changed,
+    [],
+    true,
+    false,
+    chat.id,
+    false,
+    false,
+  );
+  assert.equal(result, "Saved package.json");
+  assert.deepEqual(
+    JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")),
+    content,
+  );
+});
+
+test("agent action history survives chat persistence", async (t) => {
+  const { base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const createdAt = new Date().toISOString();
+  await service.saveChat(
+    chat.id,
+    [
+      { role: "user", content: "Check the docs" },
+      {
+        role: "assistant",
+        content: "Checked.",
+        actions: [
+          {
+            id: "web-1",
+            chatId: chat.id,
+            kind: "web",
+            status: "completed",
+            title: "Searched the public web",
+            query: "public documentation",
+            websites: ["https://example.com/docs"],
+            createdAt,
+            completedAt: createdAt,
+          },
+        ],
+      },
+    ],
+    "",
+  );
+  const state = await service.getAgentState();
+  assert.equal(
+    state.chats[0].messages[1].actions[0].query,
+    "public documentation",
+  );
+  assert.deepEqual(state.chats[0].messages[1].actions[0].websites, [
+    "https://example.com/docs",
+  ]);
+});
+
+test("successful tool results tell small models to stop repeating actions", () => {
   const saved = toolResultForModel("write_file", "Saved src/index.ts");
   assert.match(saved, /Do not rewrite it again/);
   assert.match(saved, /verification next/);
+
+  const browser = toolResultForModel(
+    "browser_open",
+    "Opened file:///project/index.html in the dedicated agent browser",
+  );
+  assert.match(browser, /already open in the Agent Browser/);
+  assert.match(browser, /Do not call browser_open again/);
+  assert.match(browser, /browser_inspect/);
 
   const success = toolResultForModel(
     "run_command",
@@ -192,6 +407,37 @@ test("AI write tool obeys the edit permission", async (t) => {
     ),
     /disabled/,
   );
+});
+
+test("the agent can verify JavaScript projects with an installed npm", async (t) => {
+  const { base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "npm --version",
+  );
+  const result = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: {
+          command: "npm",
+          args: ["--version"],
+          purpose: "Verify npm discovery",
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+  );
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /^\d+\.\d+/);
 });
 
 test("AI file permission removes project access and checkpoints never touch Git", async (t) => {
@@ -391,6 +637,124 @@ test("fallback agent protocol edits for models without native tools", async (t) 
   assert.match(
     await fs.readFile(path.join(root, "src", "index.ts"), "utf8"),
     /value = 3/,
+  );
+});
+
+test("confirmed build requests start a goal, inspect the project, and correct plan-only replies", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  let turn = 0;
+  service.remoteReply = async (_request, messages) => {
+    if (turn++ === 0) {
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.role === "tool" &&
+            message.tool_name === "list_files" &&
+            /src\/index\.ts/.test(message.content),
+        ),
+      );
+      return {
+        content:
+          "I should create the React notes structure and implement the editor.",
+        toolCalls: [],
+      };
+    }
+    if (turn === 2)
+      return {
+        content:
+          '<tool_call><function=write_file><parameter=path>src/App.jsx</parameter><parameter=content>export default function App() { return "Notes"; }\n</parameter></function></tool_call>',
+        toolCalls: [],
+      };
+    return { content: "Created the notes editor.", toolCalls: [] };
+  };
+  const request =
+    "Create a local React notes app that stores names and verify the finished project";
+  const result = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      { role: "user", content: request },
+      { role: "assistant", content: "Should I create it?" },
+      { role: "user", content: "yes do that pls" },
+    ],
+  });
+  assert.deepEqual(result.changedFiles, ["src/App.jsx"]);
+  assert.ok(result.actions.some((action) => action.tool === "set_goal"));
+  assert.ok(result.actions.some((action) => action.tool === "list_files"));
+  assert.ok(result.actions.some((action) => action.tool === "write_file"));
+  assert.match(
+    await fs.readFile(path.join(root, "src", "App.jsx"), "utf8"),
+    /Notes/,
+  );
+});
+
+test("granted edit buttons correct stale model permission prose and continue to the write tool", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  let turn = 0;
+  const modelMessages = [];
+  service.remoteReply = async (_request, messages) => {
+    modelMessages.push(messages);
+    if (turn++ === 0)
+      return {
+        content: "First, I need permission to write files.",
+        toolCalls: [],
+      };
+    if (turn === 2)
+      return {
+        content:
+          "<tool_call><function=write_file><parameter=path>src/generated.ts</parameter><parameter=content>export const allowed = true;\n</parameter></function></tool_call>",
+        toolCalls: [],
+      };
+    return { content: "Created src/generated.ts.", toolCalls: [] };
+  };
+  const result = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      { role: "assistant", content: "I need permission to write files." },
+      { role: "user", content: "Create src/generated.ts now" },
+    ],
+  });
+  assert.deepEqual(result.changedFiles, ["src/generated.ts"]);
+  assert.match(
+    await fs.readFile(path.join(root, "src", "generated.ts"), "utf8"),
+    /allowed = true/,
+  );
+  assert.ok(
+    modelMessages[0].some(
+      (message) =>
+        message.role === "assistant" &&
+        /permission request was resolved/i.test(message.content),
+    ),
+  );
+  assert.ok(
+    modelMessages[1].some(
+      (message) =>
+        message.role === "system" &&
+        /visible capability buttons already granted/i.test(message.content),
+    ),
   );
 });
 

@@ -369,6 +369,8 @@ export function App() {
     [activeShellId, setActiveShellId] = useState(""),
     [runtimes, setRuntimes] = useState<PythonRuntime[]>([]),
     [runtime, setRuntime] = useState(""),
+    [pythonPackage, setPythonPackage] = useState(""),
+    [installingPackage, setInstallingPackage] = useState(false),
     [running, setRunning] = useState(false),
     [runOutput, setRunOutput] = useState(""),
     [runInput, setRunInput] = useState(""),
@@ -402,6 +404,8 @@ export function App() {
     [editorView, setEditorView] = useState<"single" | "split" | "compare">(
       "single",
     ),
+    [splitLeftPath, setSplitLeftPath] = useState(""),
+    [splitRightPath, setSplitRightPath] = useState(""),
     [compareOpen, setCompareOpen] = useState(false),
     [compareLeftPath, setCompareLeftPath] = useState(""),
     [compareRightPath, setCompareRightPath] = useState(""),
@@ -449,6 +453,12 @@ export function App() {
   const menuActions = useRef<Record<string, () => void>>({});
   const shortcutModifier = /Mac/i.test(navigator.platform) ? "⌘" : "Ctrl";
   const active = tabs.find((t) => t.path === activePath);
+  const splitLeftTab =
+    tabs.find((tab) => tab.path === splitLeftPath) || active || tabs[0];
+  const splitRightTab =
+    tabs.find((tab) => tab.path === splitRightPath) ||
+    tabs.find((tab) => tab.path !== splitLeftTab?.path) ||
+    splitLeftTab;
   const dirty = active && active.content !== active.saved;
   const hasDirtyTabs = tabs.some((tab) => tab.content !== tab.saved);
   const selectedRuntime = runtimes.find((x) => x.path === runtime);
@@ -619,18 +629,45 @@ export function App() {
       setActivePath(tabs.at(-1)?.path || "");
   }, [activePath, browserViewOpen, tabs]);
   useEffect(() => {
+    if (!tabs.length) {
+      setSplitLeftPath("");
+      setSplitRightPath("");
+      return;
+    }
+    const fallbackLeft =
+      tabs.find((tab) => tab.path === activePath)?.path || tabs[0].path;
+    setSplitLeftPath((current) =>
+      tabs.some((tab) => tab.path === current) ? current : fallbackLeft,
+    );
+    setSplitRightPath((current) =>
+      tabs.some((tab) => tab.path === current)
+        ? current
+        : tabs.find((tab) => tab.path !== fallbackLeft)?.path || fallbackLeft,
+    );
+  }, [activePath, tabs]);
+  useEffect(() => {
     if (!browserViewOpen || !browserActivity?.active) return;
     let cancelled = false;
-    void window.oscode
-      .agentBrowserSnapshot()
-      .then((snapshot) => {
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const snapshot = await window.oscode.agentBrowserSnapshot();
         if (!cancelled && snapshot) setBrowserSnapshot(snapshot);
-      })
-      .catch(() => undefined);
+      } catch {
+        // The browser may close between an activity event and a capture.
+      } finally {
+        refreshing = false;
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 1_000);
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
     };
-  }, [browserActivity, browserViewOpen]);
+  }, [browserActivity?.active, browserViewOpen]);
   useEffect(() => {
     window.oscode.setDirtyState(hasDirtyTabs);
   }, [hasDirtyTabs]);
@@ -772,6 +809,20 @@ export function App() {
       setNotice("This file cannot be shown as text.");
     }
   };
+  const toggleSplitView = () => {
+    if (!active) return;
+    if (editorView === "split") {
+      setEditorView("single");
+      return;
+    }
+    setSplitLeftPath(active.path);
+    setSplitRightPath((current) =>
+      tabs.some((tab) => tab.path === current && current !== active.path)
+        ? current
+        : tabs.find((tab) => tab.path !== active.path)?.path || active.path,
+    );
+    setEditorView("split");
+  };
   const openCompare = () => {
     if (!project || !active) return;
     const files = projectFiles(project.tree);
@@ -911,6 +962,9 @@ export function App() {
     setProjectOperation(null);
     setTabs([]);
     setActivePath("");
+    setEditorView("single");
+    setSplitLeftPath("");
+    setSplitRightPath("");
     setComparison(null);
     setCompareOpen(false);
     setTerminalOpen(false);
@@ -1401,6 +1455,23 @@ export function App() {
       setNotice(errorMessage(e, "Could not create environment"));
     }
   };
+  const installProjectPackage = async () => {
+    const packageSpec = pythonPackage.trim();
+    if (!packageSpec || !projectEnvironment) return;
+    setInstallingPackage(true);
+    try {
+      const installed = await window.oscode.installPythonPackage(
+        runtime,
+        packageSpec,
+      );
+      setPythonPackage("");
+      setNotice(`${installed.package} installed in this project environment`);
+    } catch (e) {
+      setNotice(errorMessage(e, "Package installation failed"));
+    } finally {
+      setInstallingPackage(false);
+    }
+  };
   const selectRuntime = async (value: string) => {
     setRuntime(value);
     if (!project) return;
@@ -1532,6 +1603,18 @@ export function App() {
     setBrowserViewOpen(true);
     setActivePath(agentBrowserTabPath);
   };
+  const showAgentBrowserWindow = async () => {
+    try {
+      const snapshot = await window.oscode.showAgentBrowser();
+      if (!snapshot) {
+        setNotice("The agent browser is not open.");
+        return;
+      }
+      setBrowserSnapshot(snapshot);
+    } catch (error) {
+      setNotice(errorMessage(error, "The agent browser could not be shown"));
+    }
+  };
   const refreshAfterAiChanges = async (files: string[]) => {
     if (!project || !files.length) return;
     const changed = new Set(files.map((file) => file.replace(/\\/g, "/")));
@@ -1615,11 +1698,11 @@ export function App() {
               <button
                 className={browserViewOpen ? "active" : ""}
                 aria-pressed={browserViewOpen}
-                title="Show the agent's isolated browser in an editor tab"
+                title="Watch the agent's isolated browser in an editor tab"
                 onClick={() => void openAgentBrowserView()}
               >
-                <FeatherIcon icon="eye" size="16" />
-                View browser
+                <FeatherIcon icon="compass" size="16" />
+                Agent Browser
               </button>
             </div>
           )}
@@ -3014,16 +3097,31 @@ export function App() {
               aria-label="Agent browser preview"
             >
               <div className="agent-browser-toolbar">
-                <span>
+                <span className="agent-browser-status">
                   <FeatherIcon icon="shield" size="15" />
-                  Isolated browser
+                  <span>
+                    <b>Agent Browser</b>
+                    <small>
+                      {browserSnapshot?.loading
+                        ? "Loading the page…"
+                        : browserActivity?.label || "Live isolated preview"}
+                    </small>
+                  </span>
                 </span>
                 <output title={browserSnapshot?.url || ""}>
                   {browserSnapshot?.url || "Waiting for a page…"}
                 </output>
-                <button onClick={() => void refreshAgentBrowserView()}>
-                  <FeatherIcon icon="refresh-cw" size="15" /> Refresh
-                </button>
+                <div className="agent-browser-actions">
+                  <button
+                    title="Show the live browser window"
+                    onClick={() => void showAgentBrowserWindow()}
+                  >
+                    <FeatherIcon icon="external-link" size="15" /> Open live
+                  </button>
+                  <button onClick={() => void refreshAgentBrowserView()}>
+                    <FeatherIcon icon="refresh-cw" size="15" /> Refresh
+                  </button>
+                </div>
               </div>
               <div className="agent-browser-canvas">
                 {browserSnapshot?.imageDataUrl ? (
@@ -3086,11 +3184,7 @@ export function App() {
                   <>
                     <button
                       className={editorView === "split" ? "active" : ""}
-                      onClick={() =>
-                        setEditorView((view) =>
-                          view === "split" ? "single" : "split",
-                        )
-                      }
+                      onClick={toggleSplitView}
                     >
                       <FeatherIcon icon="columns" size="15" /> Split
                     </button>
@@ -3281,8 +3375,9 @@ export function App() {
                     }
                   >
                     <SplitEditor
-                      path={active.path}
-                      value={active.content}
+                      tabs={tabs}
+                      leftPath={splitLeftTab?.path || active.path}
+                      rightPath={splitRightTab?.path || active.path}
                       theme={
                         theme === "blue-light"
                           ? "oscode-light"
@@ -3290,10 +3385,15 @@ export function App() {
                             ? "oscode-blue-dark"
                             : "oscode-dark"
                       }
-                      onChange={(value) =>
+                      onSelect={(side, path) => {
+                        if (side === "left") setSplitLeftPath(path);
+                        else setSplitRightPath(path);
+                        setActivePath(path);
+                      }}
+                      onChange={(path, value) =>
                         setTabs((items) =>
                           items.map((tab) =>
-                            tab.path === active.path
+                            tab.path === path
                               ? { ...tab, content: value }
                               : tab,
                           ),
@@ -4015,6 +4115,38 @@ export function App() {
                       </button>
                     </div>
                     <p>Create a project environment first, then use:</p>
+                    <form
+                      className="python-package-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void installProjectPackage();
+                      }}
+                    >
+                      <input
+                        aria-label="Python package"
+                        placeholder="requests==2.32.5"
+                        value={pythonPackage}
+                        disabled={!projectEnvironment || installingPackage}
+                        onChange={(event) =>
+                          setPythonPackage(event.target.value)
+                        }
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          !projectEnvironment ||
+                          !pythonPackage.trim() ||
+                          installingPackage
+                        }
+                      >
+                        {installingPackage ? "Installing…" : "Install"}
+                      </button>
+                    </form>
+                    {!projectEnvironment && (
+                      <small>
+                        Select or create a project environment above.
+                      </small>
+                    )}
                     <code>uv add requests</code>
                     <small>Add a package to a uv project.</small>
                     <code>uv pip install requests</code>

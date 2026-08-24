@@ -1,54 +1,121 @@
 import { useEffect, useRef } from "react";
 import { monaco } from "./monaco";
+import type { Tab } from "./types";
 
-export default function LocalSplitEditor({
-  path,
-  value,
+type SplitSide = "left" | "right";
+
+function SplitPane({
+  side,
+  tab,
   theme,
   options,
   onChange,
 }: {
-  path: string;
-  value: string;
+  side: SplitSide;
+  tab: Tab;
   theme: string;
   options: monaco.editor.IStandaloneEditorConstructionOptions;
-  onChange: (value: string) => void;
+  onChange: (path: string, value: string) => void;
 }) {
-  const left = useRef<HTMLDivElement>(null);
-  const right = useRef<HTMLDivElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const model = useRef<monaco.editor.ITextModel | null>(null);
   const change = useRef(onChange);
+  const synchronizing = useRef(false);
   change.current = onChange;
+
   useEffect(() => {
-    if (!left.current || !right.current) return;
+    if (!host.current) return;
     const uri = monaco.Uri.parse(
-      `inmemory://oscode/split/${encodeURIComponent(path)}`,
+      `inmemory://oscode/split/${side}/${encodeURIComponent(tab.path)}`,
     );
-    const model = monaco.editor.createModel(value, undefined, uri);
-    const first = monaco.editor.create(left.current, {
+    const nextModel = monaco.editor.createModel(tab.content, undefined, uri);
+    model.current = nextModel;
+    const editor = monaco.editor.create(host.current, {
       ...options,
-      model,
+      model: nextModel,
       theme,
     });
-    const second = monaco.editor.create(right.current, {
-      ...options,
-      model,
-      theme,
+    const subscription = nextModel.onDidChangeContent(() => {
+      if (!synchronizing.current)
+        change.current(tab.path, nextModel.getValue());
     });
-    const subscription = model.onDidChangeContent(() =>
-      change.current(model.getValue()),
-    );
     return () => {
       subscription.dispose();
-      first.dispose();
-      second.dispose();
-      model.dispose();
+      editor.dispose();
+      nextModel.dispose();
+      if (model.current === nextModel) model.current = null;
     };
-  }, [path]);
+  }, [side, tab.path]);
+
+  useEffect(() => {
+    const current = model.current;
+    if (!current || current.getValue() === tab.content) return;
+    synchronizing.current = true;
+    current.setValue(tab.content);
+    synchronizing.current = false;
+  }, [tab.content]);
+
+  return <div className="split-editor-surface" ref={host} />;
+}
+
+export default function LocalSplitEditor({
+  tabs,
+  leftPath,
+  rightPath,
+  theme,
+  options,
+  onSelect,
+  onChange,
+}: {
+  tabs: Tab[];
+  leftPath: string;
+  rightPath: string;
+  theme: string;
+  options: monaco.editor.IStandaloneEditorConstructionOptions;
+  onSelect: (side: SplitSide, path: string) => void;
+  onChange: (path: string, value: string) => void;
+}) {
+  const left = tabs.find((tab) => tab.path === leftPath) || tabs[0];
+  const right =
+    tabs.find((tab) => tab.path === rightPath) ||
+    tabs.find((tab) => tab.path !== left?.path) ||
+    left;
+
   useEffect(() => monaco.editor.setTheme(theme), [theme]);
+
+  if (!left || !right) return null;
+  const pane = (side: SplitSide, tab: Tab) => (
+    <section className="split-editor-pane" aria-label={`${side} editor pane`}>
+      <label>
+        <span>{side === "left" ? "Left" : "Right"}</span>
+        <select
+          aria-label={`${side === "left" ? "Left" : "Right"} split tab`}
+          value={tab.path}
+          onChange={(event) => onSelect(side, event.target.value)}
+          title={`Choose the ${side} split tab`}
+        >
+          {tabs.map((item) => (
+            <option key={item.path} value={item.path}>
+              {item.name}
+              {item.content !== item.saved ? " •" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <SplitPane
+        side={side}
+        tab={tab}
+        theme={theme}
+        options={options}
+        onChange={onChange}
+      />
+    </section>
+  );
+
   return (
     <div className="split-editor-host">
-      <div ref={left} />
-      <div ref={right} />
+      {pane("left", left)}
+      {pane("right", right)}
     </div>
   );
 }

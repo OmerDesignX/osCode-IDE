@@ -33,7 +33,15 @@ test("application updates accept only the official HTTPS GitHub hosts", () => {
 
 test("full-package updates select one native release asset", () => {
   assert.equal(updateAssetName("1.2.3", "win32"), "osCode-Setup-1.2.3.exe");
-  assert.equal(updateAssetName("1.2.3", "darwin"), "osCode-1.2.3.dmg");
+  assert.equal(
+    updateAssetName("1.2.3", "darwin", "arm64"),
+    "osCode-1.2.3-mac-arm64.dmg",
+  );
+  assert.equal(
+    updateAssetName("1.2.3", "darwin", "x64"),
+    "osCode-1.2.3-mac-x64.dmg",
+  );
+  assert.equal(updateAssetName("1.2.3", "darwin", "ia32"), "");
   assert.equal(updateAssetName("1.2.3", "linux"), "");
   assert.equal(isNewerVersion("0.2.0", "0.1.9"), true);
   assert.equal(isNewerVersion("0.1.0", "0.1.0"), false);

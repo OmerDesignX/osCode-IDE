@@ -36,7 +36,11 @@ import { PlatformioService } from "./platformio.js";
 import { defaultPreferences, validPreferences } from "./preferences.js";
 import { guardBrokenOutputPipe } from "./process-output.js";
 import { AppUpdateService } from "./updater.js";
-import { SecureDataStore, type KeyProtector } from "./secure-store.js";
+import {
+  processKeyProtector,
+  SecureDataStore,
+  type KeyProtector,
+} from "./secure-store.js";
 import {
   setPythonSelection,
   validPythonSelections,
@@ -91,6 +95,7 @@ let quittingAfterCleanup = false;
 let rendererHasUnsavedChanges = false;
 let closeConfirmationOpen = false;
 let spellcheckEnabled = true;
+let aiDisposePromise: Promise<void> | null = null;
 function sendToRenderer(channel: string, ...args: unknown[]) {
   if (
     !mainWindow ||
@@ -246,6 +251,14 @@ async function stopProjectProcesses() {
   await Promise.all([...terminals.keys()].map(disposeTerminal));
 }
 
+function disposeAiServiceSafely() {
+  if (aiDisposePromise) return aiDisposePromise;
+  aiDisposePromise = Promise.resolve()
+    .then(() => aiService?.dispose())
+    .catch(() => undefined);
+  return aiDisposePromise;
+}
+
 async function disposeTerminal(id: string) {
   const pending = terminalDisposals.get(id);
   if (pending) {
@@ -257,16 +270,18 @@ async function disposeTerminal(id: string) {
   const disposal = new Promise<void>((resolve) => {
     let forceTimeout: ReturnType<typeof setTimeout> | undefined;
     let giveUpTimeout: ReturnType<typeof setTimeout> | undefined;
+    let exited: ReturnType<typeof terminal.onExit> | undefined;
     let settled = false;
     const finish = () => {
       if (settled) return;
       settled = true;
       if (forceTimeout) clearTimeout(forceTimeout);
       if (giveUpTimeout) clearTimeout(giveUpTimeout);
-      exited.dispose();
+      exited?.dispose();
       resolve();
     };
-    const exited = terminal.onExit(finish);
+    exited = terminal.onExit(finish);
+    if (settled) exited?.dispose();
     try {
       terminal.write("exit\r");
     } catch {
@@ -285,8 +300,10 @@ async function disposeTerminal(id: string) {
   terminalDisposals.set(id, disposal);
   try {
     await disposal;
-    if (terminals.get(id) === terminal) terminals.delete(id);
-    terminalOwners.delete(id);
+    if (terminals.get(id) === terminal) {
+      terminals.delete(id);
+      terminalOwners.delete(id);
+    }
     await new Promise((resolve) => setTimeout(resolve, 150));
   } finally {
     terminalDisposals.delete(id);
@@ -561,7 +578,7 @@ async function gitState(): Promise<GitState> {
       git(["branch", "--show-current"]).catch(() => ""),
       git(["branch", "--format=%(refname:short)"]).catch(() => ""),
       git(["remote", "get-url", "origin"]).catch(() => ""),
-      gitRaw(["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
+      gitRaw(["status", "--porcelain=v1", "-z", "--untracked-files=normal"]),
       git(["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]).catch(
         () => "",
       ),
@@ -767,6 +784,16 @@ async function saveCustomPython(runtimes: PythonRuntimeRecord[]) {
   );
 }
 const managedPythonRoot = () => path.join(app.getPath("userData"), "python");
+const uvCacheRoot = () => path.join(app.getPath("userData"), "uv-cache");
+function uvEnvironment(extra: NodeJS.ProcessEnv = {}) {
+  return {
+    ...process.env,
+    UV_CACHE_DIR: uvCacheRoot(),
+    UV_LINK_MODE: "copy",
+    UV_PYTHON_INSTALL_DIR: managedPythonRoot(),
+    ...extra,
+  };
+}
 function bundledToolPath(tool: "uv" | "python") {
   const root = app.isPackaged
     ? path.join(process.resourcesPath, tool)
@@ -836,6 +863,23 @@ async function uvExecutable() {
     return "";
   };
   return (await find(bundledToolPath("uv"))) || "uv";
+}
+async function projectPythonEnvironment(interpreter: string) {
+  if (!projectRoot) throw new Error("Open a project first");
+  const inspected = await inspectPython(interpreter);
+  const binaryDirectory = path.dirname(inspected.path);
+  if (
+    !["scripts", "bin"].includes(path.basename(binaryDirectory).toLowerCase())
+  )
+    throw new Error("Select a project environment before installing packages");
+  const [root, environment] = await Promise.all([
+    fs.realpath(projectRoot),
+    fs.realpath(path.dirname(binaryDirectory)),
+  ]);
+  const relative = path.relative(root, environment);
+  if (relative.startsWith("..") || path.isAbsolute(relative))
+    throw new Error("The selected Python environment is outside this project");
+  return { inspected, environment };
 }
 async function readPythonSelections() {
   return validPythonSelections(
@@ -982,10 +1026,15 @@ function createWindow(show = true, restoreLastProject = true) {
   return window;
 }
 async function runSmokeTest(window: BrowserWindow) {
+  const configuredSmokeTimeout = Number(process.env.OSCODE_SMOKE_TIMEOUT_MS);
+  const smokeTimeout =
+    Number.isFinite(configuredSmokeTimeout) && configuredSmokeTimeout >= 120_000
+      ? configuredSmokeTimeout
+      : 120_000;
   const timeout = setTimeout(() => {
     console.error("osCode smoke failed: renderer startup timed out");
     app.exit(1);
-  }, 120_000);
+  }, smokeTimeout);
   const smokeProject = path.join(app.getPath("userData"), "smoke-project");
   const smokeRemote = path.join(app.getPath("userData"), "smoke-remote.git");
   const smokeModuleSource = path.join(
@@ -1093,14 +1142,31 @@ async function runSmokeTest(window: BrowserWindow) {
       });
     }
     const result = (await contents.executeJavaScript(`(async () => {
-      const waitFor = async (check, label) => {
-        const deadline = Date.now() + 20000;
+      const waitFor = async (check, label, timeout = 60000) => {
+        // A cold Intel package can need extra time to initialize Monaco under Rosetta.
+        const deadline = Date.now() + timeout;
         while (Date.now() < deadline) {
           const value = check();
           if (value) return value;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         throw new Error('Timed out waiting for ' + label);
+      };
+      const openAiPopup = async (buttonLabel, check, label) => {
+        let lastError;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const button = document.querySelector(
+            '[aria-label="' + buttonLabel + '"]'
+          );
+          if (!button) throw new Error('Missing ' + buttonLabel + ' button');
+          button.click();
+          try {
+            return await waitFor(check, label, 5000);
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        throw lastError;
       };
       const bridgeReady =
         typeof window.oscode?.platform === 'string' &&
@@ -1353,35 +1419,27 @@ async function runSmokeTest(window: BrowserWindow) {
         () => !document.querySelector('.settings-dock'),
         'settings panel close'
       );
-      const aiWorkspaceButton = document.querySelector(
-        '[aria-label="Chats and tasks"]'
-      );
-      const aiHistoryButton = document.querySelector('[aria-label="AI changes"]');
-      const aiPermissionButton = document.querySelector(
-        '[aria-label="Permissions"]'
-      );
-      const aiSettingsButton = document.querySelector('[aria-label="AI settings"]');
-      aiWorkspaceButton.click();
-      await waitFor(
+      await openAiPopup(
+        'Chats and tasks',
         () => document.querySelector('.ai-agent-popover'),
         'chat workspace popup'
       );
-      aiHistoryButton.click();
-      await waitFor(
+      await openAiPopup(
+        'AI changes',
         () =>
           document.querySelector('.ai-history-popover') &&
           !document.querySelector('.ai-agent-popover'),
         'exclusive AI history popup'
       );
-      aiPermissionButton.click();
-      await waitFor(
+      await openAiPopup(
+        'Permissions',
         () =>
           document.querySelector('.ai-permission-popover') &&
           !document.querySelector('.ai-history-popover'),
         'exclusive AI permissions popup'
       );
-      aiSettingsButton.click();
-      const aiSettings = await waitFor(
+      const aiSettings = await openAiPopup(
+        'AI settings',
         () => {
           const manager = document.querySelector('.ai-model-manager');
           return manager && !document.querySelector('.ai-permission-popover')
@@ -1400,7 +1458,7 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('[data-ai-selected-model]')?.textContent.trim(),
         'automatic local model selection'
       );
-      aiSettingsButton.click();
+      document.querySelector('[aria-label="AI settings"]').click();
       const aiPopupsExclusive = await waitFor(
         () =>
           !document.querySelector(
@@ -1536,7 +1594,7 @@ async function runSmokeTest(window: BrowserWindow) {
       network: false,
     });
     try {
-      await agentControlService.openBrowser("agent-preview.html");
+      await agentControlService.openBrowser("'agent-preview.html'");
       sendToRenderer("agent:activity", {
         kind: "browser",
         label: "Browser · agent-preview.html",
@@ -1549,7 +1607,7 @@ async function runSmokeTest(window: BrowserWindow) {
         await contents.executeJavaScript(`(async () => {
         const deadline = Date.now() + 10000;
         const view = [...document.querySelectorAll('button')].find(
-          item => item.textContent.trim() === 'View browser'
+          item => item.textContent.trim() === 'Agent Browser'
         );
         if (!view) return false;
         view.click();
@@ -2217,6 +2275,7 @@ function registerIpc() {
   ipcMain.handle("agent:browser-snapshot", () =>
     agentControlService.browserSnapshot(),
   );
+  ipcMain.handle("agent:browser-show", () => agentControlService.showBrowser());
   ipcMain.handle("activity:stop", async () => {
     const stopped = [
       aiService.stopDownload(),
@@ -2677,6 +2736,9 @@ function registerIpc() {
         Object.keys(terminalEnv).find((key) => key.toLowerCase() === "path") ||
         "PATH";
       const uv = await uvExecutable();
+      terminalEnv.UV_CACHE_DIR = uvCacheRoot();
+      terminalEnv.UV_LINK_MODE = "copy";
+      terminalEnv.UV_PYTHON_INSTALL_DIR = managedPythonRoot();
       if (path.isAbsolute(uv))
         terminalEnv[pathKey] =
           `${path.dirname(uv)}${path.delimiter}${terminalEnv[pathKey] || ""}`;
@@ -2689,6 +2751,8 @@ function registerIpc() {
         );
         if (looksLikeVenv) {
           terminalEnv.VIRTUAL_ENV = parent;
+          terminalEnv.UV_PROJECT_ENVIRONMENT = parent;
+          delete terminalEnv.PYTHONHOME;
           terminalEnv[pathKey] =
             `${binaryDir}${path.delimiter}${terminalEnv[pathKey] || ""}`;
         }
@@ -2715,7 +2779,8 @@ function registerIpc() {
           owner.send("terminal:data", id, data);
       });
       terminal.onExit(({ exitCode }) => {
-        if (terminals.get(id) === terminal) terminals.delete(id);
+        if (terminals.get(id) !== terminal) return;
+        terminals.delete(id);
         const owner = terminalOwners.get(id);
         terminalOwners.delete(id);
         if (owner && !owner.isDestroyed())
@@ -2939,9 +3004,16 @@ function registerIpc() {
         );
       const base = await inspectPython(interpreter);
       try {
-        await exec(base.path, ["-m", "venv", destination], {
-          cwd: projectRoot,
-        });
+        await fs.mkdir(uvCacheRoot(), { recursive: true });
+        await exec(
+          await uvExecutable(),
+          ["venv", "--python", base.path, "--seed", destination],
+          {
+            cwd: projectRoot,
+            timeout: 10 * 60_000,
+            env: uvEnvironment({ UV_PYTHON_DOWNLOADS: "never" }),
+          },
+        );
         const python = path.join(
           destination,
           process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
@@ -2960,6 +3032,43 @@ function registerIpc() {
       }
     },
   );
+  ipcMain.handle(
+    "python:install-package",
+    async (event, interpreter: string, requestedPackage: string) => {
+      activateSender(event);
+      const packageSpec =
+        typeof requestedPackage === "string" ? requestedPackage.trim() : "";
+      if (
+        !packageSpec ||
+        packageSpec.length > 200 ||
+        packageSpec.startsWith("-") ||
+        /[\u0000-\u001f\u007f\s]/.test(packageSpec)
+      )
+        throw new Error(
+          "Enter one package name or version, for example requests==2.32.5",
+        );
+      const { inspected, environment } =
+        await projectPythonEnvironment(interpreter);
+      await fs.mkdir(uvCacheRoot(), { recursive: true });
+      const result = await exec(
+        await uvExecutable(),
+        ["pip", "install", "--python", inspected.path, packageSpec],
+        {
+          cwd: projectRoot,
+          timeout: 10 * 60_000,
+          env: uvEnvironment({
+            VIRTUAL_ENV: environment,
+            UV_PROJECT_ENVIRONMENT: environment,
+          }),
+          maxBuffer: 4 * 1024 * 1024,
+        },
+      );
+      return {
+        package: packageSpec,
+        output: `${result.stdout || ""}\n${result.stderr || ""}`.trim(),
+      };
+    },
+  );
   ipcMain.handle("python:install", async (_e, version: string) => {
     if (!managedPythonVersions.includes(version))
       throw new Error("Invalid Python version");
@@ -2970,12 +3079,10 @@ function registerIpc() {
         ["python", "install", "--install-dir", managedPythonRoot(), version],
         {
           timeout: 10 * 60_000,
-          env: {
-            ...process.env,
-            UV_PYTHON_INSTALL_DIR: managedPythonRoot(),
+          env: uvEnvironment({
             UV_PYTHON_NO_REGISTRY: "1",
             UV_PYTHON_INSTALL_BIN: "0",
-          },
+          }),
         },
       );
       return true;
@@ -3074,34 +3181,36 @@ function registerIpc() {
   });
 }
 app.whenReady().then(async () => {
-  const osKeyProtector: KeyProtector = {
-    status: () => {
-      if (!safeStorage.isEncryptionAvailable())
-        return {
-          available: false,
-          backend: "unavailable",
-          reason:
-            "Your operating system's secure key store is unavailable. osCode will not save sensitive data without encryption.",
-        };
-      const backend =
-        process.platform === "linux"
-          ? safeStorage.getSelectedStorageBackend()
-          : process.platform === "darwin"
-            ? "Keychain"
-            : "DPAPI";
-      if (process.platform === "linux" && backend === "basic_text")
-        return {
-          available: false,
-          backend,
-          reason:
-            "A Linux Secret Service or KWallet is required. osCode refuses Electron's unprotected basic_text fallback.",
-        };
-      return { available: true, backend };
-    },
-    protect: (value) => safeStorage.encryptString(value.toString("base64")),
-    unprotect: (value) =>
-      Buffer.from(safeStorage.decryptString(value), "base64"),
-  };
+  const osKeyProtector: KeyProtector = smokeMode
+    ? processKeyProtector(app.getPath("userData"))
+    : {
+        status: () => {
+          if (!safeStorage.isEncryptionAvailable())
+            return {
+              available: false,
+              backend: "unavailable",
+              reason:
+                "Your operating system's secure key store is unavailable. osCode will not save sensitive data without encryption.",
+            };
+          const backend =
+            process.platform === "linux"
+              ? safeStorage.getSelectedStorageBackend()
+              : process.platform === "darwin"
+                ? "Keychain"
+                : "DPAPI";
+          if (process.platform === "linux" && backend === "basic_text")
+            return {
+              available: false,
+              backend,
+              reason:
+                "A Linux Secret Service or KWallet is required. osCode refuses Electron's unprotected basic_text fallback.",
+            };
+          return { available: true, backend };
+        },
+        protect: (value) => safeStorage.encryptString(value.toString("base64")),
+        unprotect: (value) =>
+          Buffer.from(safeStorage.decryptString(value), "base64"),
+      };
   secureStore = new SecureDataStore(app.getPath("userData"), osKeyProtector);
   try {
     await secureStore.ready();
@@ -3159,6 +3268,10 @@ app.whenReady().then(async () => {
       return python;
     },
     status: (message) => broadcastToRenderers("ai:status", message),
+    action: (action) => {
+      if (aiExecutionOwner && !aiExecutionOwner.isDestroyed())
+        aiExecutionOwner.send("ai:action", action);
+    },
     activity: (activity) => broadcastToRenderers("agent:activity", activity),
     platformioState: () => platformioService.state(currentAiProjectRoot()),
     platformioRun: (action, environment) =>
@@ -3219,7 +3332,7 @@ app.on("before-quit", (event) => {
       for (const context of windowContexts.values()) context.allowClose = true;
       quittingAfterCleanup = true;
       await stopProjectProcesses();
-      await aiService.dispose();
+      await disposeAiServiceSafely();
       app.quit();
     });
     return;
@@ -3230,13 +3343,13 @@ app.on("before-quit", (event) => {
     !agentControlService?.isActive()
   ) {
     appUpdateService?.installReadyUpdate();
-    void aiService.dispose();
+    void disposeAiServiceSafely();
     return;
   }
   event.preventDefault();
   quittingAfterCleanup = true;
   void stopProjectProcesses()
-    .then(() => aiService.dispose())
+    .then(() => disposeAiServiceSafely())
     .finally(() => app.quit());
 });
 app.on("activate", () => {

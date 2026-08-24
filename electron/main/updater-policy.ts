@@ -33,8 +33,13 @@ export function isNewerVersion(candidate: string, current: string) {
   return false;
 }
 
-export function updateAssetName(version: string, platform = process.platform) {
+export function updateAssetName(
+  version: string,
+  platform = process.platform,
+  architecture = process.arch,
+) {
   if (platform === "win32") return `osCode-Setup-${version}.exe`;
-  if (platform === "darwin") return `osCode-${version}.dmg`;
+  if (platform === "darwin" && ["arm64", "x64"].includes(architecture))
+    return `osCode-${version}-mac-${architecture}.dmg`;
   return "";
 }

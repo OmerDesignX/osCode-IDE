@@ -4,6 +4,7 @@ import { FeatherIcon } from "./FeatherIcon";
 import { IconButton } from "./IconButton";
 import { AiMessageContent } from "./AiMessageContent";
 import type {
+  AiActionEntry,
   AiAgentState,
   AiChatAttachment,
   AiChatMessage,
@@ -98,6 +99,43 @@ function cleanStoredMessages(messages: AiChatMessage[]) {
     ...message,
     content: cleanStoredAiContent(message.content),
   }));
+}
+
+function mergeActionEntries(...groups: AiActionEntry[][]) {
+  const merged = new Map<string, AiActionEntry>();
+  for (const group of groups)
+    for (const action of group) merged.set(action.id, action);
+  return [...merged.values()]
+    .sort(
+      (left, right) =>
+        new Date(left.createdAt).getTime() -
+        new Date(right.createdAt).getTime(),
+    )
+    .slice(-500);
+}
+
+function actionIcon(kind: AiActionEntry["kind"]) {
+  if (kind === "web") return "globe";
+  if (kind === "browser") return "compass";
+  if (kind === "computer") return "monitor";
+  if (kind === "files") return "file-text";
+  if (kind === "command") return "terminal";
+  if (kind === "permission") return "shield";
+  if (kind === "goal") return "target";
+  if (kind === "plan") return "list";
+  return "check-circle";
+}
+
+function actionKindLabel(kind: AiActionEntry["kind"]) {
+  if (kind === "web") return "Web";
+  if (kind === "browser") return "Browser";
+  if (kind === "computer") return "Device";
+  if (kind === "files") return "Project";
+  if (kind === "command") return "Command";
+  if (kind === "permission") return "Permission";
+  if (kind === "goal") return "Goal";
+  if (kind === "plan") return "Plan";
+  return "Result";
 }
 
 function publicAiError(error: unknown, fallback: string) {
@@ -225,6 +263,7 @@ export function AiPanel({
   const [status, setStatus] = useState("Ready · local only");
   const [modelsOpen, setModelsOpen] = useState(false);
   const [tierPickerOpen, setTierPickerOpen] = useState(false);
+  const [permissionsDrawerOpen, setPermissionsDrawerOpen] = useState(true);
   const [pipelineState, setPipelineState] = useState<AiPipelineState>({
     state: "idle",
     label: "",
@@ -237,6 +276,11 @@ export function AiPanel({
   const [ollamaCliBusy, setOllamaCliBusy] = useState(false);
   const [customListOpen, setCustomListOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [activityFilter, setActivityFilter] = useState<
+    "all" | "web" | "device" | "project"
+  >("all");
+  const [liveActions, setLiveActions] = useState<AiActionEntry[]>([]);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [permissionOpen, setPermissionOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -268,11 +312,14 @@ export function AiPanel({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const queueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const steeringRef = useRef(false);
+  const stoppingRef = useRef(false);
   const tierPickerInitialized = useRef(false);
 
-  type AiPopup = "workspace" | "history" | "permissions" | "models" | "ollama";
+  type AiPopup =
+    "workspace" | "activity" | "history" | "permissions" | "models" | "ollama";
   const closeAiPopups = () => {
     setWorkspaceOpen(false);
+    setActivityOpen(false);
     setHistoryOpen(false);
     setPermissionOpen(false);
     setModelsOpen(false);
@@ -284,6 +331,7 @@ export function AiPanel({
   const openAiPopup = (popup: AiPopup) => {
     closeAiPopups();
     if (popup === "workspace") setWorkspaceOpen(true);
+    if (popup === "activity") setActivityOpen(true);
     if (popup === "history") setHistoryOpen(true);
     if (popup === "permissions") setPermissionOpen(true);
     if (popup === "models") setModelsOpen(true);
@@ -292,12 +340,14 @@ export function AiPanel({
   const toggleAiPopup = (popup: AiPopup) => {
     const isOpen =
       (popup === "workspace" && workspaceOpen) ||
+      (popup === "activity" && activityOpen) ||
       (popup === "history" && historyOpen) ||
       (popup === "permissions" && permissionOpen) ||
       (popup === "models" && modelsOpen) ||
       (popup === "ollama" && ollamaPickerOpen);
     const shouldOpen = !isOpen;
     setWorkspaceOpen(shouldOpen && popup === "workspace");
+    setActivityOpen(shouldOpen && popup === "activity");
     setHistoryOpen(shouldOpen && popup === "history");
     setPermissionOpen(shouldOpen && popup === "permissions");
     setModelsOpen(shouldOpen && popup === "models");
@@ -309,6 +359,7 @@ export function AiPanel({
   const messagesRef = useRef<AiChatMessage[]>([]);
   const busyRef = useRef(false);
   const chatIdRef = useRef("");
+  const liveActionsRef = useRef<AiActionEntry[]>([]);
   const permissionContinuation = useRef<{
     messages: AiChatMessage[];
     contextSummary: string;
@@ -365,6 +416,25 @@ export function AiPanel({
   const chatSchedules = useMemo(
     () => agentState.schedules.filter((item) => item.chatId === chatId),
     [agentState.schedules, chatId],
+  );
+  const activityEntries = useMemo(
+    () =>
+      mergeActionEntries(
+        messages.flatMap((message) => message.actions || []),
+        liveActions,
+      ),
+    [messages, liveActions],
+  );
+  const filteredActivityEntries = useMemo(
+    () =>
+      activityEntries.filter((entry) => {
+        if (activityFilter === "all") return true;
+        if (activityFilter === "web")
+          return entry.kind === "web" || entry.kind === "browser";
+        if (activityFilter === "device") return entry.kind === "computer";
+        return entry.kind === "files" || entry.kind === "command";
+      }),
+    [activityEntries, activityFilter],
   );
 
   const refreshModels = async () => {
@@ -445,6 +515,8 @@ export function AiPanel({
 
   const chooseChat = (chat: AiChatThread, closeWorkspace = true) => {
     const cleanMessages = cleanStoredMessages(chat.messages);
+    liveActionsRef.current = [];
+    setLiveActions([]);
     chatIdRef.current = chat.id;
     messagesRef.current = cleanMessages;
     setChatId(chat.id);
@@ -466,9 +538,16 @@ export function AiPanel({
   useEffect(() => {
     void refreshModels().catch(() => undefined);
     const offStatus = window.oscode.onAiStatus(setStatus);
+    const offAction = window.oscode.onAiAction((action) => {
+      if (action.chatId !== chatIdRef.current) return;
+      const next = mergeActionEntries(liveActionsRef.current, [action]);
+      liveActionsRef.current = next;
+      setLiveActions(next);
+    });
     const offPipeline = window.oscode.onAiPipelineState(setPipelineState);
     return () => {
       offStatus();
+      offAction();
       offPipeline();
     };
   }, []);
@@ -497,9 +576,12 @@ export function AiPanel({
   useEffect(() => {
     setHistory([]);
     setReview(null);
+    liveActionsRef.current = [];
+    setLiveActions([]);
     setChatId("");
     setMessages([]);
     setContextSummary("");
+    setPermissionsDrawerOpen(true);
     if (projectName)
       void refreshAgentState()
         .then((next) => {
@@ -603,6 +685,7 @@ export function AiPanel({
       if (browserAccess || computerAccess)
         void window.oscode.stopAgentControl();
       setWorkspaceOpen(false);
+      setActivityOpen(false);
       setHistoryOpen(false);
       setPermissionOpen(false);
       setModelsOpen(false);
@@ -784,6 +867,65 @@ export function AiPanel({
     await refreshAgentState();
   };
 
+  const resolveLatestPermissionAction = async (
+    status: "completed" | "denied",
+    detail: string,
+  ) => {
+    const next = messagesRef.current.map((message) => ({
+      ...message,
+      actions: message.actions?.map((action) => ({ ...action })),
+    }));
+    let resolved = false;
+    let resolvedActionId = "";
+    for (
+      let messageIndex = next.length - 1;
+      messageIndex >= 0;
+      messageIndex -= 1
+    ) {
+      const chatMessage = next[messageIndex];
+      if (chatMessage.role !== "assistant" || !chatMessage.actions?.length)
+        continue;
+      for (
+        let actionIndex = chatMessage.actions.length - 1;
+        actionIndex >= 0;
+        actionIndex -= 1
+      ) {
+        const action = chatMessage.actions[actionIndex];
+        if (action.status !== "waiting") continue;
+        chatMessage.actions[actionIndex] = {
+          ...action,
+          status,
+          title:
+            status === "denied"
+              ? `${permissionRequest?.title || "Permission"} denied`
+              : `${permissionRequest?.title || "Permission"} granted`,
+          detail,
+          completedAt: new Date().toISOString(),
+        };
+        resolvedActionId = action.id;
+        resolved = true;
+        break;
+      }
+      if (resolved) break;
+    }
+    if (!resolved) return;
+    messagesRef.current = next;
+    setMessages(next);
+    if (resolvedActionId) {
+      const remainingLiveActions = liveActionsRef.current.filter(
+        (action) => action.id !== resolvedActionId,
+      );
+      liveActionsRef.current = remainingLiveActions;
+      setLiveActions(remainingLiveActions);
+    }
+    if (permissionContinuation.current)
+      permissionContinuation.current = {
+        ...permissionContinuation.current,
+        messages: next,
+      };
+    await saveConversation(next, contextSummary);
+  };
+
   const ensureCapabilityPermissions = async (
     currentChatId: string,
     capabilities: typeof capabilityRef.current,
@@ -836,6 +978,26 @@ export function AiPanel({
     if (granted) await refreshAgentState();
   };
 
+  const applyCapabilities = (
+    next: typeof capabilityRef.current,
+    statusMessage: string,
+  ) => {
+    capabilityRef.current = next;
+    onEditMode(next.editMode);
+    onFileAccess(next.fileAccess);
+    onWebAccess(next.webAccess);
+    onBrowserAccess(next.browserAccess);
+    onComputerAccess(next.computerAccess);
+    setStatus(statusMessage);
+    const currentChatId = chatIdRef.current;
+    if (!currentChatId) return;
+    void ensureCapabilityPermissions(currentChatId, next)
+      .then(() => setStatus(`${statusMessage} · model updated`))
+      .catch((error) =>
+        setStatus(publicAiError(error, "Capability permission could not save")),
+      );
+  };
+
   const scheduleQueueRun = (delay = 150) => {
     if (queueTimer.current) clearTimeout(queueTimer.current);
     queueTimer.current = setTimeout(() => {
@@ -873,6 +1035,9 @@ export function AiPanel({
     messagesRef.current = next;
     setMessages(next);
     setInput("");
+    liveActionsRef.current = [];
+    setLiveActions([]);
+    stoppingRef.current = false;
     setBusy(true);
     busyRef.current = true;
     if (queueId) await window.oscode.updateAiQueue(queueId, "running");
@@ -904,6 +1069,7 @@ export function AiPanel({
         role: "assistant",
         content: response.content,
         thinking: response.thinking,
+        actions: mergeActionEntries(liveActionsRef.current, response.actions),
         createdAt: new Date().toISOString(),
         assistantName:
           selectedModel && osCodeGgufTier(selectedModel)
@@ -914,6 +1080,8 @@ export function AiPanel({
       const completed = [...retained, assistant];
       messagesRef.current = completed;
       setMessages(completed);
+      liveActionsRef.current = [];
+      setLiveActions([]);
       if (response.changedFiles.length) await onChanged(response.changedFiles);
       if (response.changedFiles.length) await refreshHistory(true);
       setPendingEdits(response.pendingEdits);
@@ -948,12 +1116,40 @@ export function AiPanel({
       failed = true;
       if (steeringRef.current) {
         setStatus("Steering…");
+      } else if (stoppingRef.current) {
+        liveActionsRef.current = [];
+        setLiveActions([]);
+        setStatus("Stopped");
       } else {
         const message = publicAiError(error, "Local AI request failed");
         const failureMessage: AiChatMessage = {
           id: globalThis.crypto.randomUUID(),
           role: "assistant",
           content: `I couldn't complete that request. ${message}`,
+          actions:
+            liveActionsRef.current.length > 0
+              ? liveActionsRef.current.map((action) =>
+                  action.status === "running"
+                    ? {
+                        ...action,
+                        status: "failed" as const,
+                        detail: `${action.detail ? `${action.detail} · ` : ""}Request stopped`,
+                        completedAt: new Date().toISOString(),
+                      }
+                    : action,
+                )
+              : [
+                  {
+                    id: globalThis.crypto.randomUUID(),
+                    chatId: currentChatId,
+                    kind: "result" as const,
+                    status: "failed" as const,
+                    title: "Request stopped",
+                    detail: message,
+                    createdAt: new Date().toISOString(),
+                    completedAt: new Date().toISOString(),
+                  },
+                ],
           createdAt: new Date().toISOString(),
           assistantName:
             selectedModel && osCodeGgufTier(selectedModel)
@@ -963,6 +1159,8 @@ export function AiPanel({
         const completed = [...messagesRef.current, failureMessage];
         messagesRef.current = completed;
         setMessages(completed);
+        liveActionsRef.current = [];
+        setLiveActions([]);
         await saveConversation(completed, contextSummary).catch(
           () => undefined,
         );
@@ -978,6 +1176,7 @@ export function AiPanel({
       setBusy(false);
       busyRef.current = false;
       steeringRef.current = false;
+      stoppingRef.current = false;
       await refreshAgentState().catch(() => undefined);
       scheduleQueueRun();
     }
@@ -1024,6 +1223,7 @@ export function AiPanel({
         role: "assistant",
         content: response.content,
         thinking: response.thinking,
+        actions: response.actions,
         createdAt: new Date().toISOString(),
         assistantName:
           selectedModel && osCodeGgufTier(selectedModel)
@@ -1178,6 +1378,7 @@ export function AiPanel({
       await window.oscode.addAiQueue(chatId, text);
       setInput("");
       setAttachments([]);
+      setPermissionsDrawerOpen(false);
       setStatus("Message queued");
       await refreshAgentState();
       scheduleQueueRun();
@@ -1185,6 +1386,7 @@ export function AiPanel({
     }
     const sentAttachments = attachments;
     setAttachments([]);
+    setPermissionsDrawerOpen(false);
     await runPrompt(text, undefined, sentAttachments);
   };
 
@@ -1211,6 +1413,10 @@ export function AiPanel({
       permissionRequest.detail,
     );
     if (scope === "once") temporaryPermissionIds.current.push(grant.id);
+    await resolveLatestPermissionAction(
+      "completed",
+      `${permissionRequest.title} granted · ${scope === "once" ? "once" : scope === "conversation" ? "this chat" : "always"}`,
+    );
     const continuation = permissionContinuation.current;
     const nextCapabilities = { ...capabilityRef.current };
     if (
@@ -1300,6 +1506,12 @@ export function AiPanel({
             label="Chats and tasks"
             active={workspaceOpen}
             onClick={() => toggleAiPopup("workspace")}
+          />
+          <IconButton
+            icon="activity"
+            label="Agent activity"
+            active={activityOpen}
+            onClick={() => toggleAiPopup("activity")}
           />
           <IconButton
             icon="clock"
@@ -2059,6 +2271,71 @@ export function AiPanel({
           document.querySelector(".app") || document.body,
         )}
 
+      {activityOpen &&
+        createPortal(
+          <div
+            className="ai-activity-popover"
+            style={popoverStyle}
+            aria-label="Agent activity history"
+          >
+            <PopoverTitle
+              title="Agent activity"
+              close={() => setActivityOpen(false)}
+            />
+            <div className="ai-activity-overview">
+              <div>
+                <span>
+                  <b>{activityEntries.length}</b>
+                  <small>actions</small>
+                </span>
+                <span>
+                  <b>
+                    {
+                      activityEntries.filter(
+                        (entry) => entry.tool === "web_search",
+                      ).length
+                    }
+                  </b>
+                  <small>searches</small>
+                </span>
+                <span>
+                  <b>
+                    {
+                      new Set(
+                        activityEntries.flatMap(
+                          (entry) => entry.websites || [],
+                        ),
+                      ).size
+                    }
+                  </b>
+                  <small>websites</small>
+                </span>
+              </div>
+              <p>
+                A local record of model tools, public-web sources, permissions,
+                and visible device actions. Typed text and file contents are not
+                recorded.
+              </p>
+            </div>
+            <div className="ai-activity-filters" aria-label="Filter activity">
+              {(["all", "web", "device", "project"] as const).map((filter) => (
+                <button
+                  key={filter}
+                  className={activityFilter === filter ? "active" : ""}
+                  onClick={() => setActivityFilter(filter)}
+                >
+                  {filter[0].toUpperCase() + filter.slice(1)}
+                </button>
+              ))}
+            </div>
+            <ActionTimeline
+              actions={filteredActivityEntries.slice().reverse()}
+              empty="No matching agent actions in this chat yet."
+            />
+          </div>,
+          document.querySelector(".app") || document.body,
+        )}
+
       {permissionOpen &&
         createPortal(
           <div className="ai-permission-popover" style={popoverStyle}>
@@ -2388,7 +2665,7 @@ export function AiPanel({
             </b>
           </div>
         )}
-        {messages.map((message) => (
+        {messages.map((message, messageIndex) => (
           <article
             className={`ai-message ${message.role}`}
             key={message.id || `${message.role}-${message.createdAt}`}
@@ -2412,9 +2689,33 @@ export function AiPanel({
               )}
             </header>
             {message.thinking && (
-              <details className="ai-reasoning">
-                <summary>Reasoning</summary>
+              <details
+                className="ai-reasoning"
+                open={messageIndex === messages.length - 1}
+              >
+                <summary>
+                  <span>
+                    <FeatherIcon icon="cpu" size="14" />
+                    Model reasoning notes
+                  </span>
+                  <small>Expand</small>
+                </summary>
                 <AiMessageContent content={message.thinking} />
+              </details>
+            )}
+            {!!message.actions?.length && (
+              <details className="ai-response-actions">
+                <summary>
+                  <span>
+                    <FeatherIcon icon="activity" size="14" />
+                    Work log
+                  </span>
+                  <small>
+                    {message.actions.length} step
+                    {message.actions.length === 1 ? "" : "s"}
+                  </small>
+                </summary>
+                <ActionTimeline actions={message.actions} compact />
               </details>
             )}
             {message.role === "assistant" ? (
@@ -2437,13 +2738,33 @@ export function AiPanel({
           </article>
         ))}
         {busy && (
-          <div className="ai-thinking" role="status" aria-live="polite">
-            <span className="ai-phase-dots">
-              <i />
-              <i />
-              <i />
-            </span>
-            {status}
+          <div className="ai-live-work" role="status" aria-live="polite">
+            <div className="ai-thinking">
+              <span className="ai-phase-dots">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span>
+                <b>Current step</b>
+                <small>{status}</small>
+              </span>
+            </div>
+            {!!liveActions.length && (
+              <ActionTimeline actions={liveActions.slice(-4)} compact />
+            )}
+            <button
+              type="button"
+              className="ai-stop-button"
+              onClick={() => {
+                stoppingRef.current = true;
+                setStatus("Stopping local inference…");
+                void window.oscode.stopAi();
+              }}
+            >
+              <FeatherIcon icon="square" size="13" />
+              Stop
+            </button>
           </div>
         )}
         <div ref={endRef} />
@@ -2464,18 +2785,24 @@ export function AiPanel({
           </div>
           <div>
             <button
-              onClick={() => {
-                setPermissionRequest(null);
-                permissionContinuation.current = null;
-                void Promise.all(
-                  temporaryPermissionIds.current.map((id) =>
-                    window.oscode.revokeAiPermission(id),
-                  ),
-                );
-                temporaryPermissionIds.current = [];
-                void window.oscode.stopAi();
-                setStatus("Permission denied");
-              }}
+              onClick={() =>
+                void (async () => {
+                  await resolveLatestPermissionAction(
+                    "denied",
+                    `${permissionRequest.title} denied by the user`,
+                  );
+                  setPermissionRequest(null);
+                  permissionContinuation.current = null;
+                  await Promise.all(
+                    temporaryPermissionIds.current.map((id) =>
+                      window.oscode.revokeAiPermission(id),
+                    ),
+                  );
+                  temporaryPermissionIds.current = [];
+                  await window.oscode.stopAi();
+                  setStatus("Permission denied");
+                })()
+              }
             >
               Deny
             </button>
@@ -2569,87 +2896,151 @@ export function AiPanel({
         </section>
       )}
 
-      <div className="ai-capability-bar" aria-label="Agent permissions">
+      <section className="ai-capability-drawer">
         <button
-          className={fileAccess ? "enabled" : ""}
-          aria-pressed={fileAccess}
-          aria-label={`File access: ${fileAccess ? "on" : "off"}`}
-          title={`Files ${fileAccess ? "on" : "off"}: allow osCode to read project files`}
-          data-tooltip={`Files ${fileAccess ? "on" : "off"}: read project files`}
-          onClick={() => onFileAccess(!fileAccess)}
+          type="button"
+          className="ai-capability-toggle"
+          aria-expanded={permissionsDrawerOpen}
+          aria-controls="ai-capability-controls"
+          onClick={() => setPermissionsDrawerOpen((current) => !current)}
         >
+          <span>
+            <FeatherIcon icon="shield" size="16" />
+            <span>
+              <b>Agent permissions</b>
+              <small>
+                {
+                  [
+                    fileAccess,
+                    fileAccess && editMode !== "read-only",
+                    webAccess,
+                    browserAccess,
+                    computerAccess,
+                  ].filter(Boolean).length
+                }{" "}
+                enabled
+              </small>
+            </span>
+          </span>
           <FeatherIcon
-            icon={fileAccess ? "folder" : "folder-minus"}
+            icon={permissionsDrawerOpen ? "chevron-up" : "chevron-down"}
             size="17"
           />
-          <span>Files</span>
         </button>
-        <button
-          className={
-            !fileAccess ? "" : editMode === "auto" ? "enabled" : "guarded"
-          }
-          disabled={!fileAccess}
-          aria-pressed={fileAccess && editMode === "auto"}
-          aria-label={`Editing: ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}`}
-          title={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}: allow osCode to change project files`}
-          data-tooltip={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "auto-save" : "ask first"}: change files`}
-          onClick={() => onEditMode(editMode === "ask" ? "auto" : "ask")}
-        >
-          <FeatherIcon
-            icon={
-              !fileAccess ? "edit-2" : editMode === "auto" ? "edit-3" : "shield"
-            }
-            size="17"
-          />
-          <span>Edits</span>
-        </button>
-        <button
-          className={webAccess ? "enabled network" : ""}
-          aria-pressed={webAccess}
-          aria-label={`Web access: ${webAccess ? "on" : "off"}`}
-          title={`Web ${webAccess ? "on" : "off"}: allow public searches and HTTPS pages`}
-          data-tooltip={`Web ${webAccess ? "on" : "off"}: search public pages`}
-          onClick={() => {
-            const next = !webAccess;
-            onWebAccess(next);
-            if (!next && browserAccess) void window.oscode.stopAgentControl();
-          }}
-        >
-          <FeatherIcon icon={webAccess ? "wifi" : "wifi-off"} size="17" />
-          <span>Web</span>
-        </button>
-        <span className="ai-capability-divider" aria-hidden="true" />
-        <button
-          className={browserAccess ? "enabled" : ""}
-          aria-pressed={browserAccess}
-          aria-label={`Dedicated agent browser: ${browserAccess ? "on" : "off"}`}
-          title={`Browser ${browserAccess ? "on" : "off"}: open and test pages in an isolated browser`}
-          data-tooltip={`Browser ${browserAccess ? "on" : "off"}: open and test pages`}
-          onClick={() => {
-            const next = !browserAccess;
-            onBrowserAccess(next);
-            if (!next) void window.oscode.stopAgentControl();
-          }}
-        >
-          <FeatherIcon icon="compass" size="17" />
-          <span>Browser</span>
-        </button>
-        <button
-          className={computerAccess ? "enabled" : ""}
-          aria-pressed={computerAccess}
-          aria-label={`Computer Control: ${computerAccess ? "on" : "off"}`}
-          title={`Computer Control ${computerAccess ? "on" : "off"}: operate approved visible apps`}
-          data-tooltip={`Control ${computerAccess ? "on" : "off"}: use approved visible apps`}
-          onClick={() => {
-            const next = !computerAccess;
-            onComputerAccess(next);
-            if (!next) void window.oscode.stopAgentControl();
-          }}
-        >
-          <FeatherIcon icon="mouse-pointer" size="17" />
-          <span>Control</span>
-        </button>
-      </div>
+        {permissionsDrawerOpen && (
+          <div
+            id="ai-capability-controls"
+            className="ai-capability-bar"
+            aria-label="Agent permissions"
+          >
+            <button
+              className={fileAccess ? "enabled" : ""}
+              aria-pressed={fileAccess}
+              aria-label={`File access: ${fileAccess ? "on" : "off"}`}
+              title={`Files ${fileAccess ? "on" : "off"}: allow osCode to read project files`}
+              data-tooltip={`Files ${fileAccess ? "on" : "off"}: read project files`}
+              onClick={() => {
+                const next = !fileAccess;
+                applyCapabilities(
+                  { ...capabilityRef.current, fileAccess: next },
+                  `Files ${next ? "allowed" : "off"}`,
+                );
+              }}
+            >
+              <FeatherIcon
+                icon={fileAccess ? "folder" : "folder-minus"}
+                size="17"
+              />
+              <span>Files</span>
+            </button>
+            <button
+              className={
+                !fileAccess ? "" : editMode === "auto" ? "enabled" : "guarded"
+              }
+              disabled={!fileAccess}
+              aria-pressed={fileAccess && editMode === "auto"}
+              aria-label={`Editing: ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}`}
+              title={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}: allow osCode to change project files`}
+              data-tooltip={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "auto-save" : "ask first"}: change files`}
+              onClick={() => {
+                const next = editMode === "ask" ? "auto" : "ask";
+                applyCapabilities(
+                  { ...capabilityRef.current, editMode: next },
+                  `Edits ${next === "auto" ? "allowed and automatic" : "allowed with review"}`,
+                );
+              }}
+            >
+              <FeatherIcon
+                icon={
+                  !fileAccess
+                    ? "edit-2"
+                    : editMode === "auto"
+                      ? "edit-3"
+                      : "shield"
+                }
+                size="17"
+              />
+              <span>Edits</span>
+            </button>
+            <button
+              className={webAccess ? "enabled network" : ""}
+              aria-pressed={webAccess}
+              aria-label={`Web access: ${webAccess ? "on" : "off"}`}
+              title={`Web ${webAccess ? "on" : "off"}: allow public searches and HTTPS pages`}
+              data-tooltip={`Web ${webAccess ? "on" : "off"}: search public pages`}
+              onClick={() => {
+                const next = !webAccess;
+                applyCapabilities(
+                  { ...capabilityRef.current, webAccess: next },
+                  `Web ${next ? "allowed" : "off"}`,
+                );
+                if (!next && browserAccess)
+                  void window.oscode.stopAgentControl();
+              }}
+            >
+              <FeatherIcon icon={webAccess ? "wifi" : "wifi-off"} size="17" />
+              <span>Web</span>
+            </button>
+            <span className="ai-capability-divider" aria-hidden="true" />
+            <button
+              className={browserAccess ? "enabled" : ""}
+              aria-pressed={browserAccess}
+              aria-label={`Dedicated agent browser: ${browserAccess ? "on" : "off"}`}
+              title={`Browser ${browserAccess ? "on" : "off"}: open and test pages in an isolated browser`}
+              data-tooltip={`Browser ${browserAccess ? "on" : "off"}: open and test pages`}
+              onClick={() => {
+                const next = !browserAccess;
+                applyCapabilities(
+                  { ...capabilityRef.current, browserAccess: next },
+                  `Browser ${next ? "allowed" : "off"}`,
+                );
+                if (!next) void window.oscode.stopAgentControl();
+              }}
+            >
+              <FeatherIcon icon="compass" size="17" />
+              <span>Browser</span>
+            </button>
+            <button
+              className={computerAccess ? "enabled" : ""}
+              aria-pressed={computerAccess}
+              aria-label={`Computer Control: ${computerAccess ? "on" : "off"}`}
+              title={`Computer Control ${computerAccess ? "on" : "off"}: operate approved visible apps`}
+              data-tooltip={`Control ${computerAccess ? "on" : "off"}: use approved visible apps`}
+              onClick={() => {
+                const next = !computerAccess;
+                applyCapabilities(
+                  { ...capabilityRef.current, computerAccess: next },
+                  `Control ${next ? "allowed" : "off"}`,
+                );
+                if (!next) void window.oscode.stopAgentControl();
+              }}
+            >
+              <FeatherIcon icon="mouse-pointer" size="17" />
+              <span>Control</span>
+            </button>
+          </div>
+        )}
+      </section>
       {!!attachments.length && (
         <div className="ai-attachments" aria-label="Attached images">
           {attachments.map((attachment) => (
@@ -2767,6 +3158,64 @@ export function AiPanel({
         {status}
       </span>
     </aside>
+  );
+}
+
+function websiteLabel(value: string) {
+  try {
+    const url = new URL(value);
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return `${url.hostname}${path}`.slice(0, 90);
+  } catch {
+    return value.slice(0, 90);
+  }
+}
+
+function ActionTimeline({
+  actions,
+  compact = false,
+  empty = "No agent actions yet.",
+}: {
+  actions: AiActionEntry[];
+  compact?: boolean;
+  empty?: string;
+}) {
+  if (!actions.length) return <p className="ai-action-empty">{empty}</p>;
+  return (
+    <div className={`ai-action-timeline${compact ? " compact" : ""}`}>
+      {actions.map((action) => (
+        <article className={`ai-action-card ${action.status}`} key={action.id}>
+          <i className="ai-action-icon">
+            <FeatherIcon icon={actionIcon(action.kind)} size="15" />
+          </i>
+          <div>
+            <header>
+              <span>{actionKindLabel(action.kind)}</span>
+              <time dateTime={action.createdAt}>
+                {new Date(action.createdAt).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </time>
+              <em>{action.status}</em>
+            </header>
+            <b>{action.title}</b>
+            {action.detail && <p>{action.detail}</p>}
+            {!!action.websites?.length && (
+              <div className="ai-action-sites" aria-label="Websites used">
+                {action.websites.map((website) => (
+                  <code key={website} title={website}>
+                    <FeatherIcon icon="external-link" size="12" />
+                    {websiteLabel(website)}
+                  </code>
+                ))}
+              </div>
+            )}
+          </div>
+        </article>
+      ))}
+    </div>
   );
 }
 

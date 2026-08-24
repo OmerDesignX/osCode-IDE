@@ -30,6 +30,15 @@ const aiMain = await fs.readFile(
   new URL("../electron/main/ai.ts", import.meta.url),
   "utf8",
 );
+const splitEditor = await fs.readFile(
+  new URL("../src/LocalSplitEditor.tsx", import.meta.url),
+  "utf8",
+);
+
+test("Git status groups large untracked dependency folders", () => {
+  assert.match(main, /--untracked-files=normal/);
+  assert.doesNotMatch(main, /--untracked-files=all/);
+});
 
 test("compare opens a two-file picker and renders distinct file models", () => {
   assert.match(app, /aria-label="Compare two files"/);
@@ -37,6 +46,25 @@ test("compare opens a two-file picker and renders distinct file models", () => {
   assert.match(app, /Second file/);
   assert.match(app, /originalPath=\{comparison\.leftPath\}/);
   assert.match(app, /modifiedPath=\{comparison\.rightPath\}/);
+});
+
+test("split view lets each pane select and edit a different open tab", () => {
+  assert.match(app, /splitLeftPath/);
+  assert.match(app, /splitRightPath/);
+  assert.match(app, /onSelect=\{\(side, path\)/);
+  assert.match(
+    splitEditor,
+    /aria-label=\{`\$\{side === "left" \? "Left" : "Right"\} split tab`\}/,
+  );
+  assert.match(
+    splitEditor,
+    /change\.current\(tab\.path, nextModel\.getValue\(\)\)/,
+  );
+  assert.match(
+    splitEditor,
+    /split\/\$\{side\}\/\$\{encodeURIComponent\(tab\.path\)\}/,
+  );
+  assert.match(styles, /\.split-editor-pane > label/);
 });
 
 test("permission continuation does not create a synthetic user message", () => {
@@ -124,6 +152,30 @@ test("light mode reaches the terminal canvas and output surfaces", () => {
   assert.match(styles, /\.run-console[\s\S]*background: var\(--terminal-bg\)/);
 });
 
+test("project Python environments are seeded, selected in terminals, and package-ready", () => {
+  assert.match(
+    main,
+    /\["venv", "--python", base\.path, "--seed", destination\]/,
+  );
+  assert.match(main, /terminalEnv\.VIRTUAL_ENV = parent/);
+  assert.match(main, /terminalEnv\.UV_PROJECT_ENVIRONMENT = parent/);
+  assert.match(main, /terminalEnv\.UV_CACHE_DIR = uvCacheRoot\(\)/);
+  assert.match(main, /"python:install-package"/);
+  assert.match(
+    main,
+    /\["pip", "install", "--python", inspected\.path, packageSpec\]/,
+  );
+  assert.match(app, /aria-label="Python package"/);
+  assert.match(app, /installPythonPackage\([\s\S]*runtime,[\s\S]*packageSpec/);
+  assert.match(terminal, /\.createTerminal\(id, interpreter\)/);
+  assert.match(terminal, /\[id, interpreter\]/);
+  assert.match(main, /if \(terminals\.get\(id\) !== terminal\) return/);
+  assert.match(
+    main,
+    /if \(terminals\.get\(id\) === terminal\) \{[\s\S]*terminalOwners\.delete\(id\)/,
+  );
+});
+
 test("Monaco keeps its minimap and scrollbar visually separate", () => {
   assert.match(app, /showSlider: "mouseover"/);
   assert.match(app, /verticalScrollbarSize: 10/);
@@ -209,9 +261,14 @@ test("agent browser and Computer Control stay visible, permissioned, and stoppab
   assert.match(agentControl, /foreground pointer/);
   assert.match(agentControl, /darwin-universal/);
   assert.match(agentControl, /browserSnapshot\(\)/);
-  assert.match(app, /View browser/);
+  assert.match(agentControl, /cleanBrowserAddress/);
+  assert.match(agentControl, /showBrowser\(\)/);
+  assert.match(app, /Agent Browser/);
   assert.match(app, /agentBrowserSnapshot\(\)/);
+  assert.match(app, /showAgentBrowser\(\)/);
+  assert.match(app, /setInterval\(\(\) => void refresh\(\), 1_000\)/);
   assert.match(app, /agentBrowserTabPath/);
+  assert.match(main, /agent:browser-show/);
   assert.match(app, /setAiFileAccess\(false\)/);
   assert.match(app, /setAiWebAccess\(false\)/);
   assert.match(app, /setAiBrowserAccess\(false\)/);
@@ -400,13 +457,55 @@ test("model selector collapses after configuration and queued windows get a bann
   assert.match(styles, /\.ai-pipeline-banner\s*\{/);
 });
 
+test("model and permission controls use padded drawers that leave the chat after sending", () => {
+  assert.match(ai, /permissionsDrawerOpen/);
+  assert.match(ai, /className="ai-capability-toggle"/);
+  assert.match(ai, /aria-expanded=\{permissionsDrawerOpen\}/);
+  assert.match(ai, /setPermissionsDrawerOpen\(true\)/);
+  assert.match(ai, /setPermissionsDrawerOpen\(false\)/);
+  assert.match(ai, /className="ai-stop-button"/);
+  assert.match(ai, /window\.oscode\.stopAi\(\)/);
+  assert.match(
+    styles,
+    /Final compact drawers[\s\S]*\.ai-tier-toggle\s*\{[\s\S]*min-height: 54px;[\s\S]*padding: 10px 14px/,
+  );
+  assert.match(styles, /\.ai-capability-drawer\s*\{/);
+  assert.match(styles, /\.ai-capability-toggle\s*\{/);
+  assert.match(aiMain, /output tokens/);
+  assert.match(aiMain, /Reading context/);
+  assert.match(aiMain, /__OSCODE_PROGRESS__/);
+});
+
+test("agent design and live inference feedback stay cross-platform across every engine", () => {
+  assert.doesNotMatch(ai, /window\.oscode\.platform|data-platform=/);
+  for (const selector of [
+    ".ai-tier-toggle",
+    ".ai-capability-drawer",
+    ".ai-live-work",
+    ".ai-action-timeline",
+    ".ai-response-actions",
+    ".ai-reasoning",
+  ])
+    assert.match(styles, new RegExp(`\\${selector}(?:\\s*,|\\s*\\{)`));
+  assert.match(aiMain, /request\.engine === "ollama"[\s\S]*ollamaReply/);
+  assert.match(aiMain, /stream: true/);
+  assert.match(aiMain, /TextIteratorStreamer/);
+  assert.match(aiMain, /generated_tokens/);
+  assert.match(aiMain, /private async llamaReply/);
+  assert.match(aiMain, /private async mlxReply/);
+});
+
 test("enabled capability controls create scoped grants and prompt the model authoritatively", () => {
   assert.match(ai, /ensureCapabilityPermissions/);
+  assert.match(ai, /applyCapabilities/);
+  assert.match(ai, /model updated/);
   assert.match(ai, /"conversation",\s*currentChatId/);
   assert.match(ai, /kind: "project\.read"/);
   assert.match(ai, /kind: "project\.write"/);
   assert.match(aiMain, /CAPABILITY STATE FOR THIS REQUEST/);
   assert.match(aiMain, /Never ask the user for that permission in prose/);
+  assert.match(aiMain, /tools=r\.get\('tools',\[\]\)/);
+  assert.match(aiMain, /isStalePermissionReply/);
   assert.match(aiMain, /await this\.requirePermission\([\s\S]*"project\.read"/);
 });
 
@@ -416,4 +515,39 @@ test("security activity expands into timestamped notifications", () => {
   assert.match(app, /setNotificationsOpen\(true\)/);
   assert.match(app, /createdAt: Date\.now\(\)/);
   assert.match(styles, /\.top-status\[role="button"\]/);
+});
+
+test("agent work is shown live and retained as a privacy-aware chat timeline", () => {
+  assert.match(ai, /label="Agent activity"/);
+  assert.match(ai, /aria-label="Agent activity history"/);
+  assert.match(ai, /window\.oscode\.onAiAction/);
+  assert.match(ai, /Model reasoning notes/);
+  assert.match(ai, /Work log/);
+  assert.match(ai, /Current step/);
+  assert.match(ai, /Typed text and file contents are not/);
+  assert.match(ai, /resolveLatestPermissionAction/);
+  assert.match(ai, /denied by the user/);
+  assert.match(
+    ai,
+    /remainingLiveActions[\s\S]*action\.id !== resolvedActionId/,
+  );
+  assert.match(ai, /entry\.websites/);
+  assert.match(aiMain, /title: "Searching the public web"/);
+  assert.match(aiMain, /text not recorded/);
+  assert.match(main, /aiExecutionOwner\.send\("ai:action", action\)/);
+  assert.match(styles, /\.ai-activity-popover\s*\{/);
+  assert.match(styles, /\.ai-action-timeline\s*\{/);
+  assert.match(styles, /\.ai-live-work\s*\{/);
+});
+
+test("packaged shutdown is safe when startup or terminal initialization is incomplete", () => {
+  assert.match(main, /function disposeAiServiceSafely\(\)/);
+  assert.match(main, /aiService\?\.dispose\(\)/);
+  assert.match(
+    main,
+    /let exited: ReturnType<typeof terminal\.onExit> \| undefined/,
+  );
+  assert.match(main, /exited\?\.dispose\(\)/);
+  assert.doesNotMatch(main, /await aiService\.dispose\(\)/);
+  assert.doesNotMatch(main, /void aiService\.dispose\(\)/);
 });

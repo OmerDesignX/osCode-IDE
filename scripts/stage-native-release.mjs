@@ -16,19 +16,27 @@ const root = path.resolve(import.meta.dirname, "..");
 const manifest = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
-const releaseRoot = path.resolve(
-  process.env.OSCODE_PACKAGE_DIR || path.join(root, "release"),
-);
 const outputRoot = path.resolve(root, "release-assets", "macos");
 const expectedOutputRoot = path.join(root, "release-assets", "macos");
 if (outputRoot !== expectedOutputRoot)
   throw new Error(`Refusing to stage outside ${expectedOutputRoot}`);
 
-const artifactName = `osCode-${manifest.version}.dmg`;
-const source = path.join(releaseRoot, artifactName);
-const sourceStats = await stat(source);
-if (!sourceStats.isFile() || sourceStats.size < 100_000_000)
-  throw new Error(`${artifactName} is missing or unexpectedly small`);
+const artifacts = ["arm64", "x64"].map((architecture) => {
+  const artifactName = `osCode-${manifest.version}-mac-${architecture}.dmg`;
+  return {
+    artifactName,
+    source: path.join(root, "release", `macos-${architecture}`, artifactName),
+  };
+});
+const sourceStats = new Map();
+for (const artifact of artifacts) {
+  const details = await stat(artifact.source);
+  if (!details.isFile() || details.size < 100_000_000)
+    throw new Error(
+      `${artifact.artifactName} is missing or unexpectedly small`,
+    );
+  sourceStats.set(artifact.artifactName, details);
+}
 
 await mkdir(outputRoot, { recursive: true });
 for (const entry of await readdir(outputRoot, { withFileTypes: true })) {
@@ -41,10 +49,11 @@ for (const entry of await readdir(outputRoot, { withFileTypes: true })) {
   await rm(target, { recursive: targetStats.isDirectory(), force: true });
 }
 
-const destination = path.join(outputRoot, artifactName);
-await copyFile(source, destination);
-const destinationStats = await stat(destination);
-if (destinationStats.size !== sourceStats.size)
-  throw new Error(`${artifactName} was not copied completely`);
-
-console.log(`Staged ${artifactName} in ${outputRoot}`);
+for (const artifact of artifacts) {
+  const destination = path.join(outputRoot, artifact.artifactName);
+  await copyFile(artifact.source, destination);
+  const destinationStats = await stat(destination);
+  if (destinationStats.size !== sourceStats.get(artifact.artifactName).size)
+    throw new Error(`${artifact.artifactName} was not copied completely`);
+  console.log(`Staged ${artifact.artifactName} in ${outputRoot}`);
+}

@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import type {
+  AiActionEntry,
   AiAgentState,
   AiChatMessage,
   AiChatResponse,
@@ -118,7 +119,7 @@ function versionAtLeast(version = "", minimum = "") {
   }
   return true;
 }
-type ToolCall = {
+export type ToolCall = {
   id?: string;
   name: string;
   arguments: Record<string, unknown>;
@@ -156,6 +157,7 @@ type ServiceOptions = {
   getPython: () => Promise<string>;
   getUv: () => Promise<string>;
   status: (message: string) => void;
+  action?: (action: AiActionEntry) => void;
   activity?: (activity: {
     kind: "download" | "security" | "queue";
     label: string;
@@ -202,16 +204,63 @@ function cleanText(value: unknown, length = 20_000) {
   if (typeof value !== "string") throw new Error("Expected text");
   return value.slice(0, length);
 }
+function cleanFileContent(value: unknown, relativePath: unknown) {
+  if (typeof value === "string") return value.slice(0, 1_000_000);
+  const target = cleanText(relativePath, 2_000).trim().toLowerCase();
+  if (target.endsWith(".json") && value !== null && typeof value === "object") {
+    return `${JSON.stringify(value, null, 2)}\n`.slice(0, 1_000_000);
+  }
+  throw new Error("Expected text");
+}
 function estimatedTokens(value: unknown) {
   return Math.ceil(JSON.stringify(value).length / 4);
 }
 export function shouldCreateAutomaticGoal(message: string) {
   const text = message.replace(/\s+/g, " ").trim();
   return (
-    text.length >= 140 &&
+    text.length >= 48 &&
     /\b(?:build|create|debug|fix|implement|iterate|optimi[sz]e|refactor|repair|verify)\b/i.test(
       text,
     )
+  );
+}
+
+export function workRequestForAgent(
+  messages: Array<{ role?: unknown; content?: unknown }>,
+) {
+  const requests = messages
+    .filter(
+      (message) =>
+        message.role === "user" && typeof message.content === "string",
+    )
+    .map((message) => String(message.content).replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const latest = requests.at(-1) || "";
+  if (
+    requests.length > 1 &&
+    /^(?:(?:yes|ok|okay)(?:\s+(?:please|pls|do (?:it|that)|go ahead))?|please do|do it|do that|go ahead|build it|make it|continue|keep going|try again)(?:\s+(?:please|pls|now))?[.!]*$/i.test(
+      latest,
+    )
+  ) {
+    return (
+      [...requests]
+        .slice(0, -1)
+        .reverse()
+        .find(
+          (request) =>
+            shouldCreateAutomaticGoal(request) || needsProjectContext(request),
+        ) || latest
+    );
+  }
+  return latest;
+}
+
+export function isDeferredActionReply(content: string) {
+  const text = content.replace(/\s+/g, " ").trim();
+  return (
+    /\b(?:I(?:'ll| will| should| need to)|should I|would you like me to)\b.{0,160}\b(?:build|create|edit|implement|write|change|fix|test)\b/i.test(
+      text,
+    ) && !/<(?:tool_call|function=|oscode_tool)>/i.test(text)
   );
 }
 
@@ -235,6 +284,42 @@ export function needsProjectContext(message: string) {
     /(?:^|\s)[\w./\\-]+\.(?:c|cc|cpp|cs|go|html?|java|js|jsx|json|md|py|rs|swift|ts|tsx|vue)\b/i.test(
       text,
     )
+  );
+}
+
+export function isStalePermissionReply(
+  content: string,
+  capabilities: {
+    fileAccess: boolean;
+    editMode: AiEditMode;
+    webAccess: boolean;
+    browserAccess: boolean;
+    computerAccess: boolean;
+  },
+) {
+  const text = content.replace(/\s+/g, " ").trim();
+  const asksForPermission =
+    /\b(?:need|require|request|waiting for|ask(?:ing)? for)\b.{0,80}\bpermission\b/i.test(
+      text,
+    ) ||
+    /\bpermission\s+is\s+(?:needed|required)\b/i.test(text) ||
+    /\b(?:cannot|can't|couldn't)\b.{0,80}\bwithout\s+permission\b/i.test(text);
+  if (!asksForPermission) return false;
+  if (
+    capabilities.fileAccess &&
+    /\b(?:project|file|folder|read|write|edit|code)\b/i.test(text)
+  )
+    return true;
+  if (capabilities.webAccess && /\b(?:web|internet|search|page)\b/i.test(text))
+    return true;
+  if (
+    capabilities.browserAccess &&
+    /\b(?:browser|page|click|type)\b/i.test(text)
+  )
+    return true;
+  return (
+    capabilities.computerAccess &&
+    /\b(?:computer|desktop|application|window|control)\b/i.test(text)
   );
 }
 export function automaticGoalText(message: string) {
@@ -283,9 +368,281 @@ const toolStatus: Record<string, string> = {
   platformio_run: "Working with PlatformIO…",
 };
 
+function optionalToolText(value: unknown, length = 300) {
+  return typeof value === "string" ? value.slice(0, length).trim() : "";
+}
+
+function unquoteToolText(value: string) {
+  const first = value.at(0);
+  const last = value.at(-1);
+  return value.length >= 2 &&
+    first === last &&
+    (first === '"' || first === "'" || first === "`")
+    ? value.slice(1, -1).trim()
+    : value;
+}
+
+function safeActionUrl(value: string) {
+  const cleaned = unquoteToolText(value);
+  try {
+    const parsed = new URL(cleaned);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString().slice(0, 2_000);
+  } catch {
+    return cleaned.slice(0, 2_000);
+  }
+}
+
+function publicWebsites(result: string) {
+  const websites: string[] = [];
+  const seen = new Set<string>();
+  for (const match of result.matchAll(/https:\/\/[^\s<>'"`\])}]+/gi)) {
+    const candidate = match[0].replace(/[.,;:!?]+$/, "");
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol !== "https:" || seen.has(parsed.href)) continue;
+      seen.add(parsed.href);
+      websites.push(parsed.href.slice(0, 2_000));
+      if (websites.length >= 12) break;
+    } catch {
+      // Ignore malformed text that only resembled a URL.
+    }
+  }
+  return websites;
+}
+
+export function actionForTool(call: ToolCall, chatId: string): AiActionEntry {
+  const args = call.arguments || {};
+  const pathValue = optionalToolText(args.path, 1_000);
+  const query = optionalToolText(args.query, 500);
+  const url = safeActionUrl(optionalToolText(args.url, 2_000));
+  const target = optionalToolText(args.target, 300) || "osCode";
+  const command = optionalToolText(args.command, 80);
+  const purpose = optionalToolText(args.purpose, 300);
+  const typedLength = optionalToolText(args.text, 20_000).length;
+  const base = {
+    id: crypto.randomUUID(),
+    chatId,
+    status: "running" as const,
+    tool: call.name,
+    createdAt: new Date().toISOString(),
+  };
+  switch (call.name) {
+    case "web_search":
+      return {
+        ...base,
+        kind: "web",
+        title: "Searching the public web",
+        detail: query || "Public web search",
+        query,
+      };
+    case "web_fetch":
+      return {
+        ...base,
+        kind: "web",
+        title: "Reading a public website",
+        detail: url,
+        url,
+        websites: url ? [url] : undefined,
+      };
+    case "browser_open":
+      return {
+        ...base,
+        kind: "browser",
+        title: "Opening the agent browser",
+        detail: url,
+        url,
+        websites: /^https:/i.test(url) ? [url] : undefined,
+      };
+    case "browser_inspect":
+      return {
+        ...base,
+        kind: "browser",
+        title: "Inspecting the visible page",
+        detail: "Reading visible text and controls",
+      };
+    case "browser_click":
+      return {
+        ...base,
+        kind: "browser",
+        title: "Using a browser control",
+        detail: query || "Visible control",
+        target: query,
+      };
+    case "browser_type":
+      return {
+        ...base,
+        kind: "browser",
+        title: "Entering text in the agent browser",
+        detail: `${query || "Visible field"} · ${typedLength} character${typedLength === 1 ? "" : "s"} (text not recorded)`,
+        target: query,
+      };
+    case "browser_close":
+      return {
+        ...base,
+        kind: "browser",
+        title: "Closing the agent browser",
+      };
+    case "computer_list_apps":
+      return {
+        ...base,
+        kind: "computer",
+        title: "Checking visible applications",
+        detail: "Application names only",
+      };
+    case "computer_inspect":
+      return {
+        ...base,
+        kind: "computer",
+        title: `Inspecting ${target}`,
+        detail: "Reading visible controls",
+        target,
+      };
+    case "computer_click":
+      return {
+        ...base,
+        kind: "computer",
+        title: `Using a control in ${target}`,
+        detail: query || "Visible control",
+        target,
+      };
+    case "computer_type":
+      return {
+        ...base,
+        kind: "computer",
+        title: `Entering text in ${target}`,
+        detail: `${query || "Visible field"} · ${typedLength} character${typedLength === 1 ? "" : "s"} (text not recorded)`,
+        target,
+      };
+    case "list_files":
+      return {
+        ...base,
+        kind: "files",
+        title: "Listing project files",
+        detail: "File names only; build and dependency folders omitted",
+      };
+    case "read_file":
+      return {
+        ...base,
+        kind: "files",
+        title: "Reading a project file",
+        detail: pathValue,
+        target: pathValue,
+      };
+    case "search_text":
+      return {
+        ...base,
+        kind: "files",
+        title: "Searching project text",
+        detail: query,
+        query,
+      };
+    case "write_file":
+      return {
+        ...base,
+        kind: "files",
+        title: "Preparing a project file change",
+        detail: `${pathValue} · file content not recorded`,
+        target: pathValue,
+      };
+    case "run_command":
+      return {
+        ...base,
+        kind: "command",
+        title: "Running a project command",
+        detail:
+          [command, purpose].filter(Boolean).join(" · ") || "Project command",
+        target: command,
+      };
+    case "platformio_status":
+      return {
+        ...base,
+        kind: "command",
+        title: "Checking PlatformIO",
+      };
+    case "platformio_run":
+      return {
+        ...base,
+        kind: "command",
+        title: "Running PlatformIO",
+        detail: optionalToolText(args.action, 40),
+      };
+    case "set_goal":
+      return {
+        ...base,
+        kind: "goal",
+        title: "Updating the agent goal",
+        detail: optionalToolText(args.text, 400),
+      };
+    case "complete_goal":
+      return {
+        ...base,
+        kind: "goal",
+        title: "Checking goal completion",
+        detail: `${Array.isArray(args.evidence) ? args.evidence.length : 0} verification item${Array.isArray(args.evidence) && args.evidence.length === 1 ? "" : "s"}`,
+      };
+    case "queue_task":
+      return {
+        ...base,
+        kind: "plan",
+        title: "Queueing follow-up work",
+        detail: optionalToolText(args.prompt, 400),
+      };
+    case "schedule_task":
+      return {
+        ...base,
+        kind: "plan",
+        title: "Scheduling follow-up work",
+        detail: optionalToolText(args.next_run_at, 80),
+      };
+    default:
+      return {
+        ...base,
+        kind: "result",
+        title: call.name.replace(/_/g, " "),
+      };
+  }
+}
+
+export function finishToolAction(
+  action: AiActionEntry,
+  status: "completed" | "waiting" | "failed",
+  result = "",
+) {
+  const websites =
+    action.tool === "web_search" ? publicWebsites(result) : action.websites;
+  let detail = action.detail;
+  if (status === "waiting")
+    detail = `${detail ? `${detail} · ` : ""}Waiting for permission`;
+  else if (status === "failed")
+    detail = `${detail ? `${detail} · ` : ""}${result.slice(0, 320) || "Action failed"}`;
+  else if (action.tool === "web_search")
+    detail = `${action.query || "Public web search"} · ${websites?.length || 0} website${websites?.length === 1 ? "" : "s"}`;
+  else if (action.tool === "run_command") {
+    try {
+      const output = JSON.parse(result) as { exitCode?: unknown };
+      detail = `${action.detail || "Project command"} · exit code ${String(output.exitCode ?? "unknown")}`;
+    } catch {
+      // Preserve the safe command summary when the result is not structured.
+    }
+  }
+  return {
+    ...action,
+    status,
+    detail,
+    websites: websites?.length ? websites : undefined,
+    completedAt: status === "waiting" ? undefined : new Date().toISOString(),
+  } satisfies AiActionEntry;
+}
+
 export function toolResultForModel(toolName: string, result: string) {
   if (toolName === "write_file" && /^Saved /i.test(result))
     return `${result}\n\n<oscode_tool_note>The file is saved. Do not rewrite it again unless a later check identifies a concrete defect. Run the smallest relevant verification next.</oscode_tool_note>`;
+  if (toolName === "browser_open" && /^Opened /i.test(result))
+    return `${result}\n\n<oscode_tool_note>The page is already open in the Agent Browser. Do not call browser_open again for this address. Call browser_inspect to read the page, interact with the local preview if needed, or finish the task.</oscode_tool_note>`;
   if (toolName !== "run_command") return result;
   try {
     const parsed = JSON.parse(result) as {
@@ -436,6 +793,10 @@ export function qwenToolInstructions(tools: unknown[]) {
     .join("\n");
 }
 
+export function needsTextToolProtocol(engine: AiEngine) {
+  return engine !== "mlx" && engine !== "ollama";
+}
+
 export function normalizeRunCommand(rawCommand: unknown, rawArgs: unknown) {
   const commandText = cleanText(rawCommand, 500).trim();
   if (!commandText) throw new Error("Command is empty");
@@ -531,6 +892,33 @@ export function parseLocalToolCalls(content: string): ToolCall[] {
     calls.push({ name: native[1], arguments: argumentsValue });
   }
   if (calls.length) return calls;
+  const jsonBlocks = content.matchAll(
+    /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi,
+  );
+  for (const block of jsonBlocks) {
+    try {
+      const value = JSON.parse(block[1]) as {
+        name?: unknown;
+        arguments?: unknown;
+        function?: { name?: unknown; arguments?: unknown };
+      };
+      const name = value.function?.name ?? value.name;
+      let argumentsValue = value.function?.arguments ?? value.arguments;
+      if (typeof argumentsValue === "string")
+        argumentsValue = JSON.parse(argumentsValue);
+      if (typeof name === "string")
+        calls.push({
+          name,
+          arguments:
+            argumentsValue && typeof argumentsValue === "object"
+              ? (argumentsValue as Record<string, unknown>)
+              : {},
+        });
+    } catch {
+      // Ignore malformed native JSON and try the legacy protocol below.
+    }
+  }
+  if (calls.length) return calls;
   const legacy = content.match(
     /<oscode_tool>\s*([\s\S]*?)(?:<\/oscode_tool>|$)/i,
   );
@@ -581,6 +969,20 @@ async function localModelContextLimit(model: AiModel) {
 }
 export class LocalAiService {
   private worker: ReturnType<typeof spawn> | null = null;
+  private mlxWorker: ReturnType<typeof spawn> | null = null;
+  private mlxWorkerModel = "";
+  private mlxWorkerOutput = "";
+  private mlxWorkerErrors = "";
+  private mlxPending:
+    | {
+        id: string;
+        resolve: (result: {
+          code: number | null;
+          output: string;
+          error: string;
+        }) => void;
+      }
+    | undefined;
   private ollamaWorker: ReturnType<typeof spawn> | null = null;
   private cachedOllamaExecutable = "";
   private controller: AbortController | null = null;
@@ -1948,26 +2350,51 @@ export class LocalAiService {
       "pytest",
       "pio",
       "platformio",
+      "node",
+      "npm",
     ]);
     if (!allowed.has(command))
       throw new Error(
         `${command || "That command"} is not available to the agent`,
       );
     if (command === "python" || command === "python3")
-      return this.options.getPython();
+      return { executable: await this.options.getPython(), prefixArgs: [] };
     const locator = process.platform === "win32" ? "where.exe" : "which";
     const located = await exec(locator, [command], {
       timeout: 3000,
       windowsHide: true,
     }).catch(() => ({ stdout: "" }));
-    const executable =
-      String(located.stdout).split(/\r?\n/).find(Boolean) || "";
+    let executable = String(located.stdout).split(/\r?\n/).find(Boolean) || "";
     if (!executable) throw new Error(`${command} is not installed`);
-    if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable))
-      throw new Error(
-        "Script-based commands must be run by the user in Terminal",
-      );
-    return executable;
+    if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable)) {
+      if (command !== "npm")
+        throw new Error(
+          "Script-based commands must be run by the user in Terminal",
+        );
+      const nodeResult = await exec("where.exe", ["node.exe"], {
+        timeout: 3000,
+        windowsHide: true,
+      }).catch(() => ({ stdout: "" }));
+      const nodeExecutable =
+        String(nodeResult.stdout).split(/\r?\n/).find(Boolean) || "";
+      const npmCli = nodeExecutable
+        ? path.join(
+            path.dirname(nodeExecutable),
+            "node_modules",
+            "npm",
+            "bin",
+            "npm-cli.js",
+          )
+        : "";
+      if (
+        !nodeExecutable ||
+        !(await fs.stat(npmCli).catch(() => null))?.isFile()
+      )
+        throw new Error("npm is not installed");
+      executable = nodeExecutable;
+      return { executable, prefixArgs: [npmCli] };
+    }
+    return { executable, prefixArgs: [] };
   }
 
   private async runProjectCommand(argumentsValue: Record<string, unknown>) {
@@ -1975,19 +2402,20 @@ export class LocalAiService {
       argumentsValue.command,
       argumentsValue.args,
     );
-    const executable = await this.resolveCommand(normalized.command);
+    const resolved = await this.resolveCommand(normalized.command);
+    const executable = resolved.executable;
     const root = await fs.realpath(this.root());
-    const args = normalized.args;
+    const userArgs = normalized.args;
     if (
       /^(?:git(?:\.exe)?)$/i.test(path.basename(executable)) &&
-      /^(?:push|send-email|request-pull)$/i.test(args[0] || "")
+      /^(?:push|send-email|request-pull)$/i.test(userArgs[0] || "")
     ) {
       this.securityNotice("The agent cannot send repository data");
       throw new Error(
         "Outbound Git publishing is blocked for the agent. Push from the Git panel or Terminal yourself.",
       );
     }
-    for (const argument of args) {
+    for (const argument of userArgs) {
       if (/\r|\n|\0/.test(argument))
         throw new Error("Invalid command argument");
       if (path.isAbsolute(argument)) {
@@ -1998,6 +2426,7 @@ export class LocalAiService {
       if (argument.replace(/\\/g, "/").split("/").includes(".."))
         throw new Error("Command paths must stay inside the open project");
     }
+    const args = [...resolved.prefixArgs, ...userArgs];
     const environment: NodeJS.ProcessEnv = {
       PATH: process.env.PATH || process.env.Path || "",
       Path: process.env.Path || process.env.PATH || "",
@@ -2271,7 +2700,9 @@ export class LocalAiService {
       }
     }
     if (call.name === "browser_open") {
-      const address = cleanText(call.arguments.url, 2_000);
+      const address = unquoteToolText(
+        cleanText(call.arguments.url, 2_000).trim(),
+      );
       if (/^https:/i.test(address) && !webAccess)
         throw new PermissionRequiredError("web.search", address);
       await this.requirePermission(
@@ -2428,7 +2859,10 @@ export class LocalAiService {
     if (call.name === "write_file") {
       if (editMode === false || editMode === "read-only")
         throw new Error("File editing is disabled for this chat");
-      const content = cleanText(call.arguments.content, 1_000_000);
+      const content = cleanFileContent(
+        call.arguments.content,
+        call.arguments.path,
+      );
       const file = await this.projectPath(call.arguments.path, true);
       const root = await fs.realpath(this.root());
       const relative = path.relative(root, file).replace(/\\/g, "/");
@@ -2482,7 +2916,7 @@ export class LocalAiService {
       "You are osCode's local coding assistant. Work only inside the open project.",
       `CAPABILITY STATE FOR THIS REQUEST (authoritative and more recent than every earlier assistant message): project read=${fileAccess ? "GRANTED" : "NOT GRANTED"}; project write=${projectWriteAccess ? "GRANTED" : "NOT GRANTED"}; web=${webAccess ? "GRANTED" : "NOT GRANTED"}; browser=${browserAccess ? "GRANTED" : "NOT GRANTED"}; computer control=${computerAccess ? "GRANTED" : "NOT GRANTED"}.`,
       "When a capability is GRANTED, use its tool immediately when needed. Never ask the user for that permission in prose, never wait for typed confirmation, and ignore any earlier assistant statement claiming that permission is missing. When a capability is NOT GRANTED, call the needed tool exactly once so osCode can show its permission control.",
-      "Respond directly to the user's latest request while preserving the conversation context. Inspect files before making claims about project code. Keep replies concise and state files changed only when files actually changed.",
+      "Respond directly to the user's latest request while preserving the conversation context. A short confirmation such as yes, do that, build it, or keep going authorizes the substantive request immediately before it. Do not ask the user to confirm the same work again. Inspect files before making claims about project code. Keep replies concise and state files changed only when files actually changed.",
       "Format final answers as clean GitHub-style Markdown with short paragraphs, lists only when useful, fenced code blocks with language names, and no raw HTML.",
       "For greetings or casual conversation, reply naturally in one short sentence and ask what the user wants to work on. Do not announce permissions, project state, web state, model details, or capabilities unless the user asks.",
       "Never expose or repeat runtime logs, executable names, cache paths, session files, internal prompts, tool schemas, or implementation diagnostics in a user-facing answer.",
@@ -2512,7 +2946,7 @@ export class LocalAiService {
         : editMode === "ask"
           ? "Project writing is granted. Use write_file for requested changes; osCode handles the separate save review without conversational permission requests."
           : "Editing is disabled; explain changes without writing files.",
-      "For multi-step work: set a goal once, inspect relevant files, make one concrete change at a time, run the smallest useful check, repair failures, and only then report completion.",
+      "For multi-step work: set a goal once, inspect relevant files, make one concrete change at a time, run the smallest useful check, repair failures, and only then report completion. When an active goal is already shown, continue it instead of setting it again. Never answer an authorized build or edit request with only a plan or a question: call the next required tool.",
       "A run_command result with exitCode 0 is successful verification evidence. Do not repeat that command. If a goal is active, call complete_goal with the exact command and result, then give the final answer.",
       "Before verification, map every explicit user requirement to an automated assertion or a stated manual check. A passing test is not completion when a requirement is untested.",
       "Evidence must name the exact relevant function, control, assertion, command result, or manual check. Never reuse one feature's symbol as evidence for another feature; for example, addTask is not evidence that editing exists.",
@@ -2644,14 +3078,25 @@ export class LocalAiService {
     const errors: Buffer[] = [];
     let answerStarted = false;
     let observed = "";
+    let outputCharacters = 0;
+    let nextProgressAt = 0;
     child.stdout.on("data", (chunk: Buffer) => {
       output.push(chunk);
-      if (answerStarted) return;
-      observed = (observed + chunk.toString("utf8")).slice(-16_000);
-      if (!qwenFamily || observed.toLowerCase().includes("</think>")) {
+      const text = chunk.toString("utf8");
+      outputCharacters += text.length;
+      if (!answerStarted) observed = (observed + text).slice(-16_000);
+      if (
+        !answerStarted &&
+        (!qwenFamily || observed.toLowerCase().includes("</think>"))
+      ) {
         answerStarted = true;
-        this.options.status("Answering…");
       }
+      const now = Date.now();
+      if (now < nextProgressAt) return;
+      nextProgressAt = now + 120;
+      this.options.status(
+        `${answerStarted ? "Answering" : "Reasoning locally"} · ~${Math.max(1, Math.ceil(outputCharacters / 4))} output tokens`,
+      );
     });
     child.stderr.on("data", (chunk: Buffer) => errors.push(chunk));
     try {
@@ -2702,6 +3147,326 @@ export class LocalAiService {
       ];
     });
   }
+  private reportMlxProgress(line: string) {
+    if (!line.startsWith("__OSCODE_PROGRESS__")) return false;
+    try {
+      const progress = JSON.parse(line.slice("__OSCODE_PROGRESS__".length)) as {
+        tokens?: unknown;
+        tps?: unknown;
+        phase?: unknown;
+        input_tokens?: unknown;
+        input_total?: unknown;
+      };
+      if (progress.phase === "prompt") {
+        const inputTokens = Math.max(0, Number(progress.input_tokens) || 0);
+        const inputTotal = Math.max(
+          inputTokens,
+          Number(progress.input_total) || inputTokens,
+        );
+        this.options.status(
+          `Reading context · ${inputTokens.toLocaleString()} / ${inputTotal.toLocaleString()} input tokens`,
+        );
+        return true;
+      }
+      if (progress.phase === "cache") {
+        const candidate = Math.max(0, Number(progress.input_total) || 0);
+        const reused = Math.max(0, Number(progress.input_tokens) || 0);
+        this.options.status(
+          `Reusing context · ${reused.toLocaleString()} / ${candidate.toLocaleString()} cached tokens`,
+        );
+        return true;
+      }
+      const tokens = Math.max(1, Number(progress.tokens) || 1);
+      const speed = Number(progress.tps);
+      this.options.status(
+        `${progress.phase === "answer" ? "Answering" : "Reasoning locally"} · ${tokens} output tokens${Number.isFinite(speed) && speed > 0 ? ` · ${speed.toFixed(1)} tok/s` : ""}`,
+      );
+    } catch {
+      // Ignore malformed progress without losing the inference result.
+    }
+    return true;
+  }
+  private async mlxReply(
+    python: string,
+    model: string,
+    messages: unknown[],
+    tools: unknown[],
+  ) {
+    const realModel = await fs.realpath(model);
+    let child = this.mlxWorker;
+    if (
+      !child ||
+      child.killed ||
+      child.exitCode !== null ||
+      this.mlxWorkerModel !== realModel
+    ) {
+      child?.kill();
+      const worker = `import json,sys,traceback
+import mlx.core as mx
+from mlx_lm import load,stream_generate
+from mlx_lm.models.cache import make_prompt_cache
+m,t=load(sys.argv[1])
+prompt_cache=make_prompt_cache(m)
+cached_tokens=[]
+def clone_value(value):
+ if value is None:
+  return None
+ if isinstance(value,list):
+  return [clone_value(item) for item in value]
+ if isinstance(value,tuple):
+  return tuple(clone_value(item) for item in value)
+ try:
+  return mx.array(value)
+ except (TypeError,ValueError):
+  return value
+def clone_cache(cache):
+ cloned=[type(entry).from_state(clone_value(entry.state),entry.meta_state) for entry in cache]
+ mx.eval([entry.state for entry in cloned])
+ return cloned
+def render_prompt(msgs,tools):
+ if not hasattr(t,'apply_chat_template') or not getattr(t,'chat_template',None):
+  return '\\n'.join(x['role']+': '+x.get('content','') for x in msgs)+'\\nassistant:'
+ kwargs={'tokenize':False,'add_generation_prompt':True}
+ if tools:
+  kwargs['tools']=tools
+ try:
+  return t.apply_chat_template(msgs,**kwargs)
+ except (TypeError,ValueError):
+  kwargs.pop('tools',None)
+  return t.apply_chat_template(msgs,**kwargs)
+for line in sys.stdin:
+ request_id=''
+ try:
+  r=json.loads(line)
+  request_id=r['id']
+  p=render_prompt(r['messages'],r.get('tools',[]))
+  add_special_tokens=getattr(t,'bos_token',None) is None or not p.startswith(t.bos_token)
+  prompt_tokens=t.encode(p,add_special_tokens=add_special_tokens)
+  common=0
+  common_limit=min(len(cached_tokens),len(prompt_tokens))
+  while common < common_limit and cached_tokens[common] == prompt_tokens[common]:
+   common+=1
+  candidate_common=common
+  stable_len=max(0,len(prompt_tokens)-2)
+  if common != len(cached_tokens) or common > stable_len:
+   prompt_cache=make_prompt_cache(m)
+   cached_tokens=[]
+   common=0
+  sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'phase':'cache','input_tokens':common,'input_total':candidate_common})+'\\n')
+  sys.stderr.flush()
+  stable_delta=prompt_tokens[common:stable_len]
+  processed=common
+  for start in range(0,len(stable_delta),512):
+   batch=stable_delta[start:start+512]
+   m(mx.array(batch)[None],cache=prompt_cache)
+   mx.eval([entry.state for entry in prompt_cache])
+   processed+=len(batch)
+   sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'phase':'prompt','input_tokens':processed,'input_total':len(prompt_tokens)})+'\\n')
+   sys.stderr.flush()
+   mx.clear_cache()
+  cached_tokens=prompt_tokens[:stable_len]
+  generation_cache=clone_cache(prompt_cache)
+  prompt_delta=prompt_tokens[stable_len:]
+  parts=[]
+  last_prompt=[0]
+  def prompt_progress(done,total):
+   if done == 0:
+    return
+   if done < total and done-last_prompt[0] < 128:
+    return
+   last_prompt[0]=done
+   sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'phase':'prompt','input_tokens':min(len(prompt_tokens),stable_len+done),'input_total':len(prompt_tokens)})+'\\n')
+   sys.stderr.flush()
+  for response in stream_generate(m,t,prompt=prompt_delta,max_tokens=1200,prompt_cache=generation_cache,prompt_progress_callback=prompt_progress):
+   parts.append(response.text)
+   phase='answer' if '</think>' in ''.join(parts[-256:]).lower() else 'reasoning'
+   sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'tokens':response.generation_tokens,'tps':response.generation_tps,'phase':phase})+'\\n')
+   sys.stderr.flush()
+  sys.stdout.write('__OSCODE_RESULT__'+json.dumps({'id':request_id,'content':''.join(parts)})+'\\n')
+ except Exception as error:
+  prompt_cache=make_prompt_cache(m)
+  cached_tokens=[]
+  traceback.print_exc(file=sys.stderr)
+  sys.stdout.write('__OSCODE_RESULT__'+json.dumps({'id':request_id,'error':str(error)})+'\\n')
+ sys.stdout.flush()`;
+      child = spawn(python, ["-c", worker, realModel], {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      this.mlxWorker = child;
+      this.mlxWorkerModel = realModel;
+      this.mlxWorkerOutput = "";
+      this.mlxWorkerErrors = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        this.mlxWorkerOutput += chunk.toString("utf8");
+        const lines = this.mlxWorkerOutput.split(/\r?\n/);
+        this.mlxWorkerOutput = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("__OSCODE_RESULT__")) {
+            this.mlxWorkerErrors += `${line}\n`;
+            continue;
+          }
+          try {
+            const result = JSON.parse(
+              line.slice("__OSCODE_RESULT__".length),
+            ) as { id?: unknown; content?: unknown; error?: unknown };
+            if (!this.mlxPending || result.id !== this.mlxPending.id) continue;
+            const pending = this.mlxPending;
+            this.mlxPending = undefined;
+            pending.resolve({
+              code: result.error ? 1 : 0,
+              output: JSON.stringify({ content: String(result.content || "") }),
+              error: result.error
+                ? String(result.error)
+                : this.mlxWorkerErrors.slice(-1600),
+            });
+          } catch {
+            this.mlxWorkerErrors += `${line}\n`;
+          }
+        }
+      });
+      let progressBuffer = "";
+      child.stderr.on("data", (chunk: Buffer) => {
+        progressBuffer += chunk.toString("utf8");
+        const lines = progressBuffer.split(/\r?\n/);
+        progressBuffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!this.reportMlxProgress(line))
+            this.mlxWorkerErrors += `${line}\n`;
+        }
+      });
+      child.once("close", (code) => {
+        if (progressBuffer && !this.reportMlxProgress(progressBuffer))
+          this.mlxWorkerErrors += progressBuffer;
+        if (this.mlxWorker === child) {
+          this.mlxWorker = null;
+          this.mlxWorkerModel = "";
+        }
+        if (this.mlxPending) {
+          const pending = this.mlxPending;
+          this.mlxPending = undefined;
+          pending.resolve({
+            code: code ?? 1,
+            output: "",
+            error: this.mlxWorkerErrors.slice(-1600),
+          });
+        }
+      });
+    }
+    if (this.mlxPending)
+      throw new Error("The shared MLX worker is already processing a request");
+    this.mlxWorkerErrors = "";
+    const id = crypto.randomUUID();
+    return new Promise<{
+      code: number | null;
+      output: string;
+      error: string;
+    }>((resolve) => {
+      this.mlxPending = { id, resolve };
+      child.stdin.write(
+        `${JSON.stringify({ id, messages, tools })}\n`,
+        (error) => {
+          if (!error || !this.mlxPending || this.mlxPending.id !== id) return;
+          this.mlxPending = undefined;
+          resolve({ code: 1, output: "", error: error.message });
+        },
+      );
+    });
+  }
+  private async ollamaReply(
+    request: ChatRequest,
+    messages: unknown[],
+    tools: unknown[],
+    controller: AbortController,
+  ): Promise<ModelReply> {
+    const response = await fetch(`${OLLAMA_API_ROOT}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: request.model,
+        messages,
+        tools,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok)
+      throw new Error(`Ollama request failed (${response.status})`);
+
+    let content = "";
+    let thinking = "";
+    let outputTokens = 0;
+    let nextProgressAt = 0;
+    const rawToolCalls: unknown[] = [];
+    const rawToolCallKeys = new Set<string>();
+    const consume = (rawLine: string) => {
+      const line = rawLine.trim();
+      if (!line) return;
+      const event = JSON.parse(line) as {
+        message?: {
+          content?: unknown;
+          thinking?: unknown;
+          reasoning_content?: unknown;
+          tool_calls?: unknown;
+        };
+        eval_count?: unknown;
+      };
+      const nextContent =
+        typeof event.message?.content === "string" ? event.message.content : "";
+      const nextThinking =
+        typeof event.message?.thinking === "string"
+          ? event.message.thinking
+          : typeof event.message?.reasoning_content === "string"
+            ? event.message.reasoning_content
+            : "";
+      content += nextContent;
+      thinking += nextThinking;
+      if (Array.isArray(event.message?.tool_calls))
+        for (const call of event.message.tool_calls) {
+          const key = JSON.stringify(call);
+          if (rawToolCallKeys.has(key)) continue;
+          rawToolCallKeys.add(key);
+          rawToolCalls.push(call);
+        }
+      outputTokens = Math.max(
+        outputTokens,
+        Number(event.eval_count) ||
+          Math.ceil((content.length + thinking.length) / 4),
+      );
+      const now = Date.now();
+      if (now < nextProgressAt) return;
+      nextProgressAt = now + 120;
+      this.options.status(
+        `${content ? "Answering" : "Reasoning locally"} · ${Math.max(1, outputTokens)} output tokens`,
+      );
+    };
+
+    if (!response.body) throw new Error("Ollama returned an empty response");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() || "";
+      for (const line of lines) consume(line);
+      if (done) break;
+    }
+    consume(pending);
+    const parsed = parseQwenContent(content, thinking);
+    this.options.status("Answering…");
+    return {
+      ...parsed,
+      toolCalls: this.parseCalls(rawToolCalls),
+      raw: {
+        role: "assistant",
+        content,
+        ...(thinking ? { thinking } : {}),
+        ...(rawToolCalls.length ? { tool_calls: rawToolCalls } : {}),
+      },
+    };
+  }
   private async remoteReply(
     request: ChatRequest,
     messages: unknown[],
@@ -2710,39 +3475,8 @@ export class LocalAiService {
     const controller = new AbortController();
     this.controller = controller;
     try {
-      if (request.engine === "ollama") {
-        const response = await fetch(`${OLLAMA_API_ROOT}/api/chat`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            model: request.model,
-            messages,
-            tools,
-            stream: false,
-          }),
-          signal: controller.signal,
-        });
-        if (!response.ok)
-          throw new Error(`Ollama request failed (${response.status})`);
-        const body = (await response.json()) as {
-          message?: {
-            content?: string;
-            thinking?: string;
-            reasoning_content?: string;
-            tool_calls?: unknown;
-          };
-        };
-        const parsed = parseQwenContent(
-          body.message?.content || "",
-          body.message?.thinking || body.message?.reasoning_content || "",
-        );
-        this.options.status("Answering…");
-        return {
-          ...parsed,
-          toolCalls: this.parseCalls(body.message?.tool_calls),
-          raw: body.message,
-        };
-      }
+      if (request.engine === "ollama")
+        return this.ollamaReply(request, messages, tools, controller);
       if (request.engine === "llamacpp") {
         const executable =
           request.executable ||
@@ -2771,12 +3505,14 @@ export class LocalAiService {
           throw new Error(
             "MLX needs Apple silicon with macOS 14 or newer. Select an osCode GGUF model on this Mac.",
           );
-        const ready = await exec(python, ["-c", "import mlx_lm"], {
-          timeout: 30_000,
-          windowsHide: true,
-        })
-          .then(() => true)
-          .catch(() => false);
+        const ready = this.mlxWorker
+          ? true
+          : await exec(python, ["-c", "import mlx_lm"], {
+              timeout: 30_000,
+              windowsHide: true,
+            })
+              .then(() => true)
+              .catch(() => false);
         if (!ready) {
           this.options.status("Preparing MLX for first use…");
           await this.prepareEngine("mlx");
@@ -2786,7 +3522,70 @@ export class LocalAiService {
           throw new Error("Prepare the PyTorch engine in Models first");
         });
       }
-      const worker = `import json,sys\nr=json.load(sys.stdin)\nmsgs=r['messages']\nmodel_id=r['model']\nengine=r['engine']\nhardware=r.get('hardware','auto')\nif engine=='mlx':\n from mlx_lm import load,generate\n m,t=load(model_id)\n p=t.apply_chat_template(msgs,tokenize=False,add_generation_prompt=True) if hasattr(t,'apply_chat_template') else '\\n'.join(x['role']+': '+x.get('content','') for x in msgs)\n out=generate(m,t,prompt=p,max_tokens=1200,verbose=False)\nelse:\n import torch\n from transformers import AutoTokenizer,AutoModelForCausalLM\n t=AutoTokenizer.from_pretrained(model_id,local_files_only=True)\n device_map='cpu' if hardware=='cpu' else 'auto'\n m=AutoModelForCausalLM.from_pretrained(model_id,torch_dtype='auto',device_map=device_map,local_files_only=True)\n p=t.apply_chat_template(msgs,tokenize=False,add_generation_prompt=True) if getattr(t,'chat_template',None) else '\\n'.join(x['role']+': '+x.get('content','') for x in msgs)+'\\nassistant:'\n x=t(p,return_tensors='pt').to(m.device)\n with torch.inference_mode(): y=m.generate(**x,max_new_tokens=1200,do_sample=False)\n out=t.decode(y[0][x['input_ids'].shape[1]:],skip_special_tokens=True)\njson.dump({'content':out},sys.stdout)`;
+      const worker = `import json,sys
+r=json.load(sys.stdin)
+msgs=r['messages']
+tools=r.get('tools',[])
+model_id=r['model']
+engine=r['engine']
+hardware=r.get('hardware','auto')
+def render_prompt(tokenizer):
+ if not hasattr(tokenizer,'apply_chat_template') or not getattr(tokenizer,'chat_template',None):
+  return '\\n'.join(x['role']+': '+x.get('content','') for x in msgs)+'\\nassistant:'
+ kwargs={'tokenize':False,'add_generation_prompt':True}
+ if tools:
+  kwargs['tools']=tools
+ try:
+  return tokenizer.apply_chat_template(msgs,**kwargs)
+ except (TypeError,ValueError):
+  kwargs.pop('tools',None)
+  return tokenizer.apply_chat_template(msgs,**kwargs)
+if engine=='mlx':
+ from mlx_lm import load,stream_generate
+ m,t=load(model_id)
+ p=render_prompt(t)
+ parts=[]
+ last_prompt=[-128]
+ def prompt_progress(done,total):
+  if done < total and done-last_prompt[0] < 128:
+   return
+  last_prompt[0]=done
+  sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'phase':'prompt','input_tokens':done,'input_total':total})+'\\n')
+  sys.stderr.flush()
+ for response in stream_generate(m,t,prompt=p,max_tokens=1200,prompt_progress_callback=prompt_progress):
+  parts.append(response.text)
+  phase='answer' if '</think>' in ''.join(parts[-256:]).lower() else 'reasoning'
+  sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'tokens':response.generation_tokens,'tps':response.generation_tps,'phase':phase})+'\\n')
+  sys.stderr.flush()
+ out=''.join(parts)
+else:
+ import torch
+ from threading import Thread
+ from transformers import AutoTokenizer,AutoModelForCausalLM,TextIteratorStreamer
+ t=AutoTokenizer.from_pretrained(model_id,local_files_only=True)
+ device_map='cpu' if hardware=='cpu' else 'auto'
+ m=AutoModelForCausalLM.from_pretrained(model_id,torch_dtype='auto',device_map=device_map,local_files_only=True)
+ p=render_prompt(t)
+ x=t(p,return_tensors='pt').to(m.device)
+ input_tokens=int(x['input_ids'].shape[1])
+ sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'phase':'prompt','input_tokens':input_tokens,'input_total':input_tokens})+'\n')
+ sys.stderr.flush()
+ streamer=TextIteratorStreamer(t,skip_prompt=True,skip_special_tokens=True)
+ generation={'input_ids':x['input_ids'],'attention_mask':x.get('attention_mask'),'max_new_tokens':1200,'do_sample':False,'streamer':streamer}
+ generation={key:value for key,value in generation.items() if value is not None}
+ thread=Thread(target=m.generate,kwargs=generation,daemon=True)
+ thread.start()
+ parts=[]
+ generated_tokens=0
+ for text in streamer:
+  parts.append(text)
+  generated_tokens+=max(1,len(t.encode(text,add_special_tokens=False)))
+  phase='answer' if '</think>' in ''.join(parts[-256:]).lower() else 'reasoning'
+  sys.stderr.write('__OSCODE_PROGRESS__'+json.dumps({'tokens':generated_tokens,'phase':phase})+'\n')
+  sys.stderr.flush()
+ thread.join()
+ out=''.join(parts)
+json.dump({'content':out},sys.stdout)`;
       const runWorker = async () => {
         const child = spawn(python, ["-c", worker], {
           stdio: ["pipe", "pipe", "pipe"],
@@ -2796,12 +3595,56 @@ export class LocalAiService {
         const chunks: Buffer[] = [];
         const errors: Buffer[] = [];
         child.stdout.on("data", (chunk) => chunks.push(chunk));
-        child.stderr.on("data", (chunk) => errors.push(chunk));
+        let progressBuffer = "";
+        child.stderr.on("data", (chunk: Buffer) => {
+          progressBuffer += chunk.toString("utf8");
+          const lines = progressBuffer.split(/\r?\n/);
+          progressBuffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.startsWith("__OSCODE_PROGRESS__")) {
+              errors.push(Buffer.from(`${line}\n`));
+              continue;
+            }
+            try {
+              const progress = JSON.parse(
+                line.slice("__OSCODE_PROGRESS__".length),
+              ) as {
+                tokens?: unknown;
+                tps?: unknown;
+                phase?: unknown;
+                input_tokens?: unknown;
+                input_total?: unknown;
+              };
+              if (progress.phase === "prompt") {
+                const inputTokens = Math.max(
+                  0,
+                  Number(progress.input_tokens) || 0,
+                );
+                const inputTotal = Math.max(
+                  inputTokens,
+                  Number(progress.input_total) || inputTokens,
+                );
+                this.options.status(
+                  `Reading context · ${inputTokens.toLocaleString()} / ${inputTotal.toLocaleString()} input tokens`,
+                );
+                continue;
+              }
+              const tokens = Math.max(1, Number(progress.tokens) || 1);
+              const speed = Number(progress.tps);
+              this.options.status(
+                `${progress.phase === "answer" ? "Answering" : "Reasoning locally"} · ${tokens} output tokens${Number.isFinite(speed) && speed > 0 ? ` · ${speed.toFixed(1)} tok/s` : ""}`,
+              );
+            } catch {
+              // Ignore malformed progress without losing the inference result.
+            }
+          }
+        });
         child.stdin.end(
           JSON.stringify({
             engine: request.engine,
             model: request.model,
             messages,
+            tools,
             context_limit: request.contextLimit,
             hardware: request.hardware,
           }),
@@ -2809,6 +3652,8 @@ export class LocalAiService {
         const code = await new Promise<number | null>((resolve) =>
           child.on("close", resolve),
         );
+        if (progressBuffer && !progressBuffer.startsWith("__OSCODE_PROGRESS__"))
+          errors.push(Buffer.from(progressBuffer));
         if (this.worker === child) this.worker = null;
         return {
           code,
@@ -2816,7 +3661,10 @@ export class LocalAiService {
           error: Buffer.concat(errors).toString("utf8").slice(-1600),
         };
       };
-      const result = await runWorker();
+      const result =
+        request.engine === "mlx"
+          ? await this.mlxReply(python, request.model, messages, tools)
+          : await runWorker();
       if (result.code !== 0) {
         const diagnostic = result.error.replace(/Traceback[\s\S]*/i, "").trim();
         throw new Error(
@@ -2829,7 +3677,13 @@ export class LocalAiService {
       };
       const parsed = parseQwenContent(body.content || "");
       this.options.status("Answering…");
-      return { ...parsed, toolCalls: [] };
+      return {
+        ...parsed,
+        toolCalls: this.fallbackTools(parsed.content),
+        ...(request.engine === "mlx"
+          ? { raw: { role: "assistant", content: body.content || "" } }
+          : {}),
+      };
     } finally {
       if (this.controller === controller) this.controller = null;
     }
@@ -2881,6 +3735,21 @@ export class LocalAiService {
     if (!request.chatId) throw new Error("Create or choose a chat first");
     if (!request.model)
       throw new Error("Choose or download a local model first");
+    const actions: AiActionEntry[] = [];
+    const publishAction = (entry: AiActionEntry) => {
+      const existing = actions.findIndex((item) => item.id === entry.id);
+      if (existing >= 0) actions[existing] = entry;
+      else actions.push(entry);
+      this.options.action?.(entry);
+      return entry;
+    };
+    const startToolAction = (call: ToolCall) =>
+      publishAction(actionForTool(call, request.chatId));
+    const endToolAction = (
+      action: AiActionEntry,
+      status: "completed" | "waiting" | "failed",
+      result = "",
+    ) => publishAction(finishToolAction(action, status, result));
     const projectRoot = await fs.realpath(this.root());
     if (!request.resumePermission)
       this.pendingPermissionCalls.delete(request.chatId);
@@ -2888,6 +3757,7 @@ export class LocalAiService {
     const latestUserMessage = [...request.messages]
       .reverse()
       .find((message) => message.role === "user")?.content;
+    const workRequest = workRequestForAgent(request.messages);
     if (
       latestUserMessage &&
       isCasualGreeting(latestUserMessage) &&
@@ -2898,6 +3768,7 @@ export class LocalAiService {
         content: "Hi! What would you like to build or fix?",
         changedFiles: [],
         toolSteps: [],
+        actions,
         pendingEdits: [],
         contextSummary: request.contextSummary,
         usage: {
@@ -2925,11 +3796,22 @@ export class LocalAiService {
         },
       });
       this.options.status("Waiting for permission");
+      const permissionAction = publishAction({
+        id: crypto.randomUUID(),
+        chatId: request.chatId,
+        kind: "permission",
+        status: "waiting",
+        title: "Waiting for project access",
+        detail: "Inspect the open project",
+        tool: "list_files",
+        createdAt: new Date().toISOString(),
+      });
       return {
         content:
           "I need permission to read the project before I can answer that.",
         changedFiles: [],
         toolSteps: [],
+        actions: [permissionAction],
         pendingEdits: [],
         contextSummary: request.contextSummary,
         usage: {
@@ -2949,18 +3831,29 @@ export class LocalAiService {
       };
     }
     if (
-      latestUserMessage &&
-      shouldCreateAutomaticGoal(latestUserMessage) &&
+      workRequest &&
+      shouldCreateAutomaticGoal(workRequest) &&
       !agentState.goals.some(
         (goal) => goal.chatId === request.chatId && goal.status === "active",
       )
     ) {
       const goal = await this.agentState.setGoal(
         request.chatId,
-        automaticGoalText(latestUserMessage),
+        automaticGoalText(workRequest),
         true,
       );
       request.goal = goal.text;
+      publishAction({
+        id: crypto.randomUUID(),
+        chatId: request.chatId,
+        kind: "goal",
+        status: "completed",
+        title: "Started an automatic goal",
+        detail: goal.text,
+        tool: "set_goal",
+        createdAt: goal.createdAt,
+        completedAt: new Date().toISOString(),
+      });
     }
     const tools = this.tools(
       request.editMode,
@@ -2978,7 +3871,7 @@ export class LocalAiService {
         request.computerAccess,
         request.goal,
       ),
-      qwenToolInstructions(tools),
+      needsTextToolProtocol(request.engine) ? qwenToolInstructions(tools) : "",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -3005,9 +3898,16 @@ export class LocalAiService {
       },
       ...history.map((message) => ({
         role: message.role,
-        content: message.attachments?.length
-          ? `${message.content}\n\n${message.attachments.map((attachment) => `[Attached image: ${attachment.name}]`).join("\n")}`
-          : message.content,
+        content: (() => {
+          const content =
+            message.role === "assistant" &&
+            isStalePermissionReply(message.content, request)
+              ? "The earlier permission request was resolved by the user. Continue with the currently granted tools."
+              : message.content;
+          return message.attachments?.length
+            ? `${content}\n\n${message.attachments.map((attachment) => `[Attached image: ${attachment.name}]`).join("\n")}`
+            : content;
+        })(),
         ...(request.engine === "ollama" && message.attachments?.length
           ? {
               images: message.attachments.map((attachment) =>
@@ -3023,12 +3923,61 @@ export class LocalAiService {
     const toolSteps: string[] = [];
     const retainedMessages = compacted ? history : undefined;
     const repeatedCalls = new Map<string, number>();
+    const successfulCalls = new Map<string, string>();
+    let correctedStalePermissionReply = false;
+    let correctedDeferredActionReply = false;
+    const canInspectBeforeInference =
+      !request.resumePermission &&
+      request.fileAccess &&
+      shouldCreateAutomaticGoal(workRequest) &&
+      agentState.permissions.some(
+        (permission) =>
+          permission.kind === "project.read" &&
+          (permission.scope === "always" ||
+            permission.chatId === request.chatId),
+      );
+    if (canInspectBeforeInference) {
+      const preflightCall: ToolCall = {
+        id: crypto.randomUUID(),
+        name: "list_files",
+        arguments: {},
+      };
+      const action = startToolAction(preflightCall);
+      const result = await this.runTool(
+        preflightCall,
+        request.editMode,
+        changed,
+        pendingEdits,
+        request.fileAccess,
+        request.webAccess,
+        request.chatId,
+        request.browserAccess,
+        request.computerAccess,
+      );
+      toolSteps.push("list files");
+      endToolAction(action, "completed", result);
+      messages.push(
+        {
+          role: "assistant",
+          content:
+            '<tool_call>{"name":"list_files","arguments":{}}</tool_call>',
+        },
+        {
+          role: "tool",
+          tool_call_id: preflightCall.id,
+          tool_name: "list_files",
+          name: "list_files",
+          content: result,
+        },
+      );
+    }
     const continued = request.resumePermission
       ? this.pendingPermissionCalls.get(request.chatId)
       : undefined;
     if (continued && continued.projectRoot === projectRoot) {
       this.pendingPermissionCalls.delete(request.chatId);
       let result: string;
+      const action = startToolAction(continued.call);
       try {
         result = await this.runTool(
           continued.call,
@@ -3046,14 +3995,17 @@ export class LocalAiService {
             ? `${request.editMode === "ask" ? "Proposed" : "Edited"} ${String(continued.call.arguments.path || "file")}`
             : continued.call.name.replace(/_/g, " "),
         );
+        endToolAction(action, "completed", result);
       } catch (error) {
         if (error instanceof PermissionRequiredError) {
+          endToolAction(action, "waiting");
           this.pendingPermissionCalls.set(request.chatId, continued);
           return {
             content: `Permission is needed to ${this.permissionTitle(error.kind).toLowerCase()}.`,
             retainedMessages,
             changedFiles: [...changed],
             toolSteps,
+            actions,
             pendingEdits,
             contextSummary,
             usage: {
@@ -3070,6 +4022,7 @@ export class LocalAiService {
           };
         }
         result = `Tool error: ${error instanceof Error ? error.message : String(error)}`;
+        endToolAction(action, "failed", result);
       }
       messages.push({
         role: "assistant",
@@ -3091,6 +4044,7 @@ export class LocalAiService {
           retainedMessages,
           changedFiles: [...changed],
           toolSteps,
+          actions,
           pendingEdits,
           contextSummary,
           usage: {
@@ -3110,6 +4064,38 @@ export class LocalAiService {
         ? reply.toolCalls
         : this.fallbackTools(reply.content);
       if (!calls.length) {
+        if (
+          !correctedStalePermissionReply &&
+          isStalePermissionReply(reply.content, request)
+        ) {
+          correctedStalePermissionReply = true;
+          messages.push(
+            { role: "assistant", content: reply.content },
+            {
+              role: "system",
+              content:
+                "Permission correction: the visible capability buttons already granted the permissions shown in the authoritative capability state. Do not ask again. Continue now by calling the required tool.",
+            },
+          );
+          continue;
+        }
+        if (
+          !correctedDeferredActionReply &&
+          request.editMode !== "read-only" &&
+          shouldCreateAutomaticGoal(workRequest) &&
+          isDeferredActionReply(reply.content)
+        ) {
+          correctedDeferredActionReply = true;
+          messages.push(
+            { role: "assistant", content: reply.content },
+            {
+              role: "system",
+              content:
+                "Execution correction: the user already authorized this work. Do not describe what you intend to do and do not ask another question. Call the next project tool now; inspect or read if context is missing, otherwise write the requested file.",
+            },
+          );
+          continue;
+        }
         this.options.status("Ready · local only");
         return {
           content: groundedFinalContent(reply.content, changed),
@@ -3117,6 +4103,7 @@ export class LocalAiService {
           retainedMessages,
           changedFiles: [...changed],
           toolSteps,
+          actions,
           pendingEdits,
           contextSummary,
           usage: {
@@ -3136,32 +4123,45 @@ export class LocalAiService {
           toolStatus[call.name] || "Processing the next step…",
         );
         let result: string;
+        const action = startToolAction(call);
         try {
           const signature = `${call.name}:${JSON.stringify(call.arguments)}`;
           const repeated = (repeatedCalls.get(signature) || 0) + 1;
           repeatedCalls.set(signature, repeated);
-          if (repeated > 2)
-            throw new Error(
-              "This exact tool call already ran twice. Use its result, change the arguments, or finish.",
+          const earlierSuccess = successfulCalls.get(signature);
+          if (call.name === "browser_open" && earlierSuccess) {
+            result = `${earlierSuccess}\nThe same page was already open, so osCode reused the existing Agent Browser. Inspect the page or continue with the task instead of opening it again.`;
+            toolSteps.push("browser open (reused)");
+            endToolAction(action, "completed", result);
+          } else {
+            if (repeated > 2)
+              throw new Error(
+                call.name === "browser_open"
+                  ? "This browser address could not be opened after two attempts. Verify that the preview exists or use a different address."
+                  : "This exact tool call already ran twice. Use its result, change the arguments, or finish.",
+              );
+            result = await this.runTool(
+              call,
+              request.editMode,
+              changed,
+              pendingEdits,
+              request.fileAccess,
+              request.webAccess,
+              request.chatId,
+              request.browserAccess,
+              request.computerAccess,
             );
-          result = await this.runTool(
-            call,
-            request.editMode,
-            changed,
-            pendingEdits,
-            request.fileAccess,
-            request.webAccess,
-            request.chatId,
-            request.browserAccess,
-            request.computerAccess,
-          );
-          toolSteps.push(
-            call.name === "write_file"
-              ? `${request.editMode === "ask" ? "Proposed" : "Edited"} ${String(call.arguments.path || "file")}`
-              : call.name.replace(/_/g, " "),
-          );
+            successfulCalls.set(signature, result);
+            toolSteps.push(
+              call.name === "write_file"
+                ? `${request.editMode === "ask" ? "Proposed" : "Edited"} ${String(call.arguments.path || "file")}`
+                : call.name.replace(/_/g, " "),
+            );
+            endToolAction(action, "completed", result);
+          }
         } catch (error) {
           if (error instanceof PermissionRequiredError) {
+            endToolAction(action, "waiting");
             this.pendingPermissionCalls.set(request.chatId, {
               projectRoot,
               call,
@@ -3172,6 +4172,7 @@ export class LocalAiService {
               retainedMessages,
               changedFiles: [...changed],
               toolSteps,
+              actions,
               pendingEdits,
               contextSummary,
               usage: {
@@ -3188,6 +4189,7 @@ export class LocalAiService {
             };
           }
           result = `Tool error: ${error instanceof Error ? error.message : String(error)}`;
+          endToolAction(action, "failed", result);
         }
         messages.push({
           role: "tool",
@@ -3204,6 +4206,7 @@ export class LocalAiService {
           retainedMessages,
           changedFiles: [...changed],
           toolSteps,
+          actions,
           pendingEdits,
           contextSummary,
           usage: {
@@ -3221,6 +4224,7 @@ export class LocalAiService {
       retainedMessages,
       changedFiles: [...changed],
       toolSteps,
+      actions,
       pendingEdits,
       contextSummary,
       usage: {
@@ -3303,6 +4307,9 @@ export class LocalAiService {
                 : undefined,
             attachments: Array.isArray(input.attachments)
               ? input.attachments.slice(0, 6)
+              : undefined,
+            actions: Array.isArray(input.actions)
+              ? input.actions.slice(-120)
               : undefined,
           };
         })
@@ -3418,6 +4425,9 @@ export class LocalAiService {
     this.controller = null;
     this.worker?.kill();
     this.worker = null;
+    this.mlxWorker?.kill();
+    this.mlxWorker = null;
+    this.mlxWorkerModel = "";
     this.pendingPermissionCalls.clear();
     return true;
   }

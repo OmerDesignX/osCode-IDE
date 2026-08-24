@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { SecureDataStore } from "./secure-store.js";
 import type {
   AiAgentState,
+  AiActionEntry,
   AiChatMessage,
   AiChatThread,
   AiGoal,
@@ -88,6 +89,62 @@ function attachments(
   });
 }
 
+const actionKinds = new Set<AiActionEntry["kind"]>([
+  "plan",
+  "permission",
+  "web",
+  "browser",
+  "computer",
+  "files",
+  "command",
+  "goal",
+  "result",
+]);
+const actionStatuses = new Set<AiActionEntry["status"]>([
+  "running",
+  "completed",
+  "waiting",
+  "failed",
+  "denied",
+]);
+
+function actions(value: unknown): AiActionEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-120).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const input = item as Partial<AiActionEntry>;
+    if (!actionKinds.has(input.kind as AiActionEntry["kind"])) return [];
+    if (!actionStatuses.has(input.status as AiActionEntry["status"])) return [];
+    const title = text(input.title, 240).trim();
+    const chatId = text(input.chatId, 100).trim();
+    if (!title || !chatId) return [];
+    const websites = Array.isArray(input.websites)
+      ? input.websites
+          .flatMap((site) =>
+            typeof site === "string" ? [site.slice(0, 2000)] : [],
+          )
+          .slice(0, 12)
+      : undefined;
+    return [
+      {
+        id: text(input.id, 100) || crypto.randomUUID(),
+        chatId,
+        kind: input.kind as AiActionEntry["kind"],
+        status: input.status as AiActionEntry["status"],
+        title,
+        detail: text(input.detail, 1000) || undefined,
+        tool: text(input.tool, 100) || undefined,
+        query: text(input.query, 500) || undefined,
+        url: text(input.url, 2000) || undefined,
+        target: text(input.target, 300) || undefined,
+        websites: websites?.length ? websites : undefined,
+        createdAt: text(input.createdAt, 40) || new Date().toISOString(),
+        completedAt: text(input.completedAt, 40) || undefined,
+      },
+    ];
+  });
+}
+
 function messages(value: unknown): AiChatMessage[] {
   if (!Array.isArray(value)) return [];
   return value.slice(-200).flatMap((item) => {
@@ -111,6 +168,7 @@ function messages(value: unknown): AiChatMessage[] {
               ? "osCode"
               : undefined,
         attachments: savedAttachments,
+        actions: actions(input.actions),
       },
     ];
   });
