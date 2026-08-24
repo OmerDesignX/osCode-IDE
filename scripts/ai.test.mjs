@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -410,6 +411,15 @@ test("AI write tool obeys the edit permission", async (t) => {
 });
 
 test("the agent can verify JavaScript projects with an installed npm", async (t) => {
+  const npmLookup = spawnSync(
+    process.platform === "win32" ? "where.exe" : "which",
+    ["npm"],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (npmLookup.status !== 0 || !npmLookup.stdout.trim()) {
+    t.skip("npm is not installed in this release-build environment");
+    return;
+  }
   const { base, service, chat } = await fixture();
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   await service.grantPermission(
