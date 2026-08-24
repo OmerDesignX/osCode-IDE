@@ -22,50 +22,42 @@
   </a>
 </p>
 
-osCode is a local AI coding IDE. It was designed to feature a simple design while being private and removing telemetry found in other IDEs. osCode features osCode Models as its agentic coding AI model. These models were derived from Qwen 3.8 Max and have been rebuilt and reconstructed to fit machines with 8 GB of RAM. This is a cross-platform Electron editor that supports Windows, macOS, and Linux. osCode is designed to be agentic with advanced features such as in-built browser for the AI agent to test and debug code. A further advanced feature, Compute Control, allows the AI agent to take control of the IDE and autonomously action commands. It can also control some desktop apps and I would like to further expand this. Again, all local and private and these features are all turned off by default. You will need to activate them and of course exercise caution as they may be dangerous and the AI model can send, receive, or manipulate data. You can also run your own local AI agent through Llama.cpp, PyTorch, and Ollama.
+osCode is a local AI coding IDE. It was designed to feature a simple design while being private and removing telemetry found in other IDEs. osCode features osCode Models as its agentic coding AI model. These models were derived from Qwen 3.8 Max and have been rebuilt and reconstructed to fit machines with 8 GB of RAM. osCode was designed from the ground up to have NO TELEMETRY. This is core principle for the IDE.
+
+This is a cross-platform Electron editor that supports Windows, macOS, and Linux. osCode is designed to be agentic with advanced features such as in-built browser for the AI agent to test and debug code. A further advanced feature, Compute Control, allows the AI agent to take control of the IDE and autonomously action commands. It can also control some desktop apps and I would like to further expand this. Again, all local and private and these features are all turned off by default. You will need to activate them and of course exercise caution as they may be dangerous and the AI model can send, receive, or manipulate data. You can also run your own local AI agent through Llama.cpp, PyTorch, and Ollama.
 
 To install please check releases.
 
-## Included now
+## Local Ai coding agent
 
-- Folder-based project explorer with create, rename, refresh, and recoverable Trash operations, plus a multi-tab Monaco editor whose split panes can independently select any open tab
-- Syntax support for Python, TypeScript/JavaScript, C/C++, C#, Java, Rust, Go, HTML, CSS, JSON, Markdown, and shell files
-- Local Markdown Edit, Split, and Preview views with Mermaid diagram rendering and SVG/PNG copy or save controls
-- Save workflow, a dedicated Settings panel, dark/light themes, adjustable interface and code sizes, English/Arabic layouts, movable sidebar, and a baby-blue tonal visual system based on `#89CFF0`
-- Local-only restoration of the last valid project, theme, and editor preferences, with an explicit Close and Forget control
-- Local-first Git initialization and repository removal, status refresh, per-file or all-file staging, commits, branch create/switch/rename/merge/safe-delete controls, tags and stashes, optional remotes with fetch/pull/push/unlink controls, and explicit submodule-link visibility and absorption. Windows packages include checksum-verified MinGit, while macOS/Linux use the operating system's Git package.
-- A searchable Git helpbook backed by the installed Git manual. New repositories receive a private repository-local fallback author automatically when Git has no identity, so the editor never interrupts a commit with an identity form; users can replace it at any time with `git config --local`.
-- Expandable platform shell (PowerShell on Windows, the user's shell on macOS/Linux)
-- Contained Python 3.10, 3.11, and 3.12 runtimes, later-version downloads inside osCode, per-project and named environments, Run/Stop controls, and terminal package installation. The separate Intel and Apple-silicon macOS releases each carry their matching uv/Python tree.
-- Advanced Mode with Python `pdb` launch, editor suggestions, wrapping and minimap controls, and multiple project environments
-- Resizable project/Git panels, a fixed Git header, and optional Python command help beside the terminal
-- A resizable local AI project agent with downloadable Small, Medium, and Large osCode models; llama.cpp on Windows/Linux/Intel Mac and MLX on Apple silicon; automatic CPU/GPU selection with a remembered override; custom local-model support; multiple searchable chats; goals; steering; queued prompts; local schedules; commands; automatic context compaction; and native or fallback tool calling
-- Multiple project windows with one shared local inference queue. Each window keeps separate project chats and can queue messages while another project is using the model; model and interface choices stay synchronized across windows.
-- Native spellcheck for Markdown, text, and prose files, including correction, replace-all, and personal-dictionary actions
-- Searchable, revocable AI permissions for project reads, edits, terminal commands, debugging, web access, a dedicated temporary browser, Computer Control, and PlatformIO. Grants can be used once, for one conversation, or always for the current project. Windows Computer Control uses semantic UI Automation first and a visible foreground-input fallback; macOS uses Accessibility actions with a separate agent-cursor overlay. Reversible edit checkpoints never touch project Git.
-- A persistent top search surface for project text and AI chats, with separated result groups. Active permissions, downloads, browser use, native Computer Control, and network work share a second responsive status slot without replacing search.
-- A native PlatformIO workspace for isolated Core installation and updates, project creation, environment selection, builds, uploads, cleaning, tests, and serial monitoring. PlatformIO telemetry and automatic Core network checks are forcibly disabled; optional daily updates require explicit opt-in.
+- osCode comes with a local AI coding model. osCode Models are derived from Qwen 3.8 Max and rebuilt to run locally with a min of 8 GB of RAM. Models come in 3 sizes: Small, Medium, and Large. Models are downloaded within the app from this repo: https://github.com/OmerDesignX/osCode-Models
+
+- osCode Models can make mistakes and may be slow to run depending on your computer's hardware. However, it is all private and local. No cloud compute costs attached.
+
+## Ai Agency and Permissions
+
+- You can give osCode as little or full control. It can access all of your files, browse using it's own integrated browser, use Computer Control to see your desktop apps including osCode and click and control your computer.
+
+- You can turn this all off and this is OFF by DEFAULT. It is only turned on when you grant permission or toggle the permissions on. You can revoke access at any time.
+
+## Python
+
+- There is an integrate Python environment and 3.10, 3.11, and 3.12 are included. You can run Python scripts right from osCode. Install packages or create your own environments per project.
+
+## Platform IO Support
+
+- You can download the Platform IO core and create projects. A cache of the boards are saved locally and refreshed upon updates. This is untested still so bear with me while I work through this function.
+
+## Git
+
+- Git support with local or remote links supported.
 
 ## Supported systems
 
-- Windows 10 or newer on 64-bit Intel or AMD systems
+- Windows 10 on 64-bit Intel or AMD systems
+- Windows 11 on 64-bit Intel or AMD systems
 - macOS 12 Monterey or newer; choose the Intel x64 or Apple-silicon arm64 DMG for the Mac
 - Current 64-bit Debian and Ubuntu releases can build and run osCode from source
-
-## Development
-
-```sh
-pnpm install
-pnpm dev
-```
-
-The six osCode model variants are maintained in the separate [osCode Models repository](https://github.com/OmerDesignX/osCode-Models), including their checksums, architecture, licenses, quantization, and memory guidance. Model weights are not committed to this source repository and are not embedded in installers. Small, Medium, and Large remain visible in AI Coder; choosing a missing tier downloads only that tier, verifies every file with the repository's SHA-256 manifest, and activates it atomically. Apple-silicon Macs receive MLX; Windows, Linux, and Intel Macs receive GGUF. On Windows, osCode detects NVIDIA independently from the active llama.cpp backend, validates CUDA with `llama-completion --list-devices`, and prefers CUDA 12.4 for its broad driver compatibility. NVIDIA runtime libraries are not embedded in the installer. A user with driver 525 or newer can explicitly add the checksum-pinned official CUDA 12.4 runtime to osCode's private application-data directory; otherwise osCode uses a compatible installed runtime when it validates successfully. Vulkan remains the fallback for compatible NVIDIA, AMD, and Intel GPUs, followed by CPU.
-
-Downloaded models are private application data rather than project files: `%APPDATA%\osCode\models` on Windows, `~/Library/Application Support/osCode/models` on macOS, and `~/.config/osCode/models` on Linux. Removing the app does not silently remove these multi-gigabyte files. Custom models remain references to their original location.
-
-Public releases contain exactly one Windows installer and two macOS DMGs, one for Intel x64 and one for Apple-silicon arm64. The `release-assets/windows` and `release-assets/macos` folders are staging locations for those native files. GitHub updates use [OmerDesignX/osCode-IDE Releases](https://github.com/OmerDesignX/osCode-IDE/releases), download the complete installer or matching DMG.
-
-Maintainers should follow [`docs/RELEASING.md`](docs/RELEASING.md) for native runner prerequisites, per-platform scripts, draft review, checksums, and signing.
 
 ## Keyboard shortcuts
 
