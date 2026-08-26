@@ -247,11 +247,11 @@ test("manual release build preserves the verified native package pipeline", () =
   );
   assert.equal(read("releaseScripts/VERSION.txt").trim(), "0.1.2");
   assert.match(
-    read("releaseScripts/windows/build-windows-10.sh"),
-    /build-windows\.sh/,
+    read("releaseScripts/windows/build-windows.cmd"),
+    /build-windows\.ps1/,
   );
   assert.match(
-    read("releaseScripts/windows/build-windows-11.sh"),
+    read("releaseScripts/windows/build-windows.ps1"),
     /build-windows\.sh/,
   );
   assert.match(read("releaseScripts/linux/build.sh"), /--linux deb --x64/);

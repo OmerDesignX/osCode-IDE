@@ -8,17 +8,14 @@ Run the script on the operating system it targets:
 # macOS 12 or newer
 bash releaseScripts/macos/build.sh
 
-# Windows 10, from Git Bash
-bash releaseScripts/windows/build-windows-10.sh
-
-# Windows 11, from Git Bash
-bash releaseScripts/windows/build-windows-11.sh
+# Windows 10 or Windows 11, from PowerShell or Command Prompt
+.\releaseScripts\windows\build-windows.cmd
 
 # Current x64 Debian or Ubuntu
 bash releaseScripts/linux/build.sh
 ```
 
-The Windows 10 and Windows 11 wrappers intentionally use the same x64 NSIS packaging pipeline; the separate entry points make the host used for verification explicit. Native packages must be built on their matching operating systems.
+Windows 10 and Windows 11 use the same x64 NSIS installer. The PowerShell entry point locates Git for Windows directly, avoiding the optional WSL `bash` launcher. Native packages must be built on their matching operating systems.
 
 Verified artifacts are staged in the ignored `release-assets/macos`, `release-assets/windows`, or `release-assets/linux` folder. Electron Builder's intermediate root `release/` folder is ignored by Git and removed after successful staging. The macOS script generates a padded, multi-resolution `.icns` file without changing the Windows/Linux `build/icon.png` asset, then stages separate `mac-arm64` and `mac-x64` DMGs.
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -529,6 +530,16 @@ test("package installers always use their separate exact permission unless Alway
   assert.equal(isPackageInstallCommand("brew", ["install", "node"]), true);
   assert.equal(isPackageInstallCommand("npm", ["run", "build"]), false);
 
+  const npmLocator = spawnSync(
+    process.platform === "win32" ? "where.exe" : "which",
+    ["npm"],
+    { stdio: "ignore" },
+  );
+  if (npmLocator.status !== 0) {
+    t.skip("npm is not installed on this build host");
+    return;
+  }
+
   await service.grantPermission(
     "packages.install",
     "conversation",
@@ -640,7 +651,12 @@ test("background project commands wait for localhost before browser testing", as
   const { base, service, chat } = await fixture();
   t.after(async () => {
     await service.dispose();
-    await fs.rm(base, { recursive: true, force: true });
+    await fs.rm(base, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 5 : 0,
+      retryDelay: 200,
+    });
   });
   const reservation = net.createServer();
   await new Promise((resolve, reject) => {

@@ -55,15 +55,13 @@ Project Python environments are created with the bundled `uv` and seeded with `p
 
 ## Windows installer
 
-Run the Windows pipeline only when a new Windows package is required. On a native 64-bit Windows host with Git Bash, Node.js, and pnpm, use the wrapper matching the host used for verification:
+Run the Windows pipeline only when a new Windows package is required. On a native 64-bit Windows host with Git for Windows, Node.js, and pnpm, run the merged launcher from PowerShell or Command Prompt:
 
-```sh
-bash releaseScripts/windows/build-windows-10.sh
-# or
-bash releaseScripts/windows/build-windows-11.sh
+```powershell
+.\releaseScripts\windows\build-windows.cmd
 ```
 
-Both wrappers use the same Windows 10-or-newer x64 NSIS configuration. The uploadable file is `release-assets/windows/osCode-Setup-<version>.exe`. Do not rename or relabel an existing installer as a newer release; run the Windows script whenever a new Windows asset is included.
+Windows 10 and Windows 11 use the same Windows 10-or-newer x64 NSIS configuration. The uploadable file is `release-assets/windows/osCode-Setup-<version>.exe`. Do not rename or relabel an existing installer as a newer release; run the Windows script whenever a new Windows asset is included.
 
 ## Linux source and package support
 

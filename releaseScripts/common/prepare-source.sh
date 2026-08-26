@@ -19,4 +19,4 @@ pnpm run llama:prepare
 pnpm run terminal:prepare
 pnpm run computer:prepare
 pnpm run native:check
-NODE_OPTIONS=--max-old-space-size=4096 pnpm exec vite build
+NODE_OPTIONS=--max-old-space-size=4096 node "$ROOT/node_modules/vite/bin/vite.js" build --configLoader runner

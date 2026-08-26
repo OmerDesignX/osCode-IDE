@@ -1,4 +1,11 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -670,8 +677,18 @@ if (flags.includes("--run-smoke")) {
   const args =
     platform === "linux"
       ? ["-a", executable, "--no-sandbox", "--smoke-test"]
-      : ["--smoke-test"];
-  const smoke = spawnSync(command, args, { stdio: "inherit" });
+      : platform === "windows"
+        ? ["--disable-gpu", "--smoke-test"]
+        : ["--smoke-test"];
+  const smokeMarker = path.join(path.dirname(executable), ".oscode-smoke-test");
+  writeFileSync(smokeMarker, "smoke\n", { mode: 0o600 });
+  const smoke = (() => {
+    try {
+      return spawnSync(command, args, { stdio: "inherit" });
+    } finally {
+      rmSync(smokeMarker, { force: true });
+    }
+  })();
   if (smoke.error) throw smoke.error;
   if (smoke.status !== 0)
     throw new Error(`Packaged ${platform} smoke test exited ${smoke.status}`);

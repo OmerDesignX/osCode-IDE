@@ -70,10 +70,16 @@ export OSCODE_NODE_BIN OSCODE_PNPM_BIN
 node() { "$OSCODE_NODE_BIN" "$@"; }
 pnpm() { "$OSCODE_PNPM_BIN" "$@"; }
 export -f node pnpm
-export PATH="$(dirname "$OSCODE_NODE_BIN"):$PATH"
+export PATH="$(dirname "$OSCODE_NODE_BIN"):$(dirname "$OSCODE_PNPM_BIN"):$PATH"
+# Node's Windows environment can preserve the inherited mixed-case key. Keep
+# both spellings synchronized so application-level command discovery sees the
+# same build tool path as Git Bash.
+export Path="$PATH"
 export CI=true
 export PNPM_DISABLE_SELF_UPDATE_CHECK=true
 export NO_UPDATE_NOTIFIER=true
+export npm_config_user_agent="pnpm/$(pnpm --version) node/$(node --version)"
+export npm_execpath="$OSCODE_PNPM_BIN"
 
 NODE_MAJOR="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
 if [[ ! "$NODE_MAJOR" =~ ^[0-9]+$ ]] || (( NODE_MAJOR < 22 )); then
@@ -87,7 +93,7 @@ node "$ROOT/releaseScripts/common/cleanup-release.mjs"
 bash "$ROOT/releaseScripts/common/prepare-source.sh"
 cd "$ROOT"
 export CSC_IDENTITY_AUTO_DISCOVERY=false
-pnpm exec electron-builder --win nsis --x64 --publish never
+node "$ROOT/node_modules/electron-builder/cli.js" --win nsis --x64 --publish never
 node scripts/verify-package.mjs windows --run-smoke
 pnpm run release:stage:windows
 node releaseScripts/common/cleanup-release.mjs

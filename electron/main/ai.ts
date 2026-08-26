@@ -2768,6 +2768,7 @@ export class LocalAiService {
       PATH: this.commandPath(root),
       Path: this.commandPath(root),
       SystemRoot: process.env.SystemRoot,
+      PATHEXT: process.env.PATHEXT,
       TEMP: process.env.TEMP,
       TMP: process.env.TMP,
       USERPROFILE: process.env.USERPROFILE,
@@ -2801,7 +2802,7 @@ export class LocalAiService {
           stderr: Buffer.concat(existing.stderr).toString("utf8"),
         });
       if (existing) {
-        this.terminateBackgroundCommand(existing.child);
+        await this.terminateBackgroundCommand(existing.child);
         this.backgroundCommands.delete(root);
       }
     }
@@ -2852,7 +2853,7 @@ export class LocalAiService {
           });
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      this.terminateBackgroundCommand(child);
+      await this.terminateBackgroundCommand(child);
       if (this.backgroundCommands.get(root)?.child === child)
         this.backgroundCommands.delete(root);
       const output = [
@@ -2883,15 +2884,24 @@ export class LocalAiService {
     });
   }
 
-  private terminateBackgroundCommand(child: ReturnType<typeof spawn>) {
+  private async terminateBackgroundCommand(child: ReturnType<typeof spawn>) {
     if (child.exitCode !== null) return;
     if (process.platform === "win32" && child.pid) {
-      const terminator = spawn(
-        "taskkill.exe",
-        ["/pid", String(child.pid), "/t", "/f"],
-        { stdio: "ignore", windowsHide: true },
-      );
-      terminator.unref();
+      const terminatorCode = await new Promise<number>((resolve) => {
+        const terminator = spawn(
+          "taskkill.exe",
+          ["/pid", String(child.pid), "/t", "/f"],
+          { stdio: "ignore", windowsHide: true },
+        );
+        terminator.once("error", () => resolve(-1));
+        terminator.once("close", (code) => resolve(code ?? -1));
+      });
+      if (terminatorCode !== 0 && child.exitCode === null) child.kill();
+      if (child.exitCode === null)
+        await Promise.race([
+          new Promise<void>((resolve) => child.once("close", () => resolve())),
+          new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+        ]);
       return;
     }
     if (child.pid) {
@@ -4939,8 +4949,11 @@ json.dump({'content':out},sys.stdout)`;
   }
   async dispose() {
     await this.stop();
-    for (const { child } of this.backgroundCommands.values())
-      this.terminateBackgroundCommand(child);
+    await Promise.all(
+      [...this.backgroundCommands.values()].map(({ child }) =>
+        this.terminateBackgroundCommand(child),
+      ),
+    );
     this.backgroundCommands.clear();
     this.ollamaWorker?.kill();
     this.ollamaWorker = null;

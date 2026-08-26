@@ -216,7 +216,13 @@ async function validatedAddress(raw: string, projectRoot: string) {
   if (url.username || url.password)
     throw new Error("Addresses containing credentials are blocked");
   if (url.protocol === "file:") {
-    const requested = fileURLToPath(url);
+    const requested = (() => {
+      try {
+        return fileURLToPath(url);
+      } catch {
+        return decodeURIComponent(url.pathname);
+      }
+    })();
     const root = await fs.realpath(projectRoot);
     let file = await fs.realpath(requested).catch(() => "");
     let relative = file ? path.relative(root, file) : "";
