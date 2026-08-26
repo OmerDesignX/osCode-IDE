@@ -245,7 +245,10 @@ test("manual release build preserves the verified native package pipeline", () =
     read("docs/RELEASING.md"),
     /bash releaseScripts\/macos\/build\.sh/,
   );
-  assert.equal(read("releaseScripts/VERSION.txt").trim(), "0.1.2");
+  assert.equal(
+    read("releaseScripts/VERSION.txt").trim(),
+    JSON.parse(read("package.json")).version,
+  );
   assert.match(
     read("releaseScripts/windows/build-windows.cmd"),
     /build-windows\.ps1/,
@@ -282,9 +285,15 @@ test("manual release build preserves the verified native package pipeline", () =
   const manifest = JSON.parse(read("package.json"));
   assert.equal(manifest.dependencies["electron-updater"], undefined);
   assert.equal(manifest.build.publish, undefined);
-  assert.match(read("electron/main/updater.ts"), /releases\/latest/);
+  assert.match(read("electron/main/updater.ts"), /releases\/tags/);
   assert.match(read("electron/main/updater.ts"), /sha256:/i);
   assert.match(read("electron/main/updater.ts"), /installReadyUpdate/);
+  assert.match(read("electron/main/updater.ts"), /downloadAvailable/);
+  assert.match(read("electron/main/updater.ts"), /ready-update\.json/);
+  assert.doesNotMatch(
+    read("electron/main/index.ts"),
+    /before-quit[\s\S]{0,1800}installReadyUpdate/,
+  );
   assert.match(
     read("scripts/verify-package.mjs"),
     /\^osCode-Setup-.\+\\\.exe\$/,
@@ -307,12 +316,14 @@ test("manual release build preserves the verified native package pipeline", () =
     /smokeMode\s*\? processKeyProtector\(userData\)/,
   );
   const main = read("electron/main/index.ts");
-  assert.match(main, /if \(!smokeMode\)[\s\S]*migrateWrappedKeyToAppLocal/);
+  assert.match(main, /if \(!smokeMode\)[\s\S]*archiveLegacySecureStore/);
   assert.match(
     main,
     /smokeMode\s*\? processKeyProtector\(userData\)\s*:\s*appLocalKeyProtector\(\)/,
   );
   assert.doesNotMatch(main, /backend:\s*"DPAPI"/);
+  assert.doesNotMatch(main, /safeStorage/);
+  assert.doesNotMatch(main, /decryptString|encryptString/);
   assert.doesNotMatch(main, /osCode refuses Electron's unprotected basic_text/);
 });
 

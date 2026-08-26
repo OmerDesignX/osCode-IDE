@@ -28,6 +28,13 @@ export function AiMessageContent({ content }: { content: string }) {
   return (
     <div
       className="ai-message-content"
+      onClick={(event) => {
+        const link = (event.target as HTMLElement).closest("a");
+        const href = link?.getAttribute("href") || "";
+        if (!/^https:\/\//i.test(href)) return;
+        event.preventDefault();
+        void window.oscode.openExternalUrl(href);
+      }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

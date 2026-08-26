@@ -2,7 +2,7 @@ import path from "node:path";
 import type { EditorPreferences } from "../types.js";
 
 export const defaultPreferences: EditorPreferences = {
-  version: 10,
+  version: 11,
   theme: "dark",
   locale: "en",
   sidebarSide: "left",
@@ -32,6 +32,7 @@ export const defaultPreferences: EditorPreferences = {
   autoSave: true,
   autoUpdateEnabled: false,
   autoUpdatePromptAnswered: false,
+  autoUpdateDismissedVersion: "",
   lastProject: "",
 };
 
@@ -40,7 +41,7 @@ export function validPreferences(value: unknown): EditorPreferences {
   const input = value as Partial<EditorPreferences>;
   const legacy = value as { aiAllowEdits?: unknown; theme?: unknown };
   return {
-    version: 10,
+    version: 11,
     theme:
       input.theme === "blue-dark" || input.theme === "blue-light"
         ? input.theme
@@ -129,6 +130,13 @@ export function validPreferences(value: unknown): EditorPreferences {
       typeof input.autoUpdatePromptAnswered === "boolean"
         ? input.autoUpdatePromptAnswered
         : false,
+    autoUpdateDismissedVersion:
+      typeof input.autoUpdateDismissedVersion === "string" &&
+      /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(
+        input.autoUpdateDismissedVersion,
+      )
+        ? input.autoUpdateDismissedVersion
+        : "",
     lastProject:
       typeof input.lastProject === "string" &&
       (!input.lastProject || path.isAbsolute(input.lastProject))

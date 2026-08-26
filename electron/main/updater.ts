@@ -1,21 +1,26 @@
 import { app } from "electron";
-import { createHash } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { AppUpdateStatus } from "../types.js";
 import {
   isNewerVersion,
   isTrustedUpdateUrl,
+  selectUpdateAsset,
   updateAssetName,
+  updateAssetVersion,
+  updateChannel,
+  type UpdateChannel,
 } from "./updater-policy.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1_000;
-const RELEASE_API =
-  "https://api.github.com/repos/OmerDesignX/osCode-IDE/releases/latest";
+const RELEASE_API_ROOT =
+  "https://api.github.com/repos/OmerDesignX/osCode-IDE/releases/tags";
 const MAX_PACKAGE_BYTES = 2 * 1024 * 1024 * 1024;
 
 type ReleaseAsset = {
@@ -25,14 +30,31 @@ type ReleaseAsset = {
   browser_download_url?: unknown;
 };
 
+type AvailableUpdate = {
+  version: string;
+  name: string;
+  asset: ReleaseAsset;
+  channel: UpdateChannel;
+};
+
+type ReadyUpdate = {
+  version: string;
+  name: string;
+  digest: string;
+  bytes: number;
+  channelTag: string;
+};
+
 export class AppUpdateService {
   private enabled = false;
   private checkInProgress = false;
+  private downloadInProgress = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private downloadedPackage = "";
+  private availableUpdate: AvailableUpdate | null = null;
   private status: AppUpdateStatus = {
     state: "disabled",
-    message: "Automatic updates are off",
+    message: "Automatic updates are off; manual checks remain available",
     currentVersion: app.getVersion(),
   };
 
@@ -41,60 +63,96 @@ export class AppUpdateService {
   initialize(enabled: boolean) {
     this.enabled = enabled;
     this.schedule();
-    if (!enabled) {
-      this.update({ state: "disabled", message: "Automatic updates are off" });
-      return;
-    }
     if (!this.supported()) {
       this.update({
         state: "unsupported",
-        message: "Automatic updates run in Windows and macOS builds",
+        message: "Updates are unavailable for this operating system build",
       });
       return;
     }
-    const timeout = setTimeout(() => void this.check(), 2_500);
-    timeout.unref();
+    this.update(
+      enabled
+        ? { state: "idle", message: "Automatic updates are on" }
+        : {
+            state: "disabled",
+            message:
+              "Automatic updates are off; manual checks remain available",
+          },
+    );
+    void this.restoreReadyUpdate().then((restored) => {
+      if (restored || !this.enabled) return;
+      const timeout = setTimeout(() => void this.check(false), 2_500);
+      timeout.unref();
+    });
   }
 
   async setEnabled(enabled: boolean) {
-    if (this.enabled === enabled) {
-      if (enabled && this.status.state === "disabled") await this.check();
-      return this.getStatus();
-    }
     this.enabled = enabled;
     this.schedule();
-    if (!enabled) {
-      this.update({ state: "disabled", message: "Automatic updates are off" });
-      return this.getStatus();
-    }
     if (!this.supported()) {
       this.update({
         state: "unsupported",
-        message: "Automatic updates run in Windows and macOS builds",
+        message: "Updates are unavailable for this operating system build",
       });
       return this.getStatus();
     }
-    await this.check();
+    if (this.status.state === "ready" || this.status.state === "installing")
+      return this.getStatus();
+    if (!enabled) {
+      this.update({
+        state: this.availableUpdate ? "available" : "disabled",
+        message: this.availableUpdate
+          ? `osCode ${this.availableUpdate.version} is available`
+          : "Automatic updates are off; manual checks remain available",
+        ...(this.availableUpdate
+          ? {
+              version: this.availableUpdate.version,
+              channel: this.availableUpdate.channel.label,
+            }
+          : {}),
+      });
+      return this.getStatus();
+    }
+    await this.check(false);
     return this.getStatus();
   }
 
-  async check() {
-    if (!this.enabled) {
-      this.update({ state: "disabled", message: "Automatic updates are off" });
+  async check(manual = false) {
+    if (!this.enabled && !manual) {
+      this.update({
+        state: "disabled",
+        message: "Automatic updates are off; manual checks remain available",
+      });
       return this.getStatus();
     }
     if (!this.supported()) {
       this.update({
         state: "unsupported",
-        message: "Automatic updates run in Windows and macOS builds",
+        message: "Updates are unavailable for this operating system build",
       });
       return this.getStatus();
     }
-    if (this.checkInProgress) return this.getStatus();
+    if (this.checkInProgress || this.downloadInProgress)
+      return this.getStatus();
+    const channel = this.channel();
+    if (!channel) {
+      this.update({
+        state: "unsupported",
+        message: "No update channel exists for this system",
+      });
+      return this.getStatus();
+    }
     this.checkInProgress = true;
-    this.update({ state: "checking", message: "Checking GitHub for updates" });
+    this.update({
+      state: "checking",
+      message: `Checking the ${channel.label} update channel`,
+      channel: channel.label,
+    });
     try {
-      const releaseResponse = await fetch(RELEASE_API, {
+      const apiUrl = `${RELEASE_API_ROOT}/${encodeURIComponent(channel.tag)}`;
+      if (!isTrustedUpdateUrl(true, apiUrl))
+        throw new Error("The update channel address is not trusted");
+      const releaseResponse = await fetch(apiUrl, {
         headers: {
           Accept: "application/vnd.github+json",
           "User-Agent": "osCode-updater",
@@ -111,34 +169,87 @@ export class AppUpdateService {
         assets?: ReleaseAsset[];
       };
       if (release.draft || release.prerelease)
-        throw new Error("The latest GitHub release is not public and stable");
-      const version = String(release.tag_name || "").replace(/^v/i, "");
-      if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version))
-        throw new Error("GitHub returned an invalid release version");
-      if (!isNewerVersion(version, app.getVersion())) {
+        throw new Error("The update channel is not public and stable");
+      if (release.tag_name !== channel.tag)
+        throw new Error("GitHub returned the wrong update channel");
+      const assets = Array.isArray(release.assets) ? release.assets : [];
+      const selected = selectUpdateAsset(
+        assets,
+        app.getVersion(),
+        process.platform,
+        process.arch,
+      );
+      if (!selected) {
+        const hasNativePackage = assets.some((asset) =>
+          Boolean(
+            updateAssetVersion(
+              String(asset.name || ""),
+              process.platform,
+              process.arch,
+            ),
+          ),
+        );
+        if (!hasNativePackage)
+          throw new Error(
+            `No ${channel.label} updater package has been uploaded yet`,
+          );
+        this.availableUpdate = null;
         this.update({
           state: "current",
           message: "osCode is up to date",
           version: app.getVersion(),
+          channel: channel.label,
         });
         return this.getStatus();
       }
-      const wantedName = updateAssetName(version);
-      const asset = release.assets?.find((item) => item.name === wantedName);
-      if (!asset) throw new Error(`${wantedName} is missing from the release`);
+      const name = String(selected.asset.name || "");
+      if (name !== updateAssetName(selected.version))
+        throw new Error("The update package name is invalid");
+      this.availableUpdate = {
+        version: selected.version,
+        name,
+        asset: selected.asset,
+        channel,
+      };
       this.update({
         state: "available",
-        message: `osCode ${version} is available`,
-        version,
+        message: `osCode ${selected.version} is available`,
+        version: selected.version,
+        channel: channel.label,
       });
-      await this.download(version, wantedName, asset);
+      if (this.enabled) await this.downloadAvailable();
     } catch (error) {
       this.update({
         state: "error",
         message: `Update check failed: ${this.cleanError(error)}`,
+        channel: channel.label,
       });
     } finally {
       this.checkInProgress = false;
+    }
+    return this.getStatus();
+  }
+
+  async downloadAvailable() {
+    if (!this.supported()) return this.getStatus();
+    if (this.downloadInProgress) return this.getStatus();
+    if (!this.availableUpdate) {
+      await this.check(true);
+      if (!this.availableUpdate || this.status.state !== "available")
+        return this.getStatus();
+    }
+    this.downloadInProgress = true;
+    try {
+      await this.download(this.availableUpdate);
+    } catch (error) {
+      this.update({
+        state: "error",
+        message: `Update download failed: ${this.cleanError(error)}`,
+        version: this.availableUpdate.version,
+        channel: this.availableUpdate.channel.label,
+      });
+    } finally {
+      this.downloadInProgress = false;
     }
     return this.getStatus();
   }
@@ -156,24 +267,50 @@ export class AppUpdateService {
   }
 
   installReadyUpdate() {
-    if (!this.enabled || this.status.state !== "ready") return false;
+    if (this.status.state !== "ready") return this.getStatus();
     const file = this.downloadedPackage;
-    const expectedExtension = process.platform === "win32" ? ".exe" : ".dmg";
-    if (!file || path.extname(file) !== expectedExtension) return false;
+    const expectedExtension =
+      process.platform === "win32"
+        ? ".exe"
+        : process.platform === "darwin"
+          ? ".dmg"
+          : ".deb";
+    if (!file || path.extname(file).toLowerCase() !== expectedExtension)
+      return this.getStatus();
     const child =
       process.platform === "win32"
-        ? spawn(file, ["/S"], {
+        ? spawn(file, [], {
             detached: true,
             stdio: "ignore",
-            windowsHide: true,
+            windowsHide: false,
           })
-        : spawn("/usr/bin/open", [file], {
-            detached: true,
-            stdio: "ignore",
-          });
+        : process.platform === "darwin"
+          ? spawn("/usr/bin/open", [file], {
+              detached: true,
+              stdio: "ignore",
+            })
+          : spawn("xdg-open", [file], {
+              detached: true,
+              stdio: "ignore",
+            });
     child.unref();
-    this.downloadedPackage = "";
-    return true;
+    this.update({
+      state: "installing",
+      message:
+        process.platform === "win32"
+          ? "The osCode installer is opening; the app will close"
+          : process.platform === "darwin"
+            ? "Installer opened; drag osCode to Applications when prompted"
+            : "Installer opened; approve the package-manager prompt",
+      version: this.status.version,
+      channel: this.status.channel,
+      percent: 100,
+    });
+    if (process.platform === "win32") {
+      const timeout = setTimeout(() => app.quit(), 500);
+      timeout.unref();
+    }
+    return this.getStatus();
   }
 
   dispose() {
@@ -182,38 +319,56 @@ export class AppUpdateService {
   }
 
   private supported() {
-    return app.isPackaged && ["win32", "darwin"].includes(process.platform);
+    return app.isPackaged && Boolean(this.channel());
+  }
+
+  private channel() {
+    return updateChannel(process.platform, process.arch, os.release());
   }
 
   private schedule() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     if (!this.enabled || !this.supported()) return;
-    this.timer = setInterval(() => void this.check(), CHECK_INTERVAL_MS);
+    this.timer = setInterval(() => void this.check(false), CHECK_INTERVAL_MS);
     this.timer.unref();
   }
 
-  private async download(version: string, name: string, asset: ReleaseAsset) {
-    const url = String(asset.browser_download_url || "");
-    const digest = String(asset.digest || "");
-    const expectedBytes = Number(asset.size || 0);
-    if (!this.allowsNetworkUrl(url))
+  private get updatesRoot() {
+    return path.join(app.getPath("userData"), "updates");
+  }
+
+  private get readyMetadataPath() {
+    return path.join(this.updatesRoot, "ready-update.json");
+  }
+
+  private async download(update: AvailableUpdate) {
+    const url = String(update.asset.browser_download_url || "");
+    const digest = String(update.asset.digest || "");
+    const expectedBytes = Number(update.asset.size || 0);
+    if (!isTrustedUpdateUrl(true, url))
       throw new Error("The update download address is not trusted");
     if (!/^sha256:[a-f0-9]{64}$/i.test(digest))
-      throw new Error("The update has no trusted checksum");
+      throw new Error("The update has no trusted SHA-256 checksum");
     if (
       !Number.isSafeInteger(expectedBytes) ||
       expectedBytes < 10_000_000 ||
       expectedBytes > MAX_PACKAGE_BYTES
     )
       throw new Error("The update package size is invalid");
-    const updatesRoot = path.join(app.getPath("userData"), "updates");
-    const target = path.join(updatesRoot, name);
+    const target = path.join(this.updatesRoot, update.name);
     const partial = `${target}.partial`;
-    await fs.mkdir(updatesRoot, { recursive: true });
+    await fs.mkdir(this.updatesRoot, { recursive: true });
     await fs.rm(partial, { force: true });
-    const response = await fetch(url, { redirect: "follow" });
-    if (!response.ok || !response.body || !this.allowsNetworkUrl(response.url))
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(30 * 60_000),
+    });
+    if (
+      !response.ok ||
+      !response.body ||
+      !isTrustedUpdateUrl(true, response.url)
+    )
       throw new Error(`Update download failed (${response.status})`);
     let received = 0;
     let lastPercent = -1;
@@ -230,9 +385,10 @@ export class AppUpdateService {
       lastPercent = percent;
       this.update({
         state: "downloading",
-        message: `Downloading osCode ${version}`,
-        version,
+        message: `Downloading osCode ${update.version}`,
+        version: update.version,
         percent,
+        channel: update.channel.label,
       });
     });
     try {
@@ -243,20 +399,87 @@ export class AppUpdateService {
         throw new Error("The update failed checksum verification");
       await fs.rm(target, { force: true });
       await fs.rename(partial, target);
+      const ready: ReadyUpdate = {
+        version: update.version,
+        name: update.name,
+        digest: digest.toLowerCase(),
+        bytes: expectedBytes,
+        channelTag: update.channel.tag,
+      };
+      await fs.writeFile(
+        this.readyMetadataPath,
+        `${JSON.stringify(ready, null, 2)}\n`,
+        { mode: 0o600 },
+      );
       this.downloadedPackage = target;
       this.update({
         state: "ready",
-        message:
-          process.platform === "win32"
-            ? `osCode ${version} will install when you close osCode`
-            : `osCode ${version} will open when you close osCode`,
-        version,
+        message: `osCode ${update.version} is downloaded and ready`,
+        version: update.version,
         percent: 100,
+        channel: update.channel.label,
       });
     } catch (error) {
       await fs.rm(partial, { force: true }).catch(() => {});
       throw error;
     }
+  }
+
+  private async restoreReadyUpdate() {
+    try {
+      const raw = JSON.parse(
+        await fs.readFile(this.readyMetadataPath, "utf8"),
+      ) as Partial<ReadyUpdate>;
+      const channel = this.channel();
+      const version = String(raw.version || "");
+      const name = String(raw.name || "");
+      const digest = String(raw.digest || "");
+      const bytes = Number(raw.bytes || 0);
+      if (
+        !channel ||
+        raw.channelTag !== channel.tag ||
+        !isNewerVersion(version, app.getVersion()) ||
+        name !== updateAssetName(version) ||
+        !/^sha256:[a-f0-9]{64}$/i.test(digest) ||
+        !Number.isSafeInteger(bytes)
+      )
+        throw new Error("Stale update metadata");
+      const file = path.join(this.updatesRoot, name);
+      const stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== bytes)
+        throw new Error("Stale update package");
+      const hash = createHash("sha256");
+      await pipeline(createReadStream(file), hash);
+      if (`sha256:${hash.digest("hex")}`.toLowerCase() !== digest.toLowerCase())
+        throw new Error("Stored update checksum mismatch");
+      this.downloadedPackage = file;
+      this.update({
+        state: "ready",
+        message: `osCode ${version} is downloaded and ready`,
+        version,
+        percent: 100,
+        channel: channel.label,
+      });
+      return true;
+    } catch {
+      await this.clearReadyUpdate();
+      return false;
+    }
+  }
+
+  private async clearReadyUpdate() {
+    this.downloadedPackage = "";
+    try {
+      const raw = JSON.parse(
+        await fs.readFile(this.readyMetadataPath, "utf8"),
+      ) as Partial<ReadyUpdate>;
+      const name = String(raw.name || "");
+      if (name && name === path.basename(name))
+        await fs.rm(path.join(this.updatesRoot, name), { force: true });
+    } catch {
+      // Missing or invalid metadata needs only the metadata cleanup below.
+    }
+    await fs.rm(this.readyMetadataPath, { force: true }).catch(() => {});
   }
 
   private update(next: Omit<AppUpdateStatus, "currentVersion">) {

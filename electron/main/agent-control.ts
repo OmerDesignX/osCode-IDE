@@ -282,6 +282,49 @@ const inspectScript = `(() => {
   });
 })()`;
 
+const webMcpToolsScript = `(async () => {
+  const context = document.modelContext;
+  if (!context || typeof context.getTools !== 'function') {
+    return JSON.stringify({ supported: false, origin: location.origin, tools: [] });
+  }
+  const tools = await context.getTools();
+  return JSON.stringify({
+    supported: true,
+    origin: location.origin,
+    tools: [...tools].slice(0, 80).map((tool) => ({
+      name: String(tool.name || '').slice(0, 160),
+      title: String(tool.title || '').slice(0, 240),
+      description: String(tool.description || '').slice(0, 1000),
+      inputSchema: String(tool.inputSchema || '{}').slice(0, 12000),
+      readOnlyHint: tool.readOnlyHint === true,
+      untrustedContentHint: tool.untrustedContentHint !== false,
+      origin: String(tool.origin || location.origin).slice(0, 500),
+    })),
+  });
+})()`;
+
+function webMcpCallScript(rawName: string, rawArguments: unknown) {
+  const name = JSON.stringify(rawName.slice(0, 160));
+  const argumentsValue = JSON.stringify(rawArguments ?? {});
+  return `(async () => {
+    const context = document.modelContext;
+    if (!context || typeof context.getTools !== 'function' || typeof context.executeTool !== 'function')
+      throw new Error('This page does not expose WebMCP tools');
+    const tools = [...await context.getTools()];
+    const tool = tools.find((candidate) => candidate.name === ${name});
+    if (!tool) throw new Error('The requested WebMCP tool is no longer available');
+    if (tool.readOnlyHint !== true)
+      throw new Error('osCode only permits WebMCP tools explicitly marked read-only');
+    const result = await context.executeTool(tool, ${argumentsValue});
+    return JSON.stringify({
+      tool: tool.name,
+      origin: String(tool.origin || location.origin).slice(0, 500),
+      result,
+      untrusted: true,
+    });
+  })()`;
+}
+
 function targetScript(
   rawQuery: string,
   action: "point" | "click" | "type",
@@ -706,6 +749,31 @@ export class AgentControlService {
     if (!window || window.isDestroyed())
       throw new Error("Open the agent browser first");
     return execute(window.webContents, inspectScript);
+  }
+
+  async listWebMcpTools() {
+    const window = this.browser;
+    if (!window || window.isDestroyed())
+      throw new Error("Open the agent browser first");
+    return execute(window.webContents, webMcpToolsScript);
+  }
+
+  async callWebMcpTool(name: string, argumentsValue: unknown) {
+    const window = this.browser;
+    if (!window || window.isDestroyed())
+      throw new Error("Open the agent browser first");
+    const result = await execute(
+      window.webContents,
+      webMcpCallScript(name, argumentsValue),
+    );
+    this.emit({
+      kind: "browser",
+      label: `WebMCP · ${name}`,
+      active: true,
+      network: window.webContents.getURL().startsWith("https:"),
+      url: window.webContents.getURL(),
+    });
+    return result;
   }
 
   async browserSnapshot() {

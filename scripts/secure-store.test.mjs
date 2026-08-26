@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   appLocalKeyProtector,
-  migrateWrappedKeyToAppLocal,
+  archiveLegacySecureStore,
   SecureDataStore,
 } from "../dist-electron/main/secure-store.js";
 
@@ -84,28 +84,28 @@ test("app-local encryption persists without an operating-system key store", asyn
   );
 });
 
-test("an existing wrapped device key migrates once to app-local protection", async (t) => {
+test("an OS-wrapped legacy key is archived without contacting an OS key store", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-key-migrate-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const secureRoot = path.join(root, "secure");
   const keyPath = path.join(secureRoot, "device-key.oscode-key");
-  const key = Buffer.alloc(32, 0x4a);
   await fs.mkdir(secureRoot, { recursive: true });
+  await fs.writeFile(keyPath, Buffer.from("legacy-os-wrapped-device-key"));
   await fs.writeFile(
-    keyPath,
-    Buffer.concat([
-      Buffer.from("legacy:"),
-      Buffer.from(key.map((byte) => byte ^ 0xa5)),
-    ]),
+    path.join(secureRoot, "private.oscode-data"),
+    "ciphertext",
   );
+  const archiveName = await archiveLegacySecureStore(root);
+  assert.match(archiveName, /^secure-legacy-/);
+  await assert.rejects(fs.access(secureRoot));
   assert.equal(
-    await migrateWrappedKeyToAppLocal(root, (wrapped) =>
-      Buffer.from(wrapped.subarray(7).map((byte) => byte ^ 0xa5)),
+    await fs.readFile(
+      path.join(root, archiveName, "private.oscode-data"),
+      "utf8",
     ),
-    true,
+    "ciphertext",
   );
-  assert.deepEqual(await fs.readFile(keyPath), key);
-  assert.equal(await migrateWrappedKeyToAppLocal(root, () => key), false);
+  assert.equal(await archiveLegacySecureStore(root), false);
 });
 
 test("legacy plaintext prompt artefacts are removed without broad cleanup", async (t) => {

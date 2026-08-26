@@ -73,7 +73,7 @@ Ordinary users should not be expected to compile osCode. Once a Linux package is
 sudo apt install ./<downloaded-osCode-package>.deb
 ```
 
-Contributors can run the source checkout with `pnpm dev`. Maintainers building distributable packages should use a current x64 Debian or Ubuntu computer or virtual machine with a graphical session, Git, Node.js 22 or newer, pnpm 11.19.0, standard native build tools, `xvfb`, and the Electron Builder prerequisites for Debian packages. Snap creation also requires the Snap packaging tools. Linux secure storage requires a Secret Service or KWallet backend; osCode intentionally refuses Electron's unprotected `basic_text` fallback.
+Contributors can run the source checkout with `pnpm dev`. Maintainers building distributable packages should use a current x64 Debian or Ubuntu computer or virtual machine with a graphical session, Git, Node.js 22 or newer, pnpm 11.19.0, standard native build tools, `xvfb`, and the Electron Builder prerequisites for Debian packages. Snap creation also requires the Snap packaging tools. As on macOS and Windows, Linux chats and settings use authenticated encryption in application data with an app-managed local key and do not require an operating-system key store.
 
 From a clean repository checkout, run the one-command Debian package pipeline:
 
@@ -102,6 +102,26 @@ Most osCode functionality is available on Linux, including the editor, terminal,
 5. Review the release notes and publish the draft.
 
 The release must not remain a draft for installed clients to discover it, and its semantic version must be newer than the version inside an installed app.
+
+## Application update channels
+
+The normal versioned GitHub release remains the public download page and release history. In addition, osCode uses permanent GitHub release tags as operating-system update channels:
+
+| Installed app       | Permanent updater tag         | Required asset name              |
+| ------------------- | ----------------------------- | -------------------------------- |
+| macOS Apple silicon | `macOS-Apple-Silicon-Updater` | `osCode-<version>-mac-arm64.dmg` |
+| macOS Intel         | `macOS-Intel-Updater`         | `osCode-<version>-mac-x64.dmg`   |
+| Windows 11 x64      | `Windows-11-Updater`          | `osCode-Setup-<version>.exe`     |
+| Windows 10 x64      | `Windows-10-Updater`          | `osCode-Setup-<version>.exe`     |
+| Debian/Ubuntu x64   | `Linux-Updater`               | `osCode-<version>-x64.deb`       |
+
+The full installer is also the updater payload; no second patch format is required. Upload the same Windows installer to both Windows channels until their builds genuinely diverge. Never upload an Intel DMG to the Apple-silicon channel or an arm64 DMG to the Intel channel. The Linux channel is the public `Linux-Updater` release.
+
+Keep each permanent channel public, non-draft, and non-prerelease. Do not rename generated files: the installed app reads the semantic version from the filename and selects the highest newer compatible asset on its own channel. Older versioned assets can remain on the channel. GitHub must report a `sha256` digest for every asset; osCode verifies that digest and the exact byte count before offering installation.
+
+When automatic updates are enabled, osCode checks its channel in the background and downloads a newer verified package. It never installs merely because the app closes. A permanent top-bar action and a notification let the user choose when to install; dismissing the reminder suppresses that exact version, while Settings always retains manual Check, Download, and Install controls. When automatic updates are disabled, a manual Update action performs the network check only after the user clicks it.
+
+Windows opens the NSIS installer, which replaces the existing installation after the user approves it. Linux opens the verified `.deb` in the system package manager. Because the macOS packages are intentionally unsigned and unnotarized, osCode can download and verify the DMG but cannot silently replace the installed application: it opens the DMG and the user drags osCode to Applications. A silent in-place macOS updater would require a signed and notarized update chain.
 
 ## Unsigned macOS releases
 

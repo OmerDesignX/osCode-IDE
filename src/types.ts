@@ -5,7 +5,7 @@ export type TreeEntry = {
   children?: TreeEntry[];
 };
 export type EditorPreferences = {
-  version: 10;
+  version: 11;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
@@ -32,6 +32,7 @@ export type EditorPreferences = {
   autoSave: boolean;
   autoUpdateEnabled: boolean;
   autoUpdatePromptAnswered: boolean;
+  autoUpdateDismissedVersion: string;
   lastProject: string;
 };
 export type AppUpdateStatus = {
@@ -42,6 +43,7 @@ export type AppUpdateStatus = {
     | "available"
     | "downloading"
     | "ready"
+    | "installing"
     | "current"
     | "error"
     | "unsupported";
@@ -49,11 +51,19 @@ export type AppUpdateStatus = {
   currentVersion: string;
   version?: string;
   percent?: number;
+  channel?: string;
 };
 export type AiEngine = "llamacpp" | "ollama" | "pytorch" | "mlx";
 export type AiInferenceHardware = "auto" | "cpu" | "gpu";
 export type AiEditMode = "ask" | "auto" | "read-only";
 export type AiTerminalMode = "ask" | "auto";
+export type McpServerConfig = {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
+};
 export type AiModel = {
   id: string;
   name: string;
@@ -89,8 +99,12 @@ export type AiPermissionKind =
   | "packages.install"
   | "debug.run"
   | "web.search"
+  | "network.request"
   | "browser.control"
   | "computer.control"
+  | "computer.external"
+  | "mcp.call"
+  | "platformio.install"
   | "platformio.run";
 export type AiPermissionScope = "once" | "conversation" | "always";
 export type AiPermissionGrant = {
@@ -353,12 +367,20 @@ declare global {
       loadPreferences(): Promise<EditorPreferences>;
       savePreferences(preferences: EditorPreferences): Promise<boolean>;
       openSecureData(): Promise<string>;
+      openExternalUrl(url: string): Promise<string>;
+      listMcpServers(): Promise<McpServerConfig[]>;
+      saveMcpServer(
+        server: Omit<McpServerConfig, "id"> & { id?: string },
+      ): Promise<McpServerConfig>;
+      removeMcpServer(id: string): Promise<boolean>;
       onPreferencesChanged(
         cb: (preferences: EditorPreferences) => void,
       ): () => void;
       appUpdateStatus(): Promise<AppUpdateStatus>;
       setAppAutoUpdate(enabled: boolean): Promise<AppUpdateStatus>;
       checkForAppUpdate(): Promise<AppUpdateStatus>;
+      downloadAppUpdate(): Promise<AppUpdateStatus>;
+      installAppUpdate(): Promise<AppUpdateStatus>;
       onAppUpdateStatus(cb: (status: AppUpdateStatus) => void): () => void;
       setZoomFactor(factor: number): void;
       platformioState(): Promise<PlatformioState>;

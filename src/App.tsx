@@ -19,6 +19,7 @@ import type {
   EditorPreferences,
   GitCommit,
   GitState,
+  McpServerConfig,
   ProjectSearchResult,
   PythonPackage,
   PythonRuntime,
@@ -34,7 +35,7 @@ type AppNotification = {
   id: string;
   message: string;
   createdAt: number;
-  kind?: "auto-update-prompt" | "message";
+  kind?: "auto-update-prompt" | "app-update" | "message";
 };
 type FileComparison = {
   leftPath: string;
@@ -389,7 +390,7 @@ export function App() {
     [settingsOpen, setSettingsOpen] = useState(false),
     [platformioOpen, setPlatformioOpen] = useState(false),
     [advancedSection, setAdvancedSection] = useState<
-      "menu" | "debug" | "intelligence" | "runtimes"
+      "menu" | "debug" | "intelligence" | "runtimes" | "mcp"
     >("menu"),
     [project, setProject] = useState<ProjectState | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]),
@@ -493,6 +494,7 @@ export function App() {
     [autoSave, setAutoSave] = useState(true),
     [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false),
     [autoUpdatePromptAnswered, setAutoUpdatePromptAnswered] = useState(false),
+    [autoUpdateDismissedVersion, setAutoUpdateDismissedVersion] = useState(""),
     [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>({
       state: "disabled",
       message: "Automatic updates are off",
@@ -514,7 +516,11 @@ export function App() {
     [commitTagName, setCommitTagName] = useState(""),
     [saveHistoryOpen, setSaveHistoryOpen] = useState(false),
     [saveHistory, setSaveHistory] = useState<SaveHistoryEntry[]>([]),
-    [saveHistoryLoading, setSaveHistoryLoading] = useState(false);
+    [saveHistoryLoading, setSaveHistoryLoading] = useState(false),
+    [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]),
+    [mcpName, setMcpName] = useState(""),
+    [mcpCommand, setMcpCommand] = useState(""),
+    [mcpArgs, setMcpArgs] = useState("");
   const [, setMonacoReady] = useState(false);
   const monacoRef = useRef<
     typeof import("monaco-editor/editor/editor.api") | null
@@ -528,6 +534,8 @@ export function App() {
   const savingPaths = useRef(new Set<string>());
   const externalConflictPaths = useRef(new Set<string>());
   const menuActions = useRef<Record<string, () => void>>({});
+  const autoUpdateEnabledRef = useRef(false);
+  const autoUpdateDismissedVersionRef = useRef("");
   const shortcutModifier = /Mac/i.test(navigator.platform) ? "⌘" : "Ctrl";
   const active = tabs.find((t) => t.path === activePath);
   const splitLeftTab =
@@ -598,10 +606,14 @@ export function App() {
     [preferencesReady],
   );
   useEffect(() => {
+    autoUpdateEnabledRef.current = autoUpdateEnabled;
+    autoUpdateDismissedVersionRef.current = autoUpdateDismissedVersion;
+  }, [autoUpdateEnabled, autoUpdateDismissedVersion]);
+  useEffect(() => {
     void window.oscode.appUpdateStatus().then(setUpdateStatus);
     return window.oscode.onAppUpdateStatus((status) => {
       setUpdateStatus(status);
-      if (["checking", "available", "downloading"].includes(status.state)) {
+      if (["checking", "downloading"].includes(status.state)) {
         setActivity({
           kind: "download",
           label: status.message,
@@ -618,15 +630,33 @@ export function App() {
           ? null
           : current,
       );
-      if (status.state === "ready" || status.state === "error")
+      const updateReminder =
+        (status.state === "ready" ||
+          (status.state === "available" && !autoUpdateEnabledRef.current)) &&
+        status.version &&
+        status.version !== autoUpdateDismissedVersionRef.current;
+      if (updateReminder || status.state === "error")
         setNotifications((current) => {
           const id = `app-update-${status.state}-${status.version || "current"}`;
-          if (current.some((item) => item.id === id)) return current;
+          const notification: AppNotification = {
+            id,
+            kind: updateReminder ? "app-update" : "message",
+            message: status.message,
+            createdAt: Date.now(),
+          };
+          if (current.some((item) => item.id === id))
+            return current.map((item) =>
+              item.id === id ? notification : item,
+            );
           return [
-            ...current.slice(-39),
-            { id, message: status.message, createdAt: Date.now() },
+            ...(updateReminder
+              ? current.filter((item) => item.kind !== "app-update")
+              : current
+            ).slice(-39),
+            notification,
           ];
         });
+      if (updateReminder) setNotificationsOpen(true);
     });
   }, []);
   useEffect(() => {
@@ -1194,6 +1224,52 @@ export function App() {
     }
   };
   const save = async () => (active ? saveTab(active) : false);
+  const refreshMcpServers = async () => {
+    try {
+      setMcpServers(await window.oscode.listMcpServers());
+    } catch (error) {
+      setNotice(errorMessage(error, "Could not load MCP servers"));
+    }
+  };
+  const saveMcpServer = async () => {
+    try {
+      await window.oscode.saveMcpServer({
+        name: mcpName,
+        command: mcpCommand,
+        args: mcpArgs
+          .split(/\r?\n/)
+          .map((argument) => argument.trim())
+          .filter(Boolean),
+        enabled: true,
+      });
+      setMcpName("");
+      setMcpCommand("");
+      setMcpArgs("");
+      await refreshMcpServers();
+      setNotice("MCP server saved in encrypted app storage");
+    } catch (error) {
+      setNotice(errorMessage(error, "Could not save MCP server"));
+    }
+  };
+  const updateMcpServer = async (server: McpServerConfig, enabled: boolean) => {
+    try {
+      await window.oscode.saveMcpServer({ ...server, enabled });
+      await refreshMcpServers();
+    } catch (error) {
+      setNotice(errorMessage(error, "Could not update MCP server"));
+    }
+  };
+  const removeMcpServer = async (id: string) => {
+    try {
+      await window.oscode.removeMcpServer(id);
+      await refreshMcpServers();
+    } catch (error) {
+      setNotice(errorMessage(error, "Could not remove MCP server"));
+    }
+  };
+  useEffect(() => {
+    if (advanced && advancedSection === "mcp") void refreshMcpServers();
+  }, [advanced, advancedSection]);
   useEffect(() => {
     if (!autoSave || !preferencesReady) return;
     const dirtyTabs = tabs.filter((tab) => tab.content !== tab.saved);
@@ -1494,6 +1570,9 @@ export function App() {
         setAutoSave(preferences.autoSave);
         setAutoUpdateEnabled(preferences.autoUpdateEnabled);
         setAutoUpdatePromptAnswered(preferences.autoUpdatePromptAnswered);
+        setAutoUpdateDismissedVersion(preferences.autoUpdateDismissedVersion);
+        autoUpdateDismissedVersionRef.current =
+          preferences.autoUpdateDismissedVersion;
         if (!preferences.autoUpdatePromptAnswered) {
           setNotifications((current) => [
             ...current.filter((item) => item.id !== "auto-update-opt-in"),
@@ -1542,7 +1621,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 10,
+      version: 11,
       theme,
       locale,
       sidebarSide,
@@ -1569,6 +1648,7 @@ export function App() {
       autoSave,
       autoUpdateEnabled,
       autoUpdatePromptAnswered,
+      autoUpdateDismissedVersion,
       lastProject,
     };
     const timeout = window.setTimeout(() => {
@@ -1605,6 +1685,7 @@ export function App() {
     autoSave,
     autoUpdateEnabled,
     autoUpdatePromptAnswered,
+    autoUpdateDismissedVersion,
     lastProject,
   ]);
   const installRuntime = async (version: string) => {
@@ -1909,6 +1990,7 @@ export function App() {
   const tr = (english: string, arabic: string) =>
     locale === "ar" ? arabic : english;
   const chooseAutomaticUpdates = async (enabled: boolean) => {
+    autoUpdateEnabledRef.current = enabled;
     setAutoUpdateEnabled(enabled);
     setAutoUpdatePromptAnswered(true);
     setNotifications((current) =>
@@ -1925,6 +2007,54 @@ export function App() {
       setNotice(errorMessage(error, "Update preference could not save"));
     }
   };
+  const runAppUpdateAction = async () => {
+    if (["checking", "downloading", "installing"].includes(updateStatus.state))
+      return;
+    try {
+      const status =
+        updateStatus.state === "ready"
+          ? await window.oscode.installAppUpdate()
+          : updateStatus.state === "available"
+            ? await window.oscode.downloadAppUpdate()
+            : await window.oscode.checkForAppUpdate();
+      setUpdateStatus(status);
+      if (["available", "ready", "installing"].includes(status.state))
+        setNotificationsOpen(true);
+    } catch (error) {
+      setNotice(errorMessage(error, "Update action failed"));
+    }
+  };
+  const dismissUpdateReminder = () => {
+    const version = updateStatus.version || "";
+    if (version) {
+      autoUpdateDismissedVersionRef.current = version;
+      setAutoUpdateDismissedVersion(version);
+    }
+    setNotifications((current) =>
+      current.filter((item) => item.kind !== "app-update"),
+    );
+    setNotificationsOpen(false);
+  };
+  const updateActionLabel =
+    updateStatus.state === "ready"
+      ? "Install update"
+      : updateStatus.state === "available"
+        ? "Download update"
+        : updateStatus.state === "downloading"
+          ? `Update ${updateStatus.percent || 0}%`
+          : updateStatus.state === "checking"
+            ? "Checking updates"
+            : updateStatus.state === "installing"
+              ? "Installer opened"
+              : "Update";
+  const updateReminderDismissed = Boolean(
+    updateStatus.version && updateStatus.version === autoUpdateDismissedVersion,
+  );
+  const showUpdateAction =
+    !updateReminderDismissed &&
+    ["available", "downloading", "ready", "installing"].includes(
+      updateStatus.state,
+    );
   return (
     <div
       className={`app ${theme}`}
@@ -2170,6 +2300,24 @@ export function App() {
               <span className="divider" />
             </>
           )}
+          {showUpdateAction && (
+            <IconButton
+              icon={
+                updateStatus.state === "ready"
+                  ? "download-cloud"
+                  : updateStatus.state === "downloading"
+                    ? "loader"
+                    : "refresh-cw"
+              }
+              label={updateActionLabel}
+              className={`app-update-action ${updateStatus.state}`}
+              active={updateStatus.state === "ready"}
+              disabled={["checking", "downloading", "installing"].includes(
+                updateStatus.state,
+              )}
+              onClick={() => void runAppUpdateAction()}
+            />
+          )}
           <IconButton
             icon="bell"
             label="Notifications"
@@ -2267,13 +2415,39 @@ export function App() {
                       <button
                         onClick={() => void chooseAutomaticUpdates(false)}
                       >
-                        Keep off
+                        Don't show again
                       </button>
                       <button
                         className="primary"
                         onClick={() => void chooseAutomaticUpdates(true)}
                       >
                         Turn on
+                      </button>
+                    </div>
+                  ) : item.kind === "app-update" ? (
+                    <div className="notification-choice update-actions">
+                      <button
+                        onClick={() =>
+                          setNotifications((current) =>
+                            current.filter((entry) => entry.id !== item.id),
+                          )
+                        }
+                      >
+                        Later
+                      </button>
+                      <button onClick={dismissUpdateReminder}>
+                        Don't show again
+                      </button>
+                      <button
+                        className="primary"
+                        disabled={[
+                          "checking",
+                          "downloading",
+                          "installing",
+                        ].includes(updateStatus.state)}
+                        onClick={() => void runAppUpdateAction()}
+                      >
+                        {updateActionLabel}
                       </button>
                     </div>
                   ) : (
@@ -4060,27 +4234,44 @@ export function App() {
                 <p className="settings-note" aria-live="polite">
                   {updateStatus.message}
                 </p>
-                {autoUpdateEnabled && (
-                  <button
-                    className="settings-update-check"
-                    disabled={
-                      updateStatus.state === "checking" ||
-                      updateStatus.state === "downloading"
-                    }
-                    onClick={async () => {
-                      try {
-                        setUpdateStatus(
-                          await window.oscode.checkForAppUpdate(),
-                        );
-                      } catch (error) {
-                        setNotice(errorMessage(error, "Update check failed"));
-                      }
-                    }}
-                  >
-                    <FeatherIcon icon="refresh-cw" size="15" />
-                    {tr("Check now", "تحقق الآن")}
-                  </button>
+                {updateStatus.channel && (
+                  <p className="settings-update-channel">
+                    Channel: {updateStatus.channel}
+                  </p>
                 )}
+                {updateStatus.state === "downloading" && (
+                  <div
+                    className="settings-update-progress"
+                    role="progressbar"
+                    aria-label="Downloading osCode update"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={updateStatus.percent || 0}
+                  >
+                    <i
+                      style={{
+                        width: `${Math.max(0, Math.min(100, updateStatus.percent || 0))}%`,
+                      }}
+                    />
+                  </div>
+                )}
+                <button
+                  className="settings-update-check"
+                  disabled={["checking", "downloading", "installing"].includes(
+                    updateStatus.state,
+                  )}
+                  onClick={() => void runAppUpdateAction()}
+                >
+                  <FeatherIcon
+                    icon={
+                      updateStatus.state === "ready"
+                        ? "download-cloud"
+                        : "refresh-cw"
+                    }
+                    size="15"
+                  />
+                  {updateActionLabel}
+                </button>
               </section>
               <section>
                 <span className="settings-label">
@@ -4120,7 +4311,9 @@ export function App() {
             />
           )}
           {advanced && (
-            <div className="advanced-dock">
+            <div
+              className={`advanced-dock${advancedSection === "mcp" ? " advanced-dock-wide" : ""}`}
+            >
               <div className="advanced-title">
                 {advancedSection !== "menu" && (
                   <button onClick={() => setAdvancedSection("menu")}>
@@ -4146,6 +4339,7 @@ export function App() {
                   ["activity", "debug", tr("Debug", "التصحيح")],
                   ["zap", "intelligence", tr("Code help", "مساعدة الكود")],
                   ["cpu", "runtimes", tr("Python", "Python")],
+                  ["share-2", "mcp", "MCP"],
                 ].map(([i, key, x]) => (
                   <button
                     key={x}
@@ -4238,6 +4432,80 @@ export function App() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+              {advancedSection === "mcp" && (
+                <div className="advanced-content mcp-settings">
+                  <p>
+                    Add local stdio MCP servers. Configuration is encrypted in
+                    osCode app data. Servers are executable programs, so the
+                    agent asks before every start or tool call and only accepts
+                    tools marked read-only.
+                  </p>
+                  <label>
+                    <span>Name</span>
+                    <input
+                      value={mcpName}
+                      onChange={(event) => setMcpName(event.target.value)}
+                      placeholder="Local documentation"
+                    />
+                  </label>
+                  <label>
+                    <span>Command</span>
+                    <input
+                      value={mcpCommand}
+                      onChange={(event) => setMcpCommand(event.target.value)}
+                      placeholder="npx"
+                    />
+                  </label>
+                  <label>
+                    <span>Arguments · one per line</span>
+                    <textarea
+                      value={mcpArgs}
+                      onChange={(event) => setMcpArgs(event.target.value)}
+                      placeholder={"-y\n@your/mcp-server"}
+                      rows={3}
+                    />
+                  </label>
+                  <button
+                    className="primary advanced-action"
+                    disabled={!mcpName.trim() || !mcpCommand.trim()}
+                    onClick={saveMcpServer}
+                  >
+                    <FeatherIcon icon="plus" size="14" />
+                    Add MCP server
+                  </button>
+                  <div className="mcp-server-list">
+                    {mcpServers.map((server) => (
+                      <article key={server.id}>
+                        <div>
+                          <b>{server.name}</b>
+                          <code>
+                            {server.command} {server.args.join(" ")}
+                          </code>
+                        </div>
+                        <button
+                          onClick={() =>
+                            updateMcpServer(server, !server.enabled)
+                          }
+                        >
+                          {server.enabled ? "Enabled" : "Disabled"}
+                        </button>
+                        <IconButton
+                          icon="trash-2"
+                          label={`Remove ${server.name}`}
+                          onClick={() => removeMcpServer(server.id)}
+                        />
+                      </article>
+                    ))}
+                    {!mcpServers.length && (
+                      <small>No MCP servers configured.</small>
+                    )}
+                  </div>
+                  <p>
+                    WebMCP is available automatically in the Agent Browser for
+                    pages that expose read-only WebMCP tools.
+                  </p>
                 </div>
               )}
             </div>

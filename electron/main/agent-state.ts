@@ -22,8 +22,12 @@ const permissionKinds = new Set<AiPermissionKind>([
   "packages.install",
   "debug.run",
   "web.search",
+  "network.request",
   "browser.control",
   "computer.control",
+  "computer.external",
+  "mcp.call",
+  "platformio.install",
   "platformio.run",
 ]);
 const permissionScopes = new Set<AiPermissionScope>([

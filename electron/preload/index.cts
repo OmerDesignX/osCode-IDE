@@ -23,6 +23,12 @@ contextBridge.exposeInMainWorld("oscode", {
   savePreferences: (preferences: unknown) =>
     ipcRenderer.invoke("preferences:set", preferences),
   openSecureData: () => ipcRenderer.invoke("app:open-secure-data"),
+  openExternalUrl: (url: string) =>
+    ipcRenderer.invoke("app:open-external-url", url),
+  listMcpServers: () => ipcRenderer.invoke("mcp:list-servers"),
+  saveMcpServer: (server: unknown) =>
+    ipcRenderer.invoke("mcp:save-server", server),
+  removeMcpServer: (id: string) => ipcRenderer.invoke("mcp:remove-server", id),
   onPreferencesChanged: (callback: (preferences: unknown) => void) => {
     const listener = (_event: unknown, preferences: unknown) =>
       callback(preferences);
@@ -33,6 +39,8 @@ contextBridge.exposeInMainWorld("oscode", {
   setAppAutoUpdate: (enabled: boolean) =>
     ipcRenderer.invoke("updates:set-enabled", enabled),
   checkForAppUpdate: () => ipcRenderer.invoke("updates:check"),
+  downloadAppUpdate: () => ipcRenderer.invoke("updates:download"),
+  installAppUpdate: () => ipcRenderer.invoke("updates:install"),
   onAppUpdateStatus: (callback: (status: unknown) => void) => {
     const listener = (_event: unknown, status: unknown) => callback(status);
     ipcRenderer.on("updates:status-changed", listener);

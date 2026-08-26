@@ -26,6 +26,23 @@ export function assertSafeOutboundText(
   return text;
 }
 
+export function assertSafeExternalPayload(value: unknown) {
+  const text = JSON.stringify(value ?? {});
+  if (text.length > 8_000)
+    throw new Error("External tool input was blocked because it is too large");
+  if (
+    secretPattern.test(text) ||
+    localPathPattern.test(text) ||
+    contactPattern.test(text) ||
+    /data:(?:image|audio|video|application)\//i.test(text) ||
+    /(?:^|["'\s])(?:function|class|import|export)\s+[A-Za-z_$]/i.test(text)
+  )
+    throw new Error(
+      "External tool input was blocked to protect project and personal data",
+    );
+  return value;
+}
+
 export function assertReceiveOnlyPublicUrl(raw: string) {
   const url = new URL(raw);
   if (url.protocol !== "https:" || url.username || url.password)

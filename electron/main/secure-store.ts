@@ -58,11 +58,12 @@ export function appLocalKeyProtector(): KeyProtector {
   };
 }
 
-/** Convert an existing OS-wrapped device key once, preserving encrypted data. */
-export async function migrateWrappedKeyToAppLocal(
-  userData: string,
-  legacyUnprotect: (value: Buffer) => Promise<Buffer> | Buffer,
-) {
+/**
+ * Stop using an older OS-wrapped key without contacting the operating-system
+ * credential store. The unreadable encrypted folder is retained as an inert,
+ * owner-only archive and a fresh app-local store is created on this launch.
+ */
+export async function archiveLegacySecureStore(userData: string) {
   const secureRoot = path.join(userData, "secure");
   const target = path.join(secureRoot, "device-key.oscode-key");
   let wrapped: Buffer;
@@ -73,21 +74,14 @@ export async function migrateWrappedKeyToAppLocal(
     throw error;
   }
   if (wrapped.length === 32) return false;
-  const key = await legacyUnprotect(wrapped);
-  try {
-    if (key.length !== 32)
-      throw new Error("The existing secure storage key could not be migrated");
-    await fs.mkdir(secureRoot, { recursive: true, mode: 0o700 });
-    await fs.chmod(secureRoot, 0o700).catch(() => undefined);
-    const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    await fs.writeFile(temporary, key, { mode: 0o600 });
-    await fs.chmod(temporary, 0o600).catch(() => undefined);
-    await fs.rename(temporary, target);
-    return true;
-  } finally {
-    zero(key);
-    zero(wrapped);
-  }
+  const archive = path.join(
+    userData,
+    `secure-legacy-${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`,
+  );
+  await fs.rename(secureRoot, archive);
+  await fs.chmod(archive, 0o700).catch(() => undefined);
+  zero(wrapped);
+  return path.basename(archive);
 }
 
 export class SecureDataStore {

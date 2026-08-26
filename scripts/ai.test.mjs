@@ -48,6 +48,7 @@ async function fixture({
   grants = true,
   status = () => undefined,
   installPythonPackages,
+  serviceOptions = {},
 } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-ai-test-"));
   const root = path.join(base, "project");
@@ -64,6 +65,7 @@ async function fixture({
     getUv: async () => "uv",
     ...(installPythonPackages ? { installPythonPackages } : {}),
     status,
+    ...serviceOptions,
   });
   const chat = await service.createChat();
   if (grants) {
@@ -82,6 +84,63 @@ async function fixture({
   }
   return { root, base, service, chat };
 }
+
+test("network, external desktop, and MCP actions always need exact one-shot approval", async (t) => {
+  const { base, service, chat } = await fixture({
+    serviceOptions: {
+      computerInspect: async (target) => `inspected ${target}`,
+      mcpList: async (serverId) => `listed ${serverId || "all"}`,
+      mcpCall: async (serverId, name) => `called ${serverId}:${name}`,
+    },
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const baseArgs = ["auto", new Set(), [], true, true, chat.id, true, true];
+
+  await assert.rejects(
+    service.runTool(
+      { name: "web_search", arguments: { query: "Electron accessibility" } },
+      ...baseArgs,
+    ),
+    (error) => {
+      assert.equal(error.kind, "network.request");
+      return true;
+    },
+  );
+  await assert.rejects(
+    service.runTool(
+      { name: "computer_inspect", arguments: { target: "Preview" } },
+      ...baseArgs,
+    ),
+    (error) => {
+      assert.equal(error.kind, "computer.external");
+      return true;
+    },
+  );
+  await assert.rejects(
+    service.runTool(
+      { name: "mcp_list_tools", arguments: { server_id: "docs" } },
+      ...baseArgs,
+    ),
+    (error) => {
+      assert.equal(error.kind, "mcp.call");
+      return true;
+    },
+  );
+  await assert.rejects(
+    service.runTool(
+      {
+        name: "mcp_call_tool",
+        arguments: {
+          server_id: "docs",
+          name: "lookup",
+          arguments: { path: "/Users/person/private.ts" },
+        },
+      },
+      ...baseArgs,
+    ),
+    /blocked to protect project and personal data/,
+  );
+});
 
 test("Ollama streams reasoning, answer progress, and native tool calls", async (t) => {
   const statuses = [];
@@ -170,6 +229,12 @@ test("permissions and autonomous execution are identical across local engines", 
   for (const engine of ["llamacpp", "mlx", "pytorch", "ollama"]) {
     const { root, base, service, chat } = await fixture();
     t.after(() => fs.rm(base, { recursive: true, force: true }));
+    await service.grantPermission(
+      "terminal.run",
+      "conversation",
+      chat.id,
+      "verify generated file",
+    );
     let turn = 0;
     service.remoteReply = async () => {
       turn += 1;
@@ -188,6 +253,24 @@ test("permissions and autonomous execution are identical across local engines", 
           content: `<tool_call>{"name":"write_file","arguments":{"path":"src/${engine}.ts","content":"export const engine = '${engine}';\\n"}}</tool_call>`,
           toolCalls: [],
         };
+      if (turn === 4)
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: `verify-${engine}`,
+              name: "run_command",
+              arguments: {
+                command: "node",
+                args: [
+                  "-e",
+                  `require('node:fs').readFileSync('src/${engine}.ts','utf8')`,
+                ],
+                purpose: "Verify the generated file is readable",
+              },
+            },
+          ],
+        };
       return { content: `Completed with ${engine}.`, toolCalls: [] };
     };
     const result = await service.chat({
@@ -196,6 +279,7 @@ test("permissions and autonomous execution are identical across local engines", 
       model: engine === "llamacpp" ? "fixture.gguf" : `fixture-${engine}`,
       executable: "",
       editMode: "auto",
+      terminalMode: "auto",
       contextLimit: 8192,
       hardware: "auto",
       contextSummary: "",
@@ -211,11 +295,16 @@ test("permissions and autonomous execution are identical across local engines", 
         },
       ],
     });
-    assert.equal(turn, 4, `${engine} should receive both correction turns`);
+    assert.equal(
+      turn,
+      5,
+      `${engine} should correct prose, write, verify, and then finish`,
+    );
     assert.deepEqual(result.changedFiles, [`src/${engine}.ts`]);
     assert.ok(result.actions.some((action) => action.tool === "set_goal"));
     assert.ok(result.actions.some((action) => action.tool === "list_files"));
     assert.ok(result.actions.some((action) => action.tool === "write_file"));
+    assert.ok(result.actions.some((action) => action.tool === "run_command"));
     assert.match(
       await fs.readFile(path.join(root, "src", `${engine}.ts`), "utf8"),
       new RegExp(engine),
@@ -396,12 +485,131 @@ test("successful tool results tell small models to stop repeating actions", () =
   assert.match(success, /Do not run the same command again/);
   assert.match(success, /complete_goal/);
 
+  const platformioMissing = toolResultForModel(
+    "platformio_status",
+    JSON.stringify({ installed: false, project: false }),
+  );
+  assert.match(platformioMissing, /platformio_install exactly once/);
+  assert.match(platformioMissing, /Do not use run_command/);
+
   const failure = toolResultForModel(
     "run_command",
     JSON.stringify({ exitCode: 1, stdout: "", stderr: "failed" }),
   );
   assert.match(failure, /change the code or command/);
   assert.match(failure, /do not repeat the same failing call unchanged/);
+});
+
+test("PlatformIO installation uses a dedicated approval and private installer", async (t) => {
+  let installed = false;
+  let installs = 0;
+  const { base, service, chat } = await fixture({
+    serviceOptions: {
+      platformioState: async () => ({ installed, project: false }),
+      platformioInstall: async () => {
+        installs += 1;
+        installed = true;
+        return { installed, project: false };
+      },
+    },
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const args = ["auto", new Set(), [], true, false, chat.id, false, false];
+
+  await assert.rejects(
+    service.runTool(
+      { name: "platformio_install", arguments: {} },
+      ...args,
+      "auto",
+      false,
+    ),
+    (error) => {
+      assert.equal(error.kind, "platformio.install");
+      return true;
+    },
+  );
+  assert.equal(installs, 0);
+  await service.grantPermission(
+    "platformio.install",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  const result = await service.runTool(
+    { name: "platformio_install", arguments: {} },
+    ...args,
+    "auto",
+    true,
+  );
+  assert.equal(installs, 1);
+  assert.equal(JSON.parse(result).installed, true);
+});
+
+test("identical successful file calls are reused without duplicate work-log cards", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  let turn = 0;
+  const repeatedWrite = {
+    name: "write_file",
+    arguments: {
+      path: "platformio",
+      content: "[env:native]\nplatform = native\n",
+    },
+  };
+  service.remoteReply = async () => {
+    turn += 1;
+    if (turn <= 2)
+      return {
+        content: "",
+        toolCalls: [{ id: `write-${turn}`, ...repeatedWrite }],
+      };
+    if (turn === 3)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "verify",
+            name: "run_command",
+            arguments: { command: "node", args: ["--version"] },
+          },
+        ],
+      };
+    return { content: "Configured and verified PlatformIO.", toolCalls: [] };
+  };
+  const response = await service.chat({
+    chatId: chat.id,
+    engine: "llamacpp",
+    model: "fixture.gguf",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      { role: "user", content: "Create and verify a PlatformIO project." },
+    ],
+  });
+  assert.match(response.content, /Configured and verified/);
+  assert.equal(
+    response.actions.filter((action) => action.tool === "write_file").length,
+    1,
+  );
+  assert.match(
+    await fs.readFile(path.join(root, "platformio.ini"), "utf8"),
+    /platform = native/,
+  );
+  await assert.rejects(fs.stat(path.join(root, "platformio")));
 });
 
 test("AI write tool obeys the edit permission", async (t) => {
@@ -884,6 +1092,79 @@ test("permission approval resumes the pending tool without asking the model agai
   );
 });
 
+test("terminal approval preserves file-write evidence across the resumed model turn", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  let turns = 0;
+  service.remoteReply = async () => {
+    turns += 1;
+    if (turns === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-smoke",
+            name: "write_file",
+            arguments: {
+              path: "agent-smoke.mjs",
+              content: 'console.log("verified")\n',
+            },
+          },
+        ],
+      };
+    if (turns === 2)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "run-smoke",
+            name: "run_command",
+            arguments: { command: "node", args: ["agent-smoke.mjs"] },
+          },
+        ],
+      };
+    return { content: "Created and verified the smoke file.", toolCalls: [] };
+  };
+  const request = {
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "ask",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content: "Create agent-smoke.mjs and verify it with Node.",
+      },
+    ],
+  };
+  const waiting = await service.chat(request);
+  assert.equal(waiting.permissionRequest.kind, "terminal.run");
+  assert.deepEqual(waiting.changedFiles, ["agent-smoke.mjs"]);
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "node agent-smoke.mjs",
+  );
+  const resumed = await service.chat({ ...request, resumePermission: true });
+  assert.equal(turns, 3);
+  assert.match(resumed.content, /Created and verified/);
+  assert.deepEqual(resumed.changedFiles, ["agent-smoke.mjs"]);
+  assert.match(
+    await fs.readFile(path.join(root, "agent-smoke.mjs"), "utf8"),
+    /verified/,
+  );
+});
+
 test("fallback agent protocol edits for models without native tools", async (t) => {
   const { root, base, service, chat } = await fixture();
   t.after(() => fs.rm(base, { recursive: true, force: true }));
@@ -924,6 +1205,13 @@ test("confirmed build requests start a goal, inspect the project, and correct pl
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   let turn = 0;
   service.remoteReply = async (_request, messages) => {
+    assert.deepEqual(
+      messages.flatMap((message, index) =>
+        message.role === "system" ? [index] : [],
+      ),
+      [0],
+      "MLX/Qwen requires the single system message to remain first after correction turns",
+    );
     if (turn++ === 0) {
       assert.ok(
         messages.some(

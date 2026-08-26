@@ -1,6 +1,6 @@
 {
   "name": "oscode",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "A calm, cross-platform code editor",
   "desktopName": "studio.oscode.editor.desktop",
   "main": "dist-electron/main/index.js",
@@ -40,6 +40,7 @@
     "@fontsource/fira-code": "^5.1.1",
     "@fontsource/manrope": "^5.1.1",
     "@fontsource/playfair-display": "^5.1.1",
+    "@modelcontextprotocol/client": "2.0.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "dompurify": "3.4.13",

@@ -6,7 +6,6 @@ import {
   ipcMain,
   Menu,
   nativeImage,
-  safeStorage,
   session,
   shell,
   type MenuItemConstructorOptions,
@@ -38,9 +37,11 @@ import { defaultPreferences, validPreferences } from "./preferences.js";
 import { guardBrokenOutputPipe } from "./process-output.js";
 import { AppUpdateService } from "./updater.js";
 import { SaveHistoryStore } from "./save-history.js";
+import { McpClientService } from "./mcp-client.js";
+import { assertReceiveOnlyPublicUrl } from "./outbound-guard.js";
 import {
   appLocalKeyProtector,
-  migrateWrappedKeyToAppLocal,
+  archiveLegacySecureStore,
   processKeyProtector,
   SecureDataStore,
   type KeyProtector,
@@ -96,6 +97,7 @@ let platformioService: PlatformioService;
 let appUpdateService: AppUpdateService;
 let secureStore: SecureDataStore;
 let saveHistoryStore: SaveHistoryStore;
+let mcpClientService: McpClientService;
 let runningDebug = false;
 let quittingAfterCleanup = false;
 let rendererHasUnsavedChanges = false;
@@ -1451,10 +1453,15 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.savePreferences === 'function' &&
         typeof window.oscode?.listSaveHistory === 'function' &&
         typeof window.oscode?.restoreSaveHistory === 'function' &&
+        typeof window.oscode?.listMcpServers === 'function' &&
+        typeof window.oscode?.saveMcpServer === 'function' &&
+        typeof window.oscode?.removeMcpServer === 'function' &&
         typeof window.oscode?.onProjectFileChanged === 'function' &&
         typeof window.oscode?.appUpdateStatus === 'function' &&
         typeof window.oscode?.setAppAutoUpdate === 'function' &&
         typeof window.oscode?.checkForAppUpdate === 'function' &&
+        typeof window.oscode?.downloadAppUpdate === 'function' &&
+        typeof window.oscode?.installAppUpdate === 'function' &&
         typeof window.oscode?.listAiModels === 'function' &&
         typeof window.oscode?.removeAiModel === 'function' &&
         typeof window.oscode?.exportDiagram === 'function' &&
@@ -1473,7 +1480,7 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.closeProject === 'function';
       const keepUpdatesOff = await waitFor(
         () => [...document.querySelectorAll('.notification-choice button')].find(
-          item => item.textContent.trim() === 'Keep off'
+          item => item.textContent.trim() === "Don't show again"
         ),
         'automatic update opt-in prompt'
       );
@@ -1599,8 +1606,25 @@ async function runSmokeTest(window: BrowserWindow) {
       await window.oscode.gitRun('pull');
       const gitAfterSync = await window.oscode.gitState();
       const runtimeSelect = await waitFor(
-        () => document.querySelector('[aria-label="Python interpreter"]'),
-        'Python controls'
+        () => {
+          const select = document.querySelector(
+            '[aria-label="Python interpreter"]'
+          );
+          if (!select) return null;
+          const options = [...select.options];
+          const bundled = ['3.10', '3.11', '3.12'].every(version =>
+            options.some(
+              option =>
+                option.textContent.includes(version) &&
+                !option.value.startsWith('download:')
+            )
+          );
+          const downloads = options.filter(option =>
+            option.value.startsWith('download:')
+          );
+          return bundled && downloads.length >= 2 ? select : null;
+        },
+        'loaded Python controls'
       );
       const projectSelectionReady =
         typeof (await window.oscode.getProjectPython()) === 'string';
@@ -1621,6 +1645,25 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('.advanced-dock'),
         'advanced mode'
       );
+      const mcpButton = [...advancedDock.querySelectorAll('button')].find(
+        item => item.textContent.trim() === 'MCP'
+      );
+      mcpButton.click();
+      const mcpSettings = await waitFor(
+        () => document.querySelector('.mcp-settings'),
+        'MCP settings'
+      );
+      const savedMcp = await window.oscode.saveMcpServer({
+        name: 'Smoke MCP',
+        command: 'node',
+        args: ['fixture.mjs'],
+        enabled: false
+      });
+      const mcpServers = await window.oscode.listMcpServers();
+      const mcpReady =
+        mcpSettings.innerText.includes('local stdio MCP servers') &&
+        mcpServers.some(server => server.id === savedMcp.id);
+      await window.oscode.removeMcpServer(savedMcp.id);
       advancedButton.click();
       const settingsButton = [...document.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'Settings'
@@ -1898,6 +1941,7 @@ async function runSmokeTest(window: BrowserWindow) {
           gitAfterSync.ahead === 0 &&
           gitAfterSync.behind === 0,
         advancedReady: Boolean(advancedDock),
+        mcpReady,
         settingsReady: Boolean(settingsDock),
         autosaveSettingReady,
         saveHistoryReady,
@@ -2097,6 +2141,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.gitRemoteReady !== true ||
       result.gitSyncReady !== true ||
       result.advancedReady !== true ||
+      result.mcpReady !== true ||
       result.settingsReady !== true ||
       result.autosaveSettingReady !== true ||
       result.saveHistoryReady !== true ||
@@ -2323,6 +2368,29 @@ function registerIpc() {
     if (result) throw new Error(result);
     return secureStore.root;
   });
+  ipcMain.handle("app:open-external-url", async (_event, rawUrl: unknown) => {
+    if (typeof rawUrl !== "string") throw new Error("Invalid website address");
+    const url = assertReceiveOnlyPublicUrl(rawUrl).toString();
+    await shell.openExternal(url, { activate: true });
+    return url;
+  });
+  ipcMain.handle("mcp:list-servers", () => mcpClientService.listServers());
+  ipcMain.handle("mcp:save-server", (_event, server: unknown) => {
+    if (!server || typeof server !== "object")
+      throw new Error("Enter an MCP server");
+    return mcpClientService.saveServer(
+      server as {
+        id?: string;
+        name: string;
+        command: string;
+        args: string[];
+        enabled: boolean;
+      },
+    );
+  });
+  ipcMain.handle("mcp:remove-server", (_event, id: unknown) =>
+    mcpClientService.removeServer(id),
+  );
   ipcMain.handle("platformio:state", async (event) => {
     activateSender(event);
     const state = await platformioService.state(projectRoot);
@@ -2466,7 +2534,13 @@ function registerIpc() {
     });
     return appUpdateService.setEnabled(preferences.autoUpdateEnabled);
   });
-  ipcMain.handle("updates:check", () => appUpdateService.check());
+  ipcMain.handle("updates:check", () => appUpdateService.check(true));
+  ipcMain.handle("updates:download", () =>
+    appUpdateService.downloadAvailable(),
+  );
+  ipcMain.handle("updates:install", () =>
+    appUpdateService.installReadyUpdate(),
+  );
   ipcMain.handle("ai:list-models", () => aiService.listModels());
   ipcMain.handle("ai:hardware-profile", () => aiService.hardwareProfile());
   ipcMain.handle("ai:install-cuda-support", () =>
@@ -3732,24 +3806,11 @@ app.whenReady().then(async () => {
   const userData = app.getPath("userData");
   if (!smokeMode) {
     try {
-      await migrateWrappedKeyToAppLocal(userData, (value) => {
-        if (!safeStorage.isEncryptionAvailable())
-          throw new Error(
-            "The operating-system key store needed to read the legacy encryption key is unavailable",
-          );
-        if (
-          process.platform === "linux" &&
-          safeStorage.getSelectedStorageBackend() === "basic_text"
-        )
-          throw new Error(
-            "A Linux Secret Service or KWallet is needed once to migrate the legacy encryption key",
-          );
-        return Buffer.from(safeStorage.decryptString(value), "base64");
-      });
+      await archiveLegacySecureStore(userData);
     } catch (error) {
       dialog.showErrorBox(
-        "Encrypted data migration unavailable",
-        `osCode could not migrate its existing encrypted data to app-managed storage: ${error instanceof Error ? error.message : String(error)}`,
+        "Encrypted storage unavailable",
+        `osCode could not prepare its app-managed encrypted storage: ${error instanceof Error ? error.message : String(error)}`,
       );
       app.quit();
       return;
@@ -3760,6 +3821,7 @@ app.whenReady().then(async () => {
     : appLocalKeyProtector();
   secureStore = new SecureDataStore(userData, osKeyProtector);
   saveHistoryStore = new SaveHistoryStore(secureStore);
+  mcpClientService = new McpClientService(secureStore, userData);
   try {
     await secureStore.ready();
     await secureStore.purgeLegacyPromptData();
@@ -3826,6 +3888,10 @@ app.whenReady().then(async () => {
     },
     activity: (activity) => broadcastToRenderers("agent:activity", activity),
     platformioState: () => platformioService.state(currentAiProjectRoot()),
+    platformioInstall: async () => {
+      await platformioService.install(false);
+      return platformioService.state(currentAiProjectRoot());
+    },
     platformioRun: (action, environment) =>
       platformioService.run(action, environment, currentAiProjectRoot()),
     browserOpen: (url) => agentControlService.openBrowser(url),
@@ -3833,6 +3899,12 @@ app.whenReady().then(async () => {
     browserClick: (query) => agentControlService.clickBrowser(query),
     browserType: (query, text) => agentControlService.typeBrowser(query, text),
     browserClose: () => agentControlService.closeBrowser(),
+    webMcpList: () => agentControlService.listWebMcpTools(),
+    webMcpCall: (name, argumentsValue) =>
+      agentControlService.callWebMcpTool(name, argumentsValue),
+    mcpList: (serverId) => mcpClientService.listTools(serverId),
+    mcpCall: (serverId, name, argumentsValue) =>
+      mcpClientService.callReadOnlyTool(serverId, name, argumentsValue),
     computerList: () => agentControlService.listComputerTargets(),
     computerInspect: (target) => agentControlService.inspectComputer(target),
     computerClick: (query, target) =>
@@ -3867,7 +3939,6 @@ app.on("window-all-closed", () => {
 app.on("before-quit", (event) => {
   appUpdateService?.dispose();
   if (quittingAfterCleanup) {
-    appUpdateService?.installReadyUpdate();
     return;
   }
   platformioService?.stop();
@@ -3894,7 +3965,6 @@ app.on("before-quit", (event) => {
     terminals.size === 0 &&
     !agentControlService?.isActive()
   ) {
-    appUpdateService?.installReadyUpdate();
     void disposeAiServiceSafely();
     return;
   }

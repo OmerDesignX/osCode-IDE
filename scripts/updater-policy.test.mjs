@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   isNewerVersion,
   isTrustedUpdateUrl,
+  selectUpdateAsset,
   updateAssetName,
+  updateAssetVersion,
+  updateChannel,
 } from "../dist-electron/main/updater-policy.js";
 
 test("application updates are network silent until the user opts in", () => {
@@ -32,7 +35,10 @@ test("application updates accept only the official HTTPS GitHub hosts", () => {
 });
 
 test("full-package updates select one native release asset", () => {
-  assert.equal(updateAssetName("1.2.3", "win32"), "osCode-Setup-1.2.3.exe");
+  assert.equal(
+    updateAssetName("1.2.3", "win32", "x64"),
+    "osCode-Setup-1.2.3.exe",
+  );
   assert.equal(
     updateAssetName("1.2.3", "darwin", "arm64"),
     "osCode-1.2.3-mac-arm64.dmg",
@@ -42,7 +48,43 @@ test("full-package updates select one native release asset", () => {
     "osCode-1.2.3-mac-x64.dmg",
   );
   assert.equal(updateAssetName("1.2.3", "darwin", "ia32"), "");
-  assert.equal(updateAssetName("1.2.3", "linux"), "");
+  assert.equal(
+    updateAssetName("1.2.3", "linux", "x64"),
+    "osCode-1.2.3-x64.deb",
+  );
   assert.equal(isNewerVersion("0.2.0", "0.1.9"), true);
   assert.equal(isNewerVersion("0.1.0", "0.1.0"), false);
+});
+
+test("fixed updater tags stay separate by architecture and Windows generation", () => {
+  assert.equal(
+    updateChannel("darwin", "arm64").tag,
+    "macOS-Apple-Silicon-Updater",
+  );
+  assert.equal(updateChannel("darwin", "x64").tag, "macOS-Intel-Updater");
+  assert.equal(
+    updateChannel("win32", "x64", "10.0.19045").tag,
+    "Windows-10-Updater",
+  );
+  assert.equal(
+    updateChannel("win32", "x64", "10.0.22631").tag,
+    "Windows-11-Updater",
+  );
+  assert.equal(updateChannel("linux", "x64").tag, "Linux-Updater");
+  assert.equal(updateChannel("linux", "arm64"), null);
+});
+
+test("updater channels select the newest matching versioned package", () => {
+  const assets = [
+    { name: "osCode-0.2.0-mac-arm64.dmg", id: 1 },
+    { name: "osCode-0.3.0-mac-x64.dmg", id: 2 },
+    { name: "osCode-0.2.5-mac-arm64.dmg", id: 3 },
+    { name: "README.txt", id: 4 },
+  ];
+  assert.equal(updateAssetVersion(assets[0].name, "darwin", "arm64"), "0.2.0");
+  assert.deepEqual(selectUpdateAsset(assets, "0.1.0", "darwin", "arm64"), {
+    version: "0.2.5",
+    asset: assets[2],
+  });
+  assert.equal(selectUpdateAsset(assets, "0.2.5", "darwin", "arm64"), null);
 });

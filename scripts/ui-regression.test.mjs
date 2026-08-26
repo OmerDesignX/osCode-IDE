@@ -38,6 +38,10 @@ const localEditor = await fs.readFile(
   new URL("../src/LocalEditor.tsx", import.meta.url),
   "utf8",
 );
+const mcpClient = await fs.readFile(
+  new URL("../electron/main/mcp-client.ts", import.meta.url),
+  "utf8",
+);
 
 test("Git status groups large untracked dependency folders", () => {
   assert.match(main, /--untracked-files=normal/);
@@ -380,6 +384,41 @@ test("browser, Terminal, and Computer Control stay visible and permissioned", ()
   assert.match(app, /setAiComputerAccess\(false\)/);
 });
 
+test("MCP and WebMCP are encrypted, read-only, untrusted, and exactly permissioned", () => {
+  assert.match(app, /"mcp", "MCP"/);
+  assert.match(app, /listMcpServers/);
+  assert.match(app, /encrypted in[\s\S]*app data/i);
+  assert.match(aiMain, /mcp_list_tools/);
+  assert.match(aiMain, /mcp_call_tool/);
+  assert.match(aiMain, /webmcp_list_tools/);
+  assert.match(aiMain, /webmcp_call_tool/);
+  assert.match(aiMain, /assertSafeExternalPayload/);
+  assert.match(aiMain, /"mcp\.call"/);
+  assert.match(agentControl, /document\.modelContext/);
+  assert.match(agentControl, /readOnlyHint/);
+  assert.match(mcpClient, /SecureDataStore/);
+  assert.match(mcpClient, /mcp-servers\.oscode-data/);
+  assert.match(mcpClient, /readOnlyHint !== true/);
+  assert.match(mcpClient, /safeEnvironment/);
+  assert.doesNotMatch(mcpClient, /\.\.\.process\.env/);
+});
+
+test("final Git, terminal, and PlatformIO controls use matching padded heights", () => {
+  assert.match(
+    styles,
+    /Final control alignment:[\s\S]*\.git-panel-head[\s\S]*min-height: 54px/,
+  );
+  assert.match(styles, /\.git-panel-head > \.icon-button,[\s\S]*height: 42px/);
+  assert.match(
+    styles,
+    /\.terminal-tabs button,[\s\S]*min-height: 42px;[\s\S]*height: 42px/,
+  );
+  assert.match(
+    styles,
+    /\.platformio-version button[\s\S]*width: auto;[\s\S]*min-width: 104px/,
+  );
+});
+
 test("package installation and localhost previews have dedicated safe flows", () => {
   assert.match(aiMain, /isPackageInstallCommand/);
   assert.match(aiMain, /python_install_packages/);
@@ -393,6 +432,23 @@ test("package installation and localhost previews have dedicated safe flows", ()
   assert.match(ai, /Always allow/);
   assert.match(styles, /\.editor-command-bar[\s\S]*overflow-x: auto/);
   assert.match(styles, /\.ai-live-work[\s\S]*flex-direction: column/);
+});
+
+test("agent chat yields scroll ownership during work and returns on completion", () => {
+  assert.match(ai, /followConversationRef/);
+  assert.match(ai, /onWheel=\{\(\) =>/);
+  assert.match(ai, /distanceFromBottom < 72/);
+  assert.match(ai, /if \(busy && !followConversationRef\.current\) return/);
+  assert.match(ai, /!busy && wasBusy \? "smooth" : "auto"/);
+  assert.doesNotMatch(ai, /\[messages, status\][\s\S]{0,120}scrollIntoView/);
+});
+
+test("PlatformIO agent flow has explicit setup guidance and install approval", () => {
+  assert.match(aiMain, /platformio_install/);
+  assert.match(aiMain, /PlatformIO is integrated into osCode/);
+  assert.match(aiMain, /never create a file or folder named only platformio/);
+  assert.match(ai, /"platformio\.install": "Install PlatformIO Core"/);
+  assert.match(ai, /oneShotPermissionKinds[\s\S]*"platformio\.install"/);
 });
 
 test("AI capability controls have readable spacing and explanatory hover text", () => {
@@ -514,7 +570,7 @@ test("terminal controls wrap with even icon padding", () => {
 
 test("application updates use a remembered one-time notification and Settings toggle", () => {
   assert.match(app, /Turn on automatic updates from GitHub\?/);
-  assert.match(app, />\s*Keep off\s*</);
+  assert.match(app, />\s*Don't show again\s*</);
   assert.match(app, />\s*Turn on\s*</);
   assert.match(app, /label=\{tr\("Automatic updates"/);
   assert.match(app, /setAppAutoUpdate\(enabled\)/);
@@ -524,6 +580,25 @@ test("application updates use a remembered one-time notification and Settings to
   assert.match(main, /\.oscode-smoke-test/);
   assert.match(main, /if \(smokeMarkerReady\) unlinkSync\(smokeMarker\)/);
   assert.match(main, /callback\(\{ cancel: !allowDevelopmentRenderer \}\)/);
+});
+
+test("application updater exposes manual download, progress, install, and dismissal controls", () => {
+  assert.match(app, /downloadAppUpdate/);
+  assert.match(app, /installAppUpdate/);
+  assert.match(app, /className={`app-update-action/);
+  assert.match(app, /Install update/);
+  assert.match(app, /Download update/);
+  assert.match(app, /Don't show again/);
+  assert.match(app, /settings-update-progress/);
+  assert.match(app, /autoUpdateDismissedVersion/);
+  assert.match(app, /updateReminderDismissed/);
+  assert.match(
+    app,
+    /const showUpdateAction =\s*!updateReminderDismissed &&\s*\["available", "downloading", "ready", "installing"\]\.includes/,
+  );
+  assert.doesNotMatch(app, /const showUpdateAction =[^;]*!autoUpdateEnabled/s);
+  assert.match(styles, /\.app-update-action\.ready/);
+  assert.match(styles, /\.settings-update-progress/);
 });
 
 test("packaged builds cannot be redirected by an inherited dev-server URL", () => {

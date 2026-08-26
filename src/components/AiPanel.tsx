@@ -70,11 +70,23 @@ const permissionLabels: Record<AiPermissionKind, string> = {
   "packages.install": "Install packages",
   "debug.run": "Run and debug code",
   "web.search": "Search the web",
+  "network.request": "Send this web request",
   "browser.control": "Control the agent browser",
   "computer.control": "Control a visible application",
+  "computer.external": "Use another desktop application",
+  "mcp.call": "Call an MCP tool",
+  "platformio.install": "Install PlatformIO Core",
   "platformio.run": "Control PlatformIO",
 };
-const permissionKinds = Object.keys(permissionLabels) as AiPermissionKind[];
+const oneShotPermissionKinds = new Set<AiPermissionKind>([
+  "network.request",
+  "computer.external",
+  "mcp.call",
+  "platformio.install",
+]);
+const permissionKinds = (
+  Object.keys(permissionLabels) as AiPermissionKind[]
+).filter((kind) => !oneShotPermissionKinds.has(kind));
 const emptyAgentState: AiAgentState = {
   chats: [],
   goals: [],
@@ -116,6 +128,21 @@ function mergeActionEntries(...groups: AiActionEntry[][]) {
         new Date(right.createdAt).getTime(),
     )
     .slice(-500);
+}
+
+function contentWithSources(content: string, actions: AiActionEntry[]) {
+  const websites = [
+    ...new Set(
+      actions
+        .filter((action) => action.status === "completed")
+        .flatMap((action) => action.websites || [])
+        .filter((website) => /^https:\/\//i.test(website)),
+    ),
+  ].slice(0, 12);
+  if (!websites.length) return content;
+  return `${content.trim()}\n\n### Sources used\n${websites
+    .map((website) => `- [${websiteLabel(website)}](${website})`)
+    .join("\n")}`;
 }
 
 function actionIcon(kind: AiActionEntry["kind"]) {
@@ -314,7 +341,10 @@ export function AiPanel({
     limit: contextLimit,
     compacted: false,
   });
+  const conversationRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const followConversationRef = useRef(true);
+  const previousBusyRef = useRef(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const queueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const steeringRef = useRef(false);
@@ -597,10 +627,19 @@ export function AiPanel({
         })
         .catch(() => undefined);
   }, [projectName]);
-  useEffect(
-    () => endRef.current?.scrollIntoView({ behavior: "smooth" }),
-    [messages, status],
-  );
+  useEffect(() => {
+    const wasBusy = previousBusyRef.current;
+    previousBusyRef.current = busy;
+    if (busy && !followConversationRef.current) return;
+    if (!busy && wasBusy) followConversationRef.current = true;
+    const frame = requestAnimationFrame(() =>
+      endRef.current?.scrollIntoView({
+        behavior: !busy && wasBusy ? "smooth" : "auto",
+        block: "end",
+      }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [messages, liveActions.length, busy]);
   useEffect(() => {
     messagesRef.current = messages;
     setUsage((current) => ({
@@ -926,6 +965,7 @@ export function AiPanel({
     if (!resolved) return;
     messagesRef.current = next;
     setMessages(next);
+    followConversationRef.current = true;
     if (resolvedActionId) {
       const remainingLiveActions = liveActionsRef.current.filter(
         (action) => action.id !== resolvedActionId,
@@ -1075,6 +1115,7 @@ export function AiPanel({
         ];
     messagesRef.current = next;
     setMessages(next);
+    followConversationRef.current = true;
     setInput("");
     liveActionsRef.current = [];
     setLiveActions([]);
@@ -1106,12 +1147,16 @@ export function AiPanel({
         contextSummary: requestSummary,
         goal: activeGoal?.text || "",
       });
+      const responseActions = mergeActionEntries(
+        liveActionsRef.current,
+        response.actions,
+      );
       const assistant: AiChatMessage = {
         id: globalThis.crypto.randomUUID(),
         role: "assistant",
-        content: response.content,
+        content: contentWithSources(response.content, responseActions),
         thinking: response.thinking,
-        actions: mergeActionEntries(liveActionsRef.current, response.actions),
+        actions: responseActions,
         createdAt: new Date().toISOString(),
         assistantName:
           selectedModel && osCodeGgufTier(selectedModel)
@@ -1264,7 +1309,7 @@ export function AiPanel({
       const assistant: AiChatMessage = {
         id: globalThis.crypto.randomUUID(),
         role: "assistant",
-        content: response.content,
+        content: contentWithSources(response.content, response.actions),
         thinking: response.thinking,
         actions: response.actions,
         createdAt: new Date().toISOString(),
@@ -1449,6 +1494,7 @@ export function AiPanel({
 
   const grantPermission = async (scope: AiPermissionScope) => {
     if (!permissionRequest || !chatId) return;
+    if (oneShotPermissionKinds.has(permissionRequest.kind)) scope = "once";
     const grant = await window.oscode.grantAiPermission(
       permissionRequest.kind,
       scope === "once" ? "conversation" : scope,
@@ -1465,6 +1511,7 @@ export function AiPanel({
     if (
       permissionRequest.kind === "project.read" ||
       permissionRequest.kind === "project.write" ||
+      permissionRequest.kind === "platformio.install" ||
       permissionRequest.kind === "platformio.run"
     )
       nextCapabilities.fileAccess = true;
@@ -2700,7 +2747,26 @@ export function AiPanel({
           document.querySelector(".app") || document.body,
         )}
 
-      <div className="ai-conversation">
+      <div
+        className="ai-conversation"
+        ref={conversationRef}
+        onWheel={() => {
+          if (busyRef.current) followConversationRef.current = false;
+        }}
+        onTouchStart={() => {
+          if (busyRef.current) followConversationRef.current = false;
+        }}
+        onScroll={() => {
+          if (!busyRef.current) return;
+          const conversation = conversationRef.current;
+          if (!conversation) return;
+          const distanceFromBottom =
+            conversation.scrollHeight -
+            conversation.scrollTop -
+            conversation.clientHeight;
+          followConversationRef.current = distanceFromBottom < 72;
+        }}
+      >
         {!messages.length && (
           <div className="ai-empty">
             <FeatherIcon icon="message-square" size="28" />
@@ -2853,19 +2919,22 @@ export function AiPanel({
               Deny
             </button>
             <button onClick={() => void grantPermission("once")}>Once</button>
-            {permissionRequest.kind !== "packages.install" && (
-              <button onClick={() => void grantPermission("conversation")}>
-                This chat
+            {permissionRequest.kind !== "packages.install" &&
+              !oneShotPermissionKinds.has(permissionRequest.kind) && (
+                <button onClick={() => void grantPermission("conversation")}>
+                  This chat
+                </button>
+              )}
+            {!oneShotPermissionKinds.has(permissionRequest.kind) && (
+              <button
+                className="primary"
+                onClick={() => void grantPermission("always")}
+              >
+                {permissionRequest.kind === "packages.install"
+                  ? "Always allow"
+                  : "Always"}
               </button>
             )}
-            <button
-              className="primary"
-              onClick={() => void grantPermission("always")}
-            >
-              {permissionRequest.kind === "packages.install"
-                ? "Always allow"
-                : "Always"}
-            </button>
           </div>
         </div>
       )}
@@ -3276,10 +3345,15 @@ function ActionTimeline({
             {!!action.websites?.length && (
               <div className="ai-action-sites" aria-label="Websites used">
                 {action.websites.map((website) => (
-                  <code key={website} title={website}>
+                  <button
+                    type="button"
+                    key={website}
+                    title={website}
+                    onClick={() => void window.oscode.openExternalUrl(website)}
+                  >
                     <FeatherIcon icon="external-link" size="12" />
                     {websiteLabel(website)}
-                  </code>
+                  </button>
                 ))}
               </div>
             )}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertReceiveOnlyPublicUrl,
+  assertSafeExternalPayload,
   assertSafeOutboundText,
   receiveOnlyBrowserRequest,
   strippedReceiveOnlyHeaders,
@@ -22,6 +23,24 @@ test("public searches allow short generic terms but block local data", () => {
     assert.throws(
       () => assertSafeOutboundText(value),
       /blocked|protect|code or local data/,
+    );
+});
+
+test("external tools cannot receive project, identity, secret, or code data", () => {
+  assert.deepEqual(
+    assertSafeExternalPayload({ topic: "Electron accessibility overview" }),
+    { topic: "Electron accessibility overview" },
+  );
+  for (const value of [
+    { path: "/Users/person/Documents/private/project.ts" },
+    { contact: "person@example.com" },
+    { token: "api_key=sk-private-value-123456789" },
+    { code: "import secret from './private.js'" },
+    { image: "data:image/png;base64,abc" },
+  ])
+    assert.throws(
+      () => assertSafeExternalPayload(value),
+      /blocked|protect project and personal data/,
     );
 });
 

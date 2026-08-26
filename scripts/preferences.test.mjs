@@ -37,11 +37,12 @@ test("accepts versioned local editor preferences", () => {
       autoSave: false,
       autoUpdateEnabled: true,
       autoUpdatePromptAnswered: true,
+      autoUpdateDismissedVersion: "1.2.3",
       lastProject,
       telemetry: true,
     }),
     {
-      version: 10,
+      version: 11,
       theme: "blue-dark",
       locale: "ar",
       sidebarSide: "right",
@@ -68,6 +69,7 @@ test("accepts versioned local editor preferences", () => {
       autoSave: false,
       autoUpdateEnabled: true,
       autoUpdatePromptAnswered: true,
+      autoUpdateDismissedVersion: "1.2.3",
       lastProject,
     },
   );
@@ -83,6 +85,17 @@ test("keeps application updates off until the one-time choice is answered", () =
   });
   assert.equal(declined.autoUpdateEnabled, false);
   assert.equal(declined.autoUpdatePromptAnswered, true);
+  assert.equal(declined.autoUpdateDismissedVersion, "");
+  assert.equal(
+    validPreferences({ autoUpdateDismissedVersion: "1.4.0" })
+      .autoUpdateDismissedVersion,
+    "1.4.0",
+  );
+  assert.equal(
+    validPreferences({ autoUpdateDismissedVersion: "not-a-version" })
+      .autoUpdateDismissedVersion,
+    "",
+  );
 });
 
 test("migrates the previous light theme and keeps all current theme choices", () => {
