@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   isTrustedOllamaDownloadUrl,
+  isPackageInstallCommand,
   LocalAiService,
   ollamaCliAssetName,
   toolResultForModel,
@@ -42,7 +43,11 @@ test("Ollama setup selects standalone CLI archives and rejects desktop installer
   );
 });
 
-async function fixture({ grants = true, status = () => undefined } = {}) {
+async function fixture({
+  grants = true,
+  status = () => undefined,
+  installPythonPackages,
+} = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-ai-test-"));
   const root = path.join(base, "project");
   await fs.mkdir(path.join(root, "src"), { recursive: true });
@@ -56,6 +61,7 @@ async function fixture({ grants = true, status = () => undefined } = {}) {
     getProjectRoot: () => root,
     getPython: async () => "python",
     getUv: async () => "uv",
+    ...(installPythonPackages ? { installPythonPackages } : {}),
     status,
   });
   const chat = await service.createChat();
@@ -374,6 +380,13 @@ test("successful tool results tell small models to stop repeating actions", () =
   assert.match(browser, /Do not call browser_open again/);
   assert.match(browser, /browser_inspect/);
 
+  const emptyBrowser = toolResultForModel(
+    "browser_inspect",
+    JSON.stringify({ title: "Preview", text: "", controls: [] }),
+  );
+  assert.match(emptyBrowser, /rendered no visible content/);
+  assert.match(emptyBrowser, /background=true/);
+
   const success = toolResultForModel(
     "run_command",
     JSON.stringify({ exitCode: 0, stdout: "10\n", stderr: "" }),
@@ -410,32 +423,43 @@ test("AI write tool obeys the edit permission", async (t) => {
   );
 });
 
-test("the agent can verify JavaScript projects with an installed npm", async (t) => {
-  const npmLookup = spawnSync(
-    process.platform === "win32" ? "where.exe" : "which",
-    ["npm"],
-    { encoding: "utf8", windowsHide: true },
-  );
-  if (npmLookup.status !== 0 || !npmLookup.stdout.trim()) {
-    t.skip("npm is not installed in this release-build environment");
-    return;
-  }
+test("the agent asks before running global development commands", async (t) => {
   const { base, service, chat } = await fixture();
   t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await assert.rejects(
+    service.runTool(
+      {
+        name: "run_command",
+        arguments: { command: "node", args: ["--version"] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+    (error) => {
+      assert.equal(error.message, "Permission required");
+      assert.equal(error.kind, "terminal.run");
+      assert.equal(error.detail, "node --version");
+      return true;
+    },
+  );
   await service.grantPermission(
     "terminal.run",
     "conversation",
     chat.id,
-    "npm --version",
+    "node --version",
   );
   const result = JSON.parse(
     await service.runTool(
       {
         name: "run_command",
         arguments: {
-          command: "npm",
+          command: "node",
           args: ["--version"],
-          purpose: "Verify npm discovery",
+          purpose: "Check the global Node installation",
         },
       },
       "auto",
@@ -447,7 +471,236 @@ test("the agent can verify JavaScript projects with an installed npm", async (t)
     ),
   );
   assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /^\d+\.\d+/);
+  assert.match(result.stdout, /^v\d+/);
+  const locator = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: {
+          command: process.platform === "win32" ? "where" : "which",
+          args: ["node"],
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+  );
+  assert.equal(locator.exitCode, 0);
+  assert.match(locator.stdout.toLowerCase(), /node/);
+  await assert.rejects(
+    service.runTool(
+      {
+        name: "run_command",
+        arguments: { command: "node", args: ["--help"] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "ask",
+    ),
+    (error) => {
+      assert.equal(error.kind, "terminal.run");
+      assert.equal(error.detail, "node --help");
+      return true;
+    },
+  );
+});
+
+test("package installers always use their separate exact permission unless Always was granted", async (t) => {
+  const { base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  assert.equal(isPackageInstallCommand("npm", ["install", "react"]), true);
+  assert.equal(
+    isPackageInstallCommand("python", ["-m", "pip", "install", "ruff"]),
+    true,
+  );
+  assert.equal(isPackageInstallCommand("brew", ["install", "node"]), true);
+  assert.equal(isPackageInstallCommand("npm", ["run", "build"]), false);
+
+  await service.grantPermission(
+    "packages.install",
+    "conversation",
+    chat.id,
+    "npm install --help",
+  );
+  await assert.rejects(
+    service.runTool(
+      {
+        name: "run_command",
+        arguments: { command: "npm", args: ["install", "--help"] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "auto",
+    ),
+    (error) => {
+      assert.equal(error.kind, "packages.install");
+      assert.equal(error.detail, "npm install --help");
+      return true;
+    },
+  );
+
+  await service.grantPermission(
+    "packages.install",
+    "always",
+    chat.id,
+    "npm install --help",
+  );
+  const result = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: { command: "npm", args: ["install", "--help"] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "auto",
+    ),
+  );
+  assert.equal(result.exitCode, 0);
+});
+
+test("dedicated Python package tool uses the app-managed environment installer", async (t) => {
+  const requested = [];
+  const { base, service, chat } = await fixture({
+    installPythonPackages: async (packages) => {
+      requested.push(packages);
+      return {
+        packages,
+        output: "installed",
+        interpreter: "/app-data/project-environment/bin/python",
+        createdEnvironment: true,
+      };
+    },
+  });
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  assert.ok(
+    service
+      .tools("auto", true, false, false, false)
+      .some((item) => item.function.name === "python_install_packages"),
+  );
+  await service.grantPermission(
+    "packages.install",
+    "always",
+    chat.id,
+    "Python packages",
+  );
+  const result = JSON.parse(
+    await service.runTool(
+      {
+        name: "python_install_packages",
+        arguments: {
+          packages: ["ultralytics", "opencv-python", "numpy"],
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "auto",
+    ),
+  );
+  assert.deepEqual(requested, [["ultralytics", "opencv-python", "numpy"]]);
+  assert.equal(result.createdEnvironment, true);
+  assert.match(result.interpreter, /app-data\/project-environment/);
+});
+
+test("background project commands wait for localhost before browser testing", async (t) => {
+  const { base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  const reservation = net.createServer();
+  await new Promise((resolve, reject) => {
+    reservation.once("error", reject);
+    reservation.listen(0, "127.0.0.1", resolve);
+  });
+  const address = reservation.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  await new Promise((resolve) => reservation.close(resolve));
+  const url = `http://127.0.0.1:${port}/`;
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "start preview",
+  );
+  const result = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: {
+          command: "node",
+          args: [
+            "-e",
+            `require('node:http').createServer((_q,r)=>r.end('ready')).listen(${port},'127.0.0.1')`,
+          ],
+          background: true,
+          ready_url: url,
+          purpose: "Start the test preview",
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+  );
+  assert.equal(result.background, true);
+  assert.equal(result.url, url);
+  assert.equal(await fetch(url).then((response) => response.text()), "ready");
+});
+
+test("missing project files return exact nearby paths", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, "src", "App.jsx"), "export default 1;\n");
+  await assert.rejects(
+    service.runTool(
+      { name: "read_file", arguments: { path: "src/App.js" } },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+    /src\/App\.jsx/,
+  );
 });
 
 test("AI file permission removes project access and checkpoints never touch Git", async (t) => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { monaco } from "./monaco";
+import type * as Monaco from "monaco-editor/editor/editor.api";
 
 export default function LocalDiffEditor({
   originalPath,
@@ -14,7 +15,7 @@ export default function LocalDiffEditor({
   modifiedPath: string;
   modifiedValue: string;
   theme: string;
-  options: monaco.editor.IStandaloneEditorConstructionOptions;
+  options: Monaco.editor.IStandaloneEditorConstructionOptions;
 }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {

@@ -43,6 +43,53 @@ export function processKeyProtector(namespace: string): KeyProtector {
   };
 }
 
+/**
+ * Persistent app-managed protection for installed builds on every platform.
+ * SecureDataStore writes the generated device key beneath the application's
+ * data directory with owner-only permissions; JSON payloads remain
+ * authenticated AES-256-GCM ciphertext at rest without depending on Keychain,
+ * DPAPI, Secret Service, or KWallet for normal operation.
+ */
+export function appLocalKeyProtector(): KeyProtector {
+  return {
+    status: () => ({ available: true, backend: "app-local-file" }),
+    protect: (value) => Buffer.from(value),
+    unprotect: (value) => Buffer.from(value),
+  };
+}
+
+/** Convert an existing OS-wrapped device key once, preserving encrypted data. */
+export async function migrateWrappedKeyToAppLocal(
+  userData: string,
+  legacyUnprotect: (value: Buffer) => Promise<Buffer> | Buffer,
+) {
+  const secureRoot = path.join(userData, "secure");
+  const target = path.join(secureRoot, "device-key.oscode-key");
+  let wrapped: Buffer;
+  try {
+    wrapped = await fs.readFile(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  if (wrapped.length === 32) return false;
+  const key = await legacyUnprotect(wrapped);
+  try {
+    if (key.length !== 32)
+      throw new Error("The existing secure storage key could not be migrated");
+    await fs.mkdir(secureRoot, { recursive: true, mode: 0o700 });
+    await fs.chmod(secureRoot, 0o700).catch(() => undefined);
+    const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await fs.writeFile(temporary, key, { mode: 0o600 });
+    await fs.chmod(temporary, 0o600).catch(() => undefined);
+    await fs.rename(temporary, target);
+    return true;
+  } finally {
+    zero(key);
+    zero(wrapped);
+  }
+}
+
 export class SecureDataStore {
   private readonly secureRoot: string;
   private readonly wrappedKeyPath: string;

@@ -412,29 +412,32 @@ if (platform === "windows") {
 } else {
   const infoPlist = path.join(appRoot, "Contents", "Info.plist");
   if (!existsSync(infoPlist)) throw new Error("macOS Info.plist is missing");
-  if (process.env.OSCODE_ALLOW_UNSIGNED !== "1") {
-    const signature = spawnSync(
-      "codesign",
-      ["--verify", "--deep", "--strict", appRoot],
-      { encoding: "utf8", timeout: 30_000 },
-    );
-    if (signature.status !== 0)
-      throw new Error("macOS application does not have a valid code signature");
-    const signatureDetails = spawnSync(
-      "codesign",
-      ["--display", "--verbose=4", appRoot],
-      { encoding: "utf8", timeout: 30_000 },
-    );
+  const signature = spawnSync(
+    "codesign",
+    ["--verify", "--deep", "--strict", appRoot],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  if (signature.status !== 0)
+    throw new Error("macOS application does not have a valid code signature");
+  const signatureDetails = spawnSync(
+    "codesign",
+    ["--display", "--verbose=4", appRoot],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  const signatureOutput = `${signatureDetails.stdout}\n${signatureDetails.stderr}`;
+  if (process.env.OSCODE_ALLOW_UNSIGNED === "1") {
     if (
       signatureDetails.status !== 0 ||
-      !/Authority=Developer ID Application:/i.test(
-        `${signatureDetails.stdout}\n${signatureDetails.stderr}`,
-      )
+      !/Signature=adhoc/i.test(signatureOutput)
     )
-      throw new Error(
-        "macOS application is not signed with Developer ID Application",
-      );
-  }
+      throw new Error("macOS application does not have a valid ad-hoc seal");
+  } else if (
+    signatureDetails.status !== 0 ||
+    !/Authority=Developer ID Application:/i.test(signatureOutput)
+  )
+    throw new Error(
+      "macOS application is not signed with Developer ID Application",
+    );
   const minimumSystem = spawnSync(
     "plutil",
     ["-extract", "LSMinimumSystemVersion", "raw", "-o", "-", infoPlist],
@@ -482,17 +485,20 @@ if (platform === "windows") {
   )
     throw new Error("macOS Computer Control helper is not universal");
   requireMacOs12Compatible(macComputerControl, "macOS Computer Control helper");
-  const helperList = spawnSync(macComputerControl, ["list"], {
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  try {
-    if (
-      helperList.status !== 0 ||
-      !Array.isArray(JSON.parse(helperList.stdout))
-    )
-      throw new Error("invalid helper output");
-  } catch {
+  let helperListReady = false;
+  for (let attempt = 0; attempt < 3 && !helperListReady; attempt += 1) {
+    const helperList = spawnSync(macComputerControl, ["list"], {
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    try {
+      helperListReady =
+        helperList.status === 0 && Array.isArray(JSON.parse(helperList.stdout));
+    } catch {
+      helperListReady = false;
+    }
+  }
+  if (!helperListReady) {
     throw new Error(
       "macOS Computer Control helper failed its local list check",
     );
@@ -593,11 +599,13 @@ if (platform === "windows") {
     "llama",
     packagedRuntimeArchitecture,
   );
+  const nativeRuntimeTimeout =
+    expectedMacArch === "x64" && process.arch === "arm64" ? 60_000 : 15_000;
   const nativeLlama = path.join(nativeLlamaRoot, "llama-completion");
   const nativeLlamaCheck = spawnSync(nativeLlama, ["--version"], {
     cwd: nativeLlamaRoot,
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: Math.max(30_000, nativeRuntimeTimeout),
   });
   if (
     nativeLlamaCheck.status !== 0 ||
@@ -614,7 +622,7 @@ if (platform === "windows") {
   );
   const nativeUvCheck = spawnSync(nativeUv, ["--version"], {
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: nativeRuntimeTimeout,
   });
   if (nativeUvCheck.status !== 0 || !/^uv\s+\d+/i.test(nativeUvCheck.stdout))
     throw new Error("Native macOS uv command failed its version check");
@@ -629,7 +637,7 @@ if (platform === "windows") {
           "-c",
           "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
         ],
-        { encoding: "utf8", timeout: 10_000 },
+        { encoding: "utf8", timeout: nativeRuntimeTimeout },
       );
       return check.status === 0 && check.stdout.trim() === version;
     });

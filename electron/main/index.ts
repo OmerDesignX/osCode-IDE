@@ -14,7 +14,8 @@ import {
   type WebContents,
 } from "electron";
 import path from "node:path";
-import { lstatSync, unlinkSync } from "node:fs";
+import crypto from "node:crypto";
+import { lstatSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { spawn, execFile } from "node:child_process";
@@ -36,7 +37,10 @@ import { PlatformioService } from "./platformio.js";
 import { defaultPreferences, validPreferences } from "./preferences.js";
 import { guardBrokenOutputPipe } from "./process-output.js";
 import { AppUpdateService } from "./updater.js";
+import { SaveHistoryStore } from "./save-history.js";
 import {
+  appLocalKeyProtector,
+  migrateWrappedKeyToAppLocal,
   processKeyProtector,
   SecureDataStore,
   type KeyProtector,
@@ -68,6 +72,7 @@ type WindowContext = {
   confirmOpen: boolean;
 };
 const windowContexts = new Map<number, WindowContext>();
+const projectWatchers = new Map<number, FSWatcher>();
 let aiProjectRoot = "";
 let aiExecutionOwner: WebContents | null = null;
 let aiExecutionTail: Promise<void> = Promise.resolve();
@@ -90,6 +95,7 @@ let agentControlService: AgentControlService;
 let platformioService: PlatformioService;
 let appUpdateService: AppUpdateService;
 let secureStore: SecureDataStore;
+let saveHistoryStore: SaveHistoryStore;
 let runningDebug = false;
 let quittingAfterCleanup = false;
 let rendererHasUnsavedChanges = false;
@@ -122,6 +128,65 @@ function setSenderProject(event: IpcMainInvokeEvent, root: string) {
   const context = activateSender(event);
   if (context) context.projectRoot = root;
   projectRoot = root;
+  startProjectWatcher(event.sender, root);
+}
+function startProjectWatcher(sender: WebContents, root: string) {
+  projectWatchers.get(sender.id)?.close();
+  projectWatchers.delete(sender.id);
+  if (!root || sender.isDestroyed()) return;
+  const pending = new Map<string, NodeJS.Timeout>();
+  try {
+    const watcher = watch(root, { recursive: true }, (kind, filename) => {
+      if (!filename || sender.isDestroyed()) return;
+      const relative = String(filename).replace(/\\/g, "/");
+      if (
+        !relative ||
+        relative
+          .split("/")
+          .some((part) =>
+            [
+              ".git",
+              ".oscode",
+              ".venv",
+              "venv",
+              "env",
+              "__pycache__",
+              "node_modules",
+              "build",
+              "coverage",
+              "dist",
+              "release",
+            ].includes(part),
+          )
+      )
+        return;
+      const target = path.resolve(root, relative);
+      const check = path.relative(root, target);
+      if (check.startsWith("..") || path.isAbsolute(check)) return;
+      const previous = pending.get(target);
+      if (previous) clearTimeout(previous);
+      pending.set(
+        target,
+        setTimeout(async () => {
+          pending.delete(target);
+          const exists = await fs
+            .stat(target)
+            .then((entry) => entry.isFile())
+            .catch(() => false);
+          if (!sender.isDestroyed())
+            sender.send("project:file-changed", { path: target, kind, exists });
+        }, 90),
+      );
+    });
+    watcher.on("close", () => {
+      for (const timer of pending.values()) clearTimeout(timer);
+      pending.clear();
+    });
+    watcher.on("error", () => watcher.close());
+    projectWatchers.set(sender.id, watcher);
+  } catch {
+    // Manual refresh remains available if a host filesystem cannot be watched.
+  }
 }
 function currentAiProjectRoot() {
   return aiProjectContexts.getStore() || aiProjectRoot || projectRoot;
@@ -240,6 +305,8 @@ if (smokeMode) {
   );
 }
 async function stopProjectProcesses() {
+  for (const watcher of projectWatchers.values()) watcher.close();
+  projectWatchers.clear();
   const child = runningScript;
   runningScript = null;
   runningScriptOwner = null;
@@ -678,7 +745,32 @@ type PythonRuntimeRecord = {
   version: string;
   path: string;
   installed: boolean;
+  scope?: "app" | "app-project" | "project" | "system";
 };
+type PythonPackageRecord = {
+  name: string;
+  version: string;
+  editableProjectLocation?: string;
+};
+function validPythonPackageName(value: unknown) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name))
+    throw new Error("Select a valid installed Python package");
+  return name;
+}
+function validPythonPackageSpec(value: unknown) {
+  const packageSpec = typeof value === "string" ? value.trim() : "";
+  if (
+    !packageSpec ||
+    packageSpec.length > 200 ||
+    packageSpec.startsWith("-") ||
+    /[\u0000-\u001f\u007f\s]/.test(packageSpec)
+  )
+    throw new Error(
+      "Enter one package name or version, for example requests==2.32.5",
+    );
+  return packageSpec;
+}
 const secureStatePath = (name: string) =>
   path.join(secureStore.root, "state", `${name}.oscode-data`);
 const legacyStatePath = (name: string) =>
@@ -769,6 +861,7 @@ async function customPythonList(): Promise<PythonRuntimeRecord[]> {
         version: item.version,
         path: executable,
         installed: true,
+        scope: "system",
       });
     } catch {
       /* ignore interpreters that were moved or removed */
@@ -834,6 +927,7 @@ async function containedPythonList() {
             version,
             path: inspected.path,
             installed: true,
+            scope: "app",
           });
       } catch {
         /* ignore helper executables and incomplete downloads */
@@ -864,7 +958,23 @@ async function uvExecutable() {
   };
   return (await find(bundledToolPath("uv"))) || "uv";
 }
-async function projectPythonEnvironment(interpreter: string) {
+async function appProjectEnvironmentRoot() {
+  if (!projectRoot) throw new Error("Open a project first");
+  const root = await fs.realpath(projectRoot);
+  const id = crypto
+    .createHash("sha256")
+    .update(root)
+    .digest("hex")
+    .slice(0, 32);
+  return path.join(managedPythonRoot(), "project-environments", id);
+}
+async function appProjectEnvironmentInterpreter() {
+  return path.join(
+    await appProjectEnvironmentRoot(),
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+}
+async function ownedProjectPythonEnvironment(interpreter: string) {
   if (!projectRoot) throw new Error("Open a project first");
   const inspected = await inspectPython(interpreter);
   const binaryDirectory = path.dirname(inspected.path);
@@ -872,14 +982,170 @@ async function projectPythonEnvironment(interpreter: string) {
     !["scripts", "bin"].includes(path.basename(binaryDirectory).toLowerCase())
   )
     throw new Error("Select a project environment before installing packages");
-  const [root, environment] = await Promise.all([
+  const [root, environment, appEnvironment] = await Promise.all([
     fs.realpath(projectRoot),
     fs.realpath(path.dirname(binaryDirectory)),
+    appProjectEnvironmentRoot(),
   ]);
   const relative = path.relative(root, environment);
-  if (relative.startsWith("..") || path.isAbsolute(relative))
-    throw new Error("The selected Python environment is outside this project");
-  return { inspected, environment };
+  const insideProject =
+    !relative.startsWith("..") && !path.isAbsolute(relative);
+  const insideAppData =
+    path.resolve(environment) === path.resolve(appEnvironment);
+  if (!insideProject && !insideAppData)
+    throw new Error(
+      "Select this project's app environment or a project-local environment",
+    );
+  return {
+    inspected,
+    environment,
+    location: insideProject ? ("project" as const) : ("app" as const),
+  };
+}
+async function projectEnvironmentInterpreters() {
+  if (!projectRoot) return [];
+  const root = await fs.realpath(projectRoot);
+  const executable =
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python";
+  const candidates = [
+    path.join(root, ".venv", executable),
+    path.join(root, "venv", executable),
+    path.join(root, "env", executable),
+  ];
+  const namedRoot = path.join(root, ".oscode", "envs");
+  const named = await fs
+    .readdir(namedRoot, { withFileTypes: true })
+    .catch(() => []);
+  for (const entry of named
+    .filter((item) => item.isDirectory())
+    .sort((left, right) => left.name.localeCompare(right.name)))
+    candidates.push(path.join(namedRoot, entry.name, executable));
+  return candidates;
+}
+async function existingProjectPythonEnvironment(interpreter = "") {
+  if (interpreter) {
+    try {
+      return await ownedProjectPythonEnvironment(interpreter);
+    } catch {
+      // A bundled or system interpreter is a valid base, but not the place
+      // where a project's packages should be installed.
+    }
+  }
+  const candidates = [await appProjectEnvironmentInterpreter()];
+  if (!interpreter)
+    candidates.push(...(await projectEnvironmentInterpreters()));
+  for (const candidate of candidates) {
+    try {
+      return await ownedProjectPythonEnvironment(candidate);
+    } catch {
+      /* continue through common and named project environments */
+    }
+  }
+  return null;
+}
+async function rememberProjectPython(interpreter: string) {
+  if (!projectRoot) return;
+  const root = await fs.realpath(projectRoot);
+  await savePythonSelections(
+    setPythonSelection(await readPythonSelections(), root, interpreter),
+  );
+}
+async function createProjectPythonEnvironment(
+  baseInterpreter: string,
+  destination: string,
+) {
+  if (!projectRoot) throw new Error("Open a project first");
+  const base = await inspectPython(baseInterpreter);
+  await fs.mkdir(uvCacheRoot(), { recursive: true });
+  await exec(
+    await uvExecutable(),
+    ["venv", "--python", base.path, "--seed", destination],
+    {
+      cwd: projectRoot,
+      timeout: 10 * 60_000,
+      env: uvEnvironment({ UV_PYTHON_DOWNLOADS: "never" }),
+    },
+  );
+  const python = path.join(
+    destination,
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+  return ownedProjectPythonEnvironment(python);
+}
+async function ensureProjectPythonEnvironment(interpreter: string) {
+  const existing = await existingProjectPythonEnvironment(interpreter);
+  if (existing) {
+    await rememberProjectPython(existing.inspected.path);
+    return { ...existing, created: false };
+  }
+  if (!projectRoot) throw new Error("Open a project first");
+  if (!interpreter)
+    throw new Error("Select an installed or bundled Python interpreter first");
+  const destination = await appProjectEnvironmentRoot();
+  if (await fs.lstat(destination).catch(() => null))
+    throw new Error(
+      "The app-managed environment is incomplete. Rename it from application data before trying again.",
+    );
+  try {
+    const created = await createProjectPythonEnvironment(
+      interpreter,
+      destination,
+    );
+    await rememberProjectPython(created.inspected.path);
+    return { ...created, location: "app" as const, created: true };
+  } catch (error) {
+    await fs.rm(destination, { recursive: true, force: true });
+    throw error;
+  }
+}
+async function preferredProjectPythonInterpreter() {
+  if (!projectRoot) throw new Error("Open a project first");
+  const root = await fs.realpath(projectRoot);
+  const selected = (await readPythonSelections())[root];
+  if (selected) {
+    try {
+      return (await inspectPython(selected)).path;
+    } catch {
+      // Fall back to the bundled runtime if the saved interpreter moved.
+    }
+  }
+  const contained = await containedPythonList();
+  const bundled =
+    contained.get("3.12")?.path || [...contained.values()][0]?.path;
+  if (!bundled) throw new Error("The bundled Python runtime is unavailable");
+  return bundled;
+}
+async function installProjectPythonPackages(
+  interpreter: string,
+  requestedPackages: unknown[],
+) {
+  if (!requestedPackages.length || requestedPackages.length > 16)
+    throw new Error("Choose between 1 and 16 Python packages to install");
+  const packages = requestedPackages.map(validPythonPackageSpec);
+  const baseInterpreter =
+    interpreter || (await preferredProjectPythonInterpreter());
+  const { inspected, environment, created } =
+    await ensureProjectPythonEnvironment(baseInterpreter);
+  await fs.mkdir(uvCacheRoot(), { recursive: true });
+  const result = await exec(
+    await uvExecutable(),
+    ["pip", "install", "--python", inspected.path, ...packages],
+    {
+      cwd: projectRoot,
+      timeout: 10 * 60_000,
+      env: uvEnvironment({
+        VIRTUAL_ENV: environment,
+        UV_PROJECT_ENVIRONMENT: environment,
+      }),
+      maxBuffer: 4 * 1024 * 1024,
+    },
+  );
+  return {
+    packages,
+    output: `${result.stdout || ""}\n${result.stderr || ""}`.trim(),
+    interpreter: inspected.path,
+    createdEnvironment: created,
+  };
 }
 async function readPythonSelections() {
   return validPythonSelections(
@@ -1006,6 +1272,8 @@ function createWindow(show = true, restoreLastProject = true) {
   });
   window.on("closed", () => {
     const ownerId = webContentsId;
+    projectWatchers.get(ownerId)?.close();
+    projectWatchers.delete(ownerId);
     windowContexts.delete(ownerId);
     rendererHasUnsavedChanges = [...windowContexts.values()].some(
       (item) => item.dirty,
@@ -1181,6 +1449,9 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.setProjectPython === 'function' &&
         typeof window.oscode?.loadPreferences === 'function' &&
         typeof window.oscode?.savePreferences === 'function' &&
+        typeof window.oscode?.listSaveHistory === 'function' &&
+        typeof window.oscode?.restoreSaveHistory === 'function' &&
+        typeof window.oscode?.onProjectFileChanged === 'function' &&
         typeof window.oscode?.appUpdateStatus === 'function' &&
         typeof window.oscode?.setAppAutoUpdate === 'function' &&
         typeof window.oscode?.checkForAppUpdate === 'function' &&
@@ -1197,6 +1468,8 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.stopAgentControl === 'function' &&
         typeof window.oscode?.agentBrowserSnapshot === 'function' &&
         typeof window.oscode?.onAgentActivity === 'function' &&
+        typeof window.oscode?.listPythonPackages === 'function' &&
+        typeof window.oscode?.uninstallPythonPackage === 'function' &&
         typeof window.oscode?.closeProject === 'function';
       const keepUpdatesOff = await waitFor(
         () => [...document.querySelectorAll('.notification-choice button')].find(
@@ -1305,6 +1578,11 @@ async function runSmokeTest(window: BrowserWindow) {
         ${JSON.stringify(path.join(smokeProject, "branch-smoke.txt"))},
         'branch controls ready\\n'
       );
+      const saveHistoryReady = (
+        await window.oscode.listSaveHistory(
+          ${JSON.stringify(path.join(smokeProject, "branch-smoke.txt"))}
+        )
+      ).length === 1;
       await window.oscode.gitRun('addAll');
       await window.oscode.gitRun('commit', 'Exercise branch controls');
       await window.oscode.gitRun('branchSwitch', 'main');
@@ -1364,6 +1642,12 @@ async function runSmokeTest(window: BrowserWindow) {
       )?.querySelector('input');
       const proseWrapSettingReady =
         Boolean(proseWrapDefault) && Boolean(proseWrapToggle?.checked);
+      const autosaveSettingReady = Boolean(
+        [...settingsDock.querySelectorAll('label')].find(
+          item => item.querySelector('span')?.textContent.trim() ===
+            'Autosave edited files'
+        )?.querySelector('input')?.checked
+      );
       proseWrapToggle.click();
       await waitFor(() => !proseWrapToggle.checked, 'disable prose wrapping');
       proseWrapToggle.click();
@@ -1380,6 +1664,7 @@ async function runSmokeTest(window: BrowserWindow) {
         'File access: off',
         'Web access: off',
         'Dedicated agent browser: off',
+        'Terminal access: ask first',
         'Computer Control: off'
       ].every(label => aiPanel.querySelector('[aria-label="' + label + '"]'));
       const layoutSelect = [...settingsDock.querySelectorAll('label')].find(
@@ -1473,6 +1758,61 @@ async function runSmokeTest(window: BrowserWindow) {
         'terminal panel'
       );
       const terminalPanelHeight = terminalPanel.getBoundingClientRect().height;
+      const packageManagerButton = [...terminalPanel.querySelectorAll('button')]
+        .find(item => item.textContent.trim() === 'Packages');
+      packageManagerButton.click();
+      const pythonPackageManagerReady = Boolean(await waitFor(
+        () => document.querySelector('.python-package-manager'),
+        'Python package manager'
+      ));
+      const packageInput = document.querySelector('[aria-label="Package to install"]');
+      const packageAddButton = [...document.querySelectorAll('.python-package-manager button')]
+        .find(item => item.textContent.trim() === 'Add');
+      const packageList = document.querySelector('.python-package-list');
+      const packageManagerText = document.querySelector('.python-package-manager')?.textContent || '';
+      const pythonPackageInputReady = Boolean(
+        packageInput && !packageInput.disabled && packageAddButton
+      );
+      const pythonPackageListReady = Boolean(
+        packageList &&
+        getComputedStyle(packageList).display === 'flex' &&
+        getComputedStyle(packageList).flexDirection === 'column' &&
+        getComputedStyle(packageList).overflowY === 'auto'
+      );
+      const pythonEnvironmentLocationReady =
+        packageManagerText.includes('outside project') &&
+        packageManagerText.includes('Create project .venv');
+      if (packageInput) {
+        const valueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value'
+        )?.set;
+        valueSetter?.call(packageInput, 'smoke-package');
+        packageInput.dispatchEvent(new Event('input', { bubbles: true }));
+        packageInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const pythonPackageAddReady = Boolean(await waitFor(
+        () => packageAddButton && !packageAddButton.disabled,
+        'Python package add control'
+      ));
+      const uvHelpButton = [...terminalPanel.querySelectorAll('button')]
+        .find(item => item.textContent.trim() === 'UV help');
+      uvHelpButton.click();
+      const uvHelpbook = await waitFor(
+        () => document.querySelector('.uv-helpbook'),
+        'UV helpbook'
+      );
+      const uvEntries = [...uvHelpbook.querySelectorAll('article')];
+      const uvBounds = uvHelpbook.getBoundingClientRect();
+      const terminalBounds = terminalPanel.getBoundingClientRect();
+      const uvHelpbookReady = Boolean(
+        getComputedStyle(uvHelpbook).position === 'absolute' &&
+        uvHelpbook.getBoundingClientRect().width >= 380 &&
+        uvEntries.length >= 3 &&
+        uvEntries[1].getBoundingClientRect().top > uvEntries[0].getBoundingClientRect().top &&
+        uvBounds.top >= terminalBounds.top &&
+        uvBounds.bottom <= terminalBounds.bottom
+      );
       terminalToggle.click();
       await waitFor(
         () => !document.querySelector('.terminal-panel'),
@@ -1513,6 +1853,20 @@ async function runSmokeTest(window: BrowserWindow) {
         projectReady: document.body.innerText.includes('smoke-project'),
         sidebarWidth: document.querySelector('.sidebar')?.getBoundingClientRect().width || 0,
         editorReady: Boolean(editor),
+        editorCommandsReady: (() => {
+          const bar = document.querySelector('.editor-command-bar');
+          const buttons = [...(bar?.querySelectorAll('button') || [])];
+          if (!bar || buttons.length < 5) return false;
+          const bounds = bar.getBoundingClientRect();
+          return (
+            getComputedStyle(bar).overflowX === 'auto' &&
+            buttons.every(button => {
+              const box = button.getBoundingClientRect();
+              return box.height >= 32 && box.width >= 34;
+            }) &&
+            buttons[0].getBoundingClientRect().left >= bounds.left
+          );
+        })(),
         editorModelLength: Number(editor.dataset.oscodeModelLength || 0),
         markdownReady,
         swiftReady: Boolean(swiftReady),
@@ -1545,6 +1899,8 @@ async function runSmokeTest(window: BrowserWindow) {
           gitAfterSync.behind === 0,
         advancedReady: Boolean(advancedDock),
         settingsReady: Boolean(settingsDock),
+        autosaveSettingReady,
+        saveHistoryReady,
         themeChoicesReady,
         platformioReady,
         aiPanelReady:
@@ -1559,6 +1915,12 @@ async function runSmokeTest(window: BrowserWindow) {
         aiModelSelected: Boolean(aiModelSelected),
         lightThemeReady: Boolean(lightThemeReady),
         terminalPanelHeight,
+        pythonPackageManagerReady,
+        pythonPackageInputReady,
+        pythonPackageAddReady,
+        pythonPackageListReady,
+        pythonEnvironmentLocationReady,
+        uvHelpbookReady,
         terminalReady: terminalOutput.includes('OSCODE_TERMINAL_READY')
       };
     })().catch(error => ({
@@ -1573,20 +1935,60 @@ async function runSmokeTest(window: BrowserWindow) {
       mode: "background",
     });
     await new Promise((resolve) => setTimeout(resolve, 180));
-    result.globalSearchWithActivityReady =
-      await contents.executeJavaScript(`(() => {
+    result.globalSearchLayout = await contents.executeJavaScript(`(async () => {
+      const toggle = document.querySelector('[aria-label="Open search"]');
+      toggle?.click();
+      await new Promise(resolve => setTimeout(resolve, 100));
       const search = document.querySelector('.global-search')?.getBoundingClientRect();
       const status = document.querySelector('.top-status')?.getBoundingClientRect();
       const bar = document.querySelector('.topbar')?.getBoundingClientRect();
-      return Boolean(
-        search && status && bar &&
-        search.width >= 150 &&
-        status.width >= 42 &&
-        search.right <= status.left + 1 &&
+      const actions = document.querySelector('.top-actions')?.getBoundingClientRect();
+      const actionControl = document
+        .querySelector('.top-actions .runtime-select, .top-actions .icon-button')
+        ?.getBoundingClientRect();
+      const controlHeights = [
+        ...document.querySelectorAll('.top-actions .icon-button, .top-actions .runtime-select'),
+        ...document.querySelectorAll('.editor-command-bar button'),
+        ...document.querySelectorAll('.terminal-tabs button')
+      ].map(item => Math.round(item.getBoundingClientRect().height)).filter(Boolean);
+      return {
+        ready: Boolean(
+        toggle && search && status && actions && actionControl && bar &&
+        bar.height >= 64 && bar.height <= 76 &&
+        search.width >= 96 &&
+        search.height >= 40 &&
+        status.width >= 140 && status.height >= 40 &&
+        actionControl.height >= 40 &&
+        Math.abs(search.top - status.top) <= 4 &&
+        Math.abs(search.top - actionControl.top) <= 4 &&
+        search.right <= status.left + 2 &&
         search.left >= bar.left &&
         status.right <= bar.right
-      );
+        ),
+        balancedControls: Boolean(
+          controlHeights.length >= 10 &&
+          controlHeights.every(height => height >= 38 && height <= 46) &&
+          Math.max(...controlHeights) - Math.min(...controlHeights) <= 4
+        ),
+        search: search ? { top: search.top, bottom: search.bottom, width: search.width } : null,
+        status: status ? { top: status.top, right: status.right, width: status.width } : null,
+        actions: actions ? {
+          top: actions.top,
+          right: actions.right,
+          width: actions.width,
+          controlTop: actionControl?.top,
+          controlHeight: actionControl?.height
+        } : null,
+        bar: bar ? { left: bar.left, right: bar.right, height: bar.height } : null
+      };
     })()`);
+    result.globalSearchWithActivityReady = Boolean(
+      (result.globalSearchLayout as { ready?: boolean } | undefined)?.ready,
+    );
+    result.balancedControlSizing = Boolean(
+      (result.globalSearchLayout as { balancedControls?: boolean } | undefined)
+        ?.balancedControls,
+    );
     sendToRenderer("agent:activity", {
       kind: "computer",
       label: "Computer Control stopped",
@@ -1594,7 +1996,9 @@ async function runSmokeTest(window: BrowserWindow) {
       network: false,
     });
     try {
-      await agentControlService.openBrowser("'agent-preview.html'");
+      await agentControlService.openBrowser(
+        "'file:///Users/runneradmin/Code/example/agent-preview.html'",
+      );
       sendToRenderer("agent:activity", {
         kind: "browser",
         label: "Browser · agent-preview.html",
@@ -1617,6 +2021,22 @@ async function runSmokeTest(window: BrowserWindow) {
           await new Promise(resolve => setTimeout(resolve, 80));
         }
         return false;
+      })()`);
+      result.agentBrowserButtonsReady =
+        await contents.executeJavaScript(`(() => {
+        const toolbar = document.querySelector('.agent-browser-toolbar');
+        const buttons = [...document.querySelectorAll('.agent-browser-actions button')];
+        if (!toolbar || buttons.length !== 2) return false;
+        const bounds = toolbar.getBoundingClientRect();
+        return buttons.every(button => {
+          const box = button.getBoundingClientRect();
+          return (
+            box.height >= 32 &&
+            box.left >= bounds.left &&
+            box.right <= bounds.right + 1 &&
+            getComputedStyle(button).whiteSpace === 'nowrap'
+          );
+        });
       })()`);
       const browserBefore = JSON.parse(
         await agentControlService.inspectBrowser(),
@@ -1662,6 +2082,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.projectReady !== true ||
       Number(result.sidebarWidth) < 200 ||
       result.editorReady !== true ||
+      result.editorCommandsReady !== true ||
       result.markdownReady !== true ||
       result.swiftReady !== true ||
       result.proseWrapSettingReady !== true ||
@@ -1677,6 +2098,8 @@ async function runSmokeTest(window: BrowserWindow) {
       result.gitSyncReady !== true ||
       result.advancedReady !== true ||
       result.settingsReady !== true ||
+      result.autosaveSettingReady !== true ||
+      result.saveHistoryReady !== true ||
       result.themeChoicesReady !== true ||
       result.platformioReady !== true ||
       result.aiPanelReady !== true ||
@@ -1684,12 +2107,20 @@ async function runSmokeTest(window: BrowserWindow) {
       result.aiCapabilitiesDefaultOff !== true ||
       result.agentBrowserReady !== true ||
       result.agentBrowserViewReady !== true ||
+      result.agentBrowserButtonsReady !== true ||
       result.computerControlReady !== true ||
       result.aiPopupsExclusive !== true ||
       result.aiContextReady !== true ||
       result.aiModelSelected !== true ||
       result.globalSearchWithActivityReady !== true ||
+      result.balancedControlSizing !== true ||
       result.lightThemeReady !== true ||
+      result.pythonPackageManagerReady !== true ||
+      result.pythonPackageInputReady !== true ||
+      result.pythonPackageAddReady !== true ||
+      result.pythonPackageListReady !== true ||
+      result.pythonEnvironmentLocationReady !== true ||
+      result.uvHelpbookReady !== true ||
       Number(result.terminalPanelHeight) < 150 ||
       result.terminalReady !== true ||
       Number(result.editorModelLength) < 20
@@ -2452,14 +2883,50 @@ function registerIpc() {
   });
   ipcMain.handle(
     "file:write",
-    async (event, target: string, content: unknown) => {
+    async (event, target: string, content: unknown, rawSource: unknown) => {
       activateSender(event);
-      await fs.writeFile(
-        await safeProjectPath(target),
-        validateTextContent(content),
-        "utf8",
-      );
+      const file = await safeProjectPath(target);
+      const next = validateTextContent(content);
+      const source = ["manual", "autosave", "agent", "restore"].includes(
+        String(rawSource),
+      )
+        ? (rawSource as "manual" | "autosave" | "agent" | "restore")
+        : "manual";
+      const root = await fs.realpath(projectRoot);
+      const relative = path.relative(root, file).replace(/\\/g, "/");
+      const before = decodeTextFile(await fs.readFile(file));
+      if (before !== next)
+        await saveHistoryStore.record(root, relative, before, source);
+      await fs.writeFile(file, next, "utf8");
       return true;
+    },
+  );
+  ipcMain.handle("file:history-list", async (event, target: unknown) => {
+    activateSender(event);
+    if (typeof target !== "string") throw new Error("Invalid file path");
+    const file = await safeProjectPath(target);
+    const root = await fs.realpath(projectRoot);
+    return saveHistoryStore.list(
+      root,
+      path.relative(root, file).replace(/\\/g, "/"),
+    );
+  });
+  ipcMain.handle(
+    "file:history-restore",
+    async (event, target: unknown, rawId: unknown) => {
+      activateSender(event);
+      if (typeof target !== "string" || typeof rawId !== "string")
+        throw new Error("Invalid saved version");
+      const file = await safeProjectPath(target);
+      const root = await fs.realpath(projectRoot);
+      const relative = path.relative(root, file).replace(/\\/g, "/");
+      const current = decodeTextFile(await fs.readFile(file));
+      const restored = await saveHistoryStore.content(root, relative, rawId);
+      if (current !== restored) {
+        await saveHistoryStore.record(root, relative, current, "restore");
+        await fs.writeFile(file, restored, "utf8");
+      }
+      return restored;
     },
   );
   ipcMain.handle("git:state", (event) => {
@@ -2829,7 +3296,12 @@ function registerIpc() {
             : ["-c", "import sys;print(sys.executable)"];
         try {
           const { stdout } = await exec(systemCommand, systemArgs);
-          return { version, path: stdout.trim(), installed: true };
+          return {
+            version,
+            path: stdout.trim(),
+            installed: true,
+            scope: "system" as const,
+          };
         } catch {
           try {
             const { stdout } = await exec(
@@ -2842,9 +3314,19 @@ function registerIpc() {
                 },
               },
             );
-            return { version, path: stdout.trim(), installed: true };
+            return {
+              version,
+              path: stdout.trim(),
+              installed: true,
+              scope: "app" as const,
+            };
           } catch {
-            return { version, path: "", installed: false };
+            return {
+              version,
+              path: "",
+              installed: false,
+              scope: "app" as const,
+            };
           }
         }
       }),
@@ -2866,48 +3348,39 @@ function registerIpc() {
       ),
     );
     const projectRuntimes: PythonRuntimeRecord[] = [];
-    const venvPython = projectRoot
-      ? path.join(
-          projectRoot,
-          ".venv",
-          process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-        )
-      : "";
-    if (venvPython) {
-      try {
-        const inspected = await inspectPython(venvPython);
-        projectRuntimes.push({
-          version: `Project .venv · ${inspected.fullVersion}`,
-          path: inspected.path,
-          installed: true,
-        });
-      } catch {
-        /* no project environment */
-      }
-    }
     if (projectRoot) {
-      const namedRoot = await projectPrivateDirectory(
-        [".oscode", "envs"],
-        false,
-      ).catch(() => "");
-      if (!namedRoot) return [...projectRuntimes, ...discovered];
-      const names = await fs
-        .readdir(namedRoot, { withFileTypes: true })
-        .catch(() => []);
-      for (const entry of names
-        .filter((x) => x.isDirectory())
-        .sort((a, b) => a.name.localeCompare(b.name))) {
-        const python = path.join(
-          namedRoot,
-          entry.name,
-          process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-        );
+      const root = await fs.realpath(projectRoot);
+      const knownProjectPaths = new Set<string>();
+      for (const python of [
+        await appProjectEnvironmentInterpreter(),
+        ...(await projectEnvironmentInterpreters()),
+      ]) {
         try {
-          const inspected = await inspectPython(python);
+          const owned = await ownedProjectPythonEnvironment(python);
+          const inspected = owned.inspected;
+          const normalized =
+            process.platform === "win32"
+              ? inspected.path.toLowerCase()
+              : inspected.path;
+          if (knownProjectPaths.has(normalized)) continue;
+          knownProjectPaths.add(normalized);
+          const relativeEnvironment = path
+            .relative(root, owned.environment)
+            .replace(/\\/g, "/");
+          const environmentName =
+            relativeEnvironment === ".venv"
+              ? ".venv"
+              : relativeEnvironment.startsWith(".oscode/envs/")
+                ? `env “${path.basename(relativeEnvironment)}”`
+                : relativeEnvironment;
           projectRuntimes.push({
-            version: `Project: ${entry.name} · ${inspected.fullVersion}`,
+            version:
+              owned.location === "app"
+                ? `App environment · ${inspected.fullVersion}`
+                : `Project ${environmentName} · ${inspected.fullVersion}`,
             path: inspected.path,
             installed: true,
+            scope: owned.location === "app" ? "app-project" : "project",
           });
         } catch {
           /* ignore incomplete environment */
@@ -2962,6 +3435,7 @@ function registerIpc() {
       version: `Local ${inspected.fullVersion}`,
       path: executable,
       installed: true,
+      scope: "system" as const,
     };
     const existing = await customPythonList();
     const normalized =
@@ -3021,10 +3495,11 @@ function registerIpc() {
         const created = await inspectPython(python);
         return {
           version: name
-            ? `Project: ${name} · ${created.fullVersion}`
+            ? `Project env “${name}” · ${created.fullVersion}`
             : `Project .venv · ${created.fullVersion}`,
           path: created.path,
           installed: true,
+          scope: "project" as const,
         };
       } catch (error) {
         await fs.rm(destination, { recursive: true, force: true });
@@ -3036,36 +3511,109 @@ function registerIpc() {
     "python:install-package",
     async (event, interpreter: string, requestedPackage: string) => {
       activateSender(event);
-      const packageSpec =
-        typeof requestedPackage === "string" ? requestedPackage.trim() : "";
-      if (
-        !packageSpec ||
-        packageSpec.length > 200 ||
-        packageSpec.startsWith("-") ||
-        /[\u0000-\u001f\u007f\s]/.test(packageSpec)
-      )
-        throw new Error(
-          "Enter one package name or version, for example requests==2.32.5",
-        );
-      const { inspected, environment } =
-        await projectPythonEnvironment(interpreter);
-      await fs.mkdir(uvCacheRoot(), { recursive: true });
+      const installed = await installProjectPythonPackages(interpreter, [
+        requestedPackage,
+      ]);
+      return {
+        package: installed.packages[0],
+        output: installed.output,
+        interpreter: installed.interpreter,
+        createdEnvironment: installed.createdEnvironment,
+      };
+    },
+  );
+  ipcMain.handle("python:list-packages", async (event, interpreter: string) => {
+    activateSender(event);
+    const selected = await existingProjectPythonEnvironment(interpreter);
+    if (!selected)
+      return {
+        interpreter: "",
+        environment: "",
+        location: "",
+        packages: [],
+      };
+    await rememberProjectPython(selected.inspected.path);
+    const result = await exec(
+      await uvExecutable(),
+      [
+        "pip",
+        "list",
+        "--python",
+        selected.inspected.path,
+        "--format",
+        "json",
+        "--color",
+        "never",
+      ],
+      {
+        cwd: projectRoot,
+        timeout: 60_000,
+        env: uvEnvironment({
+          VIRTUAL_ENV: selected.environment,
+          UV_PROJECT_ENVIRONMENT: selected.environment,
+        }),
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+    const parsed = JSON.parse(result.stdout) as unknown;
+    const packages: PythonPackageRecord[] = Array.isArray(parsed)
+      ? parsed.flatMap((item) => {
+          if (
+            !item ||
+            typeof item !== "object" ||
+            !("name" in item) ||
+            typeof item.name !== "string" ||
+            !("version" in item) ||
+            typeof item.version !== "string"
+          )
+            return [];
+          const editable =
+            "editable_project_location" in item &&
+            typeof item.editable_project_location === "string"
+              ? item.editable_project_location
+              : undefined;
+          return [
+            {
+              name: item.name,
+              version: item.version,
+              ...(editable ? { editableProjectLocation: editable } : {}),
+            },
+          ];
+        })
+      : [];
+    packages.sort((left, right) => left.name.localeCompare(right.name));
+    return {
+      interpreter: selected.inspected.path,
+      environment: selected.environment,
+      location: selected.location,
+      packages,
+    };
+  });
+  ipcMain.handle(
+    "python:uninstall-package",
+    async (event, interpreter: string, requestedPackage: string) => {
+      activateSender(event);
+      const packageName = validPythonPackageName(requestedPackage);
+      const selected = await existingProjectPythonEnvironment(interpreter);
+      if (!selected)
+        throw new Error("This project does not have a Python environment yet");
       const result = await exec(
         await uvExecutable(),
-        ["pip", "install", "--python", inspected.path, packageSpec],
+        ["pip", "uninstall", "--python", selected.inspected.path, packageName],
         {
           cwd: projectRoot,
           timeout: 10 * 60_000,
           env: uvEnvironment({
-            VIRTUAL_ENV: environment,
-            UV_PROJECT_ENVIRONMENT: environment,
+            VIRTUAL_ENV: selected.environment,
+            UV_PROJECT_ENVIRONMENT: selected.environment,
           }),
           maxBuffer: 4 * 1024 * 1024,
         },
       );
       return {
-        package: packageSpec,
+        package: packageName,
         output: `${result.stdout || ""}\n${result.stderr || ""}`.trim(),
+        interpreter: selected.inspected.path,
       };
     },
   );
@@ -3181,37 +3729,37 @@ function registerIpc() {
   });
 }
 app.whenReady().then(async () => {
+  const userData = app.getPath("userData");
+  if (!smokeMode) {
+    try {
+      await migrateWrappedKeyToAppLocal(userData, (value) => {
+        if (!safeStorage.isEncryptionAvailable())
+          throw new Error(
+            "The operating-system key store needed to read the legacy encryption key is unavailable",
+          );
+        if (
+          process.platform === "linux" &&
+          safeStorage.getSelectedStorageBackend() === "basic_text"
+        )
+          throw new Error(
+            "A Linux Secret Service or KWallet is needed once to migrate the legacy encryption key",
+          );
+        return Buffer.from(safeStorage.decryptString(value), "base64");
+      });
+    } catch (error) {
+      dialog.showErrorBox(
+        "Encrypted data migration unavailable",
+        `osCode could not migrate its existing encrypted data to app-managed storage: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      app.quit();
+      return;
+    }
+  }
   const osKeyProtector: KeyProtector = smokeMode
-    ? processKeyProtector(app.getPath("userData"))
-    : {
-        status: () => {
-          if (!safeStorage.isEncryptionAvailable())
-            return {
-              available: false,
-              backend: "unavailable",
-              reason:
-                "Your operating system's secure key store is unavailable. osCode will not save sensitive data without encryption.",
-            };
-          const backend =
-            process.platform === "linux"
-              ? safeStorage.getSelectedStorageBackend()
-              : process.platform === "darwin"
-                ? "Keychain"
-                : "DPAPI";
-          if (process.platform === "linux" && backend === "basic_text")
-            return {
-              available: false,
-              backend,
-              reason:
-                "A Linux Secret Service or KWallet is required. osCode refuses Electron's unprotected basic_text fallback.",
-            };
-          return { available: true, backend };
-        },
-        protect: (value) => safeStorage.encryptString(value.toString("base64")),
-        unprotect: (value) =>
-          Buffer.from(safeStorage.decryptString(value), "base64"),
-      };
-  secureStore = new SecureDataStore(app.getPath("userData"), osKeyProtector);
+    ? processKeyProtector(userData)
+    : appLocalKeyProtector();
+  secureStore = new SecureDataStore(userData, osKeyProtector);
+  saveHistoryStore = new SaveHistoryStore(secureStore);
   try {
     await secureStore.ready();
     await secureStore.purgeLegacyPromptData();
@@ -3260,6 +3808,8 @@ app.whenReady().then(async () => {
       : path.join(app.getAppPath(), "vendor", "llama"),
     getProjectRoot: currentAiProjectRoot,
     getUv: uvExecutable,
+    installPythonPackages: (packages) =>
+      installProjectPythonPackages("", packages),
     getPython: async () => {
       const runtimes = await containedPythonList();
       const python =
@@ -3268,6 +3818,8 @@ app.whenReady().then(async () => {
       return python;
     },
     status: (message) => broadcastToRenderers("ai:status", message),
+    checkpoint: (root, relative, before) =>
+      saveHistoryStore.record(root, relative, before, "agent").then(() => {}),
     action: (action) => {
       if (aiExecutionOwner && !aiExecutionOwner.isDestroyed())
         aiExecutionOwner.send("ai:action", action);

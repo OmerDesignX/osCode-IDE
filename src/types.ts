@@ -5,7 +5,7 @@ export type TreeEntry = {
   children?: TreeEntry[];
 };
 export type EditorPreferences = {
-  version: 9;
+  version: 10;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
@@ -29,6 +29,7 @@ export type EditorPreferences = {
   proseWrap: boolean;
   minimap: boolean;
   spellcheck: boolean;
+  autoSave: boolean;
   autoUpdateEnabled: boolean;
   autoUpdatePromptAnswered: boolean;
   lastProject: string;
@@ -52,6 +53,7 @@ export type AppUpdateStatus = {
 export type AiEngine = "llamacpp" | "ollama" | "pytorch" | "mlx";
 export type AiInferenceHardware = "auto" | "cpu" | "gpu";
 export type AiEditMode = "ask" | "auto" | "read-only";
+export type AiTerminalMode = "ask" | "auto";
 export type AiModel = {
   id: string;
   name: string;
@@ -84,6 +86,7 @@ export type AiPermissionKind =
   | "project.read"
   | "project.write"
   | "terminal.run"
+  | "packages.install"
   | "debug.run"
   | "web.search"
   | "browser.control"
@@ -262,6 +265,18 @@ export type PythonRuntime = {
   version: string;
   path: string;
   installed: boolean;
+  scope?: "app" | "app-project" | "project" | "system";
+};
+export type PythonPackage = {
+  name: string;
+  version: string;
+  editableProjectLocation?: string;
+};
+export type PythonPackageState = {
+  interpreter: string;
+  environment: string;
+  location: "" | "app" | "project";
+  packages: PythonPackage[];
 };
 export type PlatformioState = {
   installed: boolean;
@@ -285,6 +300,18 @@ export type ProjectSearchResult = {
   relativePath: string;
   line: number;
   preview: string;
+};
+export type ProjectFileChange = {
+  path: string;
+  kind: "change" | "rename";
+  exists: boolean;
+};
+export type SaveHistoryEntry = {
+  id: string;
+  createdAt: string;
+  path: string;
+  source: "manual" | "autosave" | "agent" | "restore";
+  bytes: number;
 };
 export type Tab = {
   path: string;
@@ -416,6 +443,7 @@ declare global {
         executable: string;
         messages: AiChatMessage[];
         editMode: AiEditMode;
+        terminalMode: AiTerminalMode;
         fileAccess: boolean;
         webAccess: boolean;
         browserAccess: boolean;
@@ -449,7 +477,14 @@ declare global {
       ): Promise<boolean>;
       readMarkdownImage(markdownPath: string, source: string): Promise<string>;
       readFile(path: string): Promise<string>;
-      writeFile(path: string, content: string): Promise<boolean>;
+      writeFile(
+        path: string,
+        content: string,
+        source?: "manual" | "autosave" | "agent" | "restore",
+      ): Promise<boolean>;
+      listSaveHistory(path: string): Promise<SaveHistoryEntry[]>;
+      restoreSaveHistory(path: string, id: string): Promise<string>;
+      onProjectFileChanged(cb: (change: ProjectFileChange) => void): () => void;
       gitState(): Promise<GitState>;
       gitRun(action: string, payload?: string): Promise<GitState>;
       deleteRepository(): Promise<GitState>;
@@ -468,10 +503,20 @@ declare global {
       choosePython(): Promise<PythonRuntime | null>;
       installPython(version: string): Promise<boolean>;
       createVenv(interpreter: string, name?: string): Promise<PythonRuntime>;
+      listPythonPackages(interpreter: string): Promise<PythonPackageState>;
       installPythonPackage(
         interpreter: string,
         packageSpec: string,
-      ): Promise<{ package: string; output: string }>;
+      ): Promise<{
+        package: string;
+        output: string;
+        interpreter: string;
+        createdEnvironment: boolean;
+      }>;
+      uninstallPythonPackage(
+        interpreter: string,
+        packageName: string,
+      ): Promise<{ package: string; output: string; interpreter: string }>;
       runPython(
         file: string,
         interpreter: string,

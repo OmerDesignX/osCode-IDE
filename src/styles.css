@@ -2098,6 +2098,87 @@ kbd {
   padding: 28px clamp(24px, 5vw, 72px) 64px;
   background: var(--bg);
 }
+.autosave-state {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.save-history-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 42;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, #000 48%, transparent);
+}
+.save-history-dialog {
+  width: min(620px, 100%);
+  max-height: min(680px, 90%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36);
+}
+.save-history-dialog > header,
+.save-history-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.save-history-dialog > header {
+  min-height: 64px;
+  padding: 10px 14px 10px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.save-history-dialog > header > span,
+.save-history-list article > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.save-history-dialog small,
+.save-history-list small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.save-history-list {
+  min-height: 150px;
+  overflow: auto;
+  padding: 10px;
+}
+.save-history-list article {
+  min-height: 58px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.save-history-list article + article {
+  margin-top: 7px;
+}
+.save-history-list article > button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel2);
+  color: var(--text);
+}
+.save-history-list > p {
+  margin: 0;
+  padding: 28px 18px;
+  color: var(--muted);
+  text-align: center;
+}
 .markdown-body {
   max-width: 920px;
   margin: 0 auto;
@@ -3768,6 +3849,8 @@ textarea,
 }
 .ai-live-work {
   margin: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -3899,7 +3982,8 @@ textarea,
   gap: 8px;
 }
 .browser-view-control > button {
-  min-height: 32px;
+  min-width: max-content;
+  min-height: 34px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3908,6 +3992,7 @@ textarea,
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
+  white-space: nowrap;
 }
 .browser-view-control > button:hover,
 .browser-view-control > button.active {
@@ -3974,12 +4059,15 @@ textarea,
   justify-content: flex-end;
 }
 .agent-browser-actions > button {
-  min-height: 32px;
+  min-width: max-content;
+  min-height: 34px;
+  flex: 0 0 auto;
   padding: 0 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
+  white-space: nowrap;
 }
 .agent-browser-actions > button:hover {
   background: var(--panel2);
@@ -4010,7 +4098,7 @@ textarea,
 }
 .agent-browser-canvas img {
   width: 100%;
-  min-width: 540px;
+  min-width: 0;
   display: block;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -5046,16 +5134,22 @@ textarea,
 
 .editor-command-bar {
   min-height: 40px;
+  min-width: 0;
   flex: none;
   display: flex;
-  justify-content: flex-end;
-  gap: 5px;
-  padding: 4px 10px;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
 .editor-command-bar button {
-  min-height: 32px;
+  min-width: max-content;
+  min-height: 34px;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -5064,11 +5158,32 @@ textarea,
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
+  white-space: nowrap;
 }
 .editor-command-bar button:hover,
 .editor-command-bar button.active {
   background: var(--panel2);
   color: var(--text);
+}
+.editor-command-bar::-webkit-scrollbar {
+  height: 4px;
+}
+.editor-command-bar .autosave-state {
+  min-width: max-content;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0;
+  padding: 0 4px;
+}
+
+.editor-command-divider {
+  width: 1px;
+  height: 28px;
+  flex: 0 0 1px;
+  align-self: center;
+  margin: 0 2px;
+  background: var(--line);
 }
 .split-editor-host {
   min-width: 0;
@@ -6993,7 +7108,7 @@ textarea,
   top: 112px;
 }
 .app[data-platform="darwin"] .ai-panel.expanded .ai-capability-bar {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 /* Native macOS traffic lights live in their own draggable row above app UI. */
@@ -7179,13 +7294,14 @@ textarea,
   border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 .ai-stop-button {
-  min-height: 32px;
+  min-width: max-content;
+  min-height: 36px;
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin: 0 10px 9px;
-  padding: 6px 10px;
+  margin: 10px 10px 10px;
+  padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--bg);
@@ -7195,4 +7311,944 @@ textarea,
 .ai-stop-button:hover {
   border-color: var(--accent);
   background: var(--panel2);
+}
+
+/* Two calm toolbar rows: search above, active project/agent tools below. */
+.topbar {
+  height: 96px;
+  min-height: 96px;
+  display: grid;
+  grid-template-columns: max-content minmax(96px, 1fr) max-content;
+  grid-template-rows: 44px 52px;
+  align-items: center;
+  column-gap: 12px;
+  padding: 0 14px 0 18px;
+  overflow: visible;
+}
+.topbar > .brand {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 128px;
+  max-width: 206px;
+  margin: 0;
+}
+.topbar > .global-activity,
+.topbar > .global-activity.has-status {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: stretch;
+  min-width: 0;
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: 44px 52px;
+  align-items: center;
+  gap: 0 8px;
+  padding: 0;
+}
+.global-search-toggle {
+  grid-column: 1;
+  grid-row: 1;
+  width: 40px;
+  min-width: 40px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel2);
+  color: var(--muted);
+  -webkit-app-region: no-drag;
+}
+.global-search-toggle:hover,
+.global-search-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.global-search-toggle:disabled {
+  opacity: 0.45;
+}
+.topbar .global-search.expanded {
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  max-width: 760px;
+  height: 38px;
+  padding: 0 12px;
+}
+.topbar .browser-view-control {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+}
+.topbar .browser-view-control .divider {
+  display: none;
+}
+.topbar .browser-view-control > button {
+  min-height: 40px;
+  padding: 0 11px;
+  white-space: nowrap;
+}
+.topbar .top-status {
+  grid-column: 2;
+  grid-row: 2;
+  width: 100%;
+  max-width: 680px;
+  height: 40px;
+  padding-inline: 11px 7px;
+}
+.topbar > .top-actions {
+  grid-column: 3;
+  grid-row: 2;
+  align-self: center;
+  min-width: 0;
+  max-width: min(62vw, 850px);
+  height: 44px;
+  min-height: 44px;
+  gap: 6px;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.topbar .runtime-select {
+  width: clamp(150px, 18vw, 250px);
+  flex: 0 0 auto;
+  text-overflow: ellipsis;
+}
+.topbar .global-search-results {
+  top: 48px;
+  left: 0;
+  right: 0;
+}
+
+/* Collapsible Python library manager and separately hidden UV helpbook. */
+.terminal-python-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.terminal-python-tools > button {
+  min-width: max-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: var(--terminal-muted);
+}
+.terminal-python-tools > button.active,
+.terminal-python-tools > button:hover {
+  background: var(--terminal-surface);
+  color: var(--accent);
+}
+.python-help {
+  width: min(390px, 42vw);
+  padding: 14px;
+}
+.python-drawer-head {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.python-drawer-head > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.python-drawer-head > span > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.python-package-form {
+  margin: 0 0 9px;
+  gap: 8px;
+}
+.python-package-form input,
+.python-help .python-package-form button,
+.python-package-search {
+  min-height: 38px;
+}
+.python-package-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--terminal-bg);
+  color: var(--terminal-muted);
+}
+.python-package-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--terminal-text);
+}
+.python-package-list {
+  display: grid;
+  gap: 5px;
+}
+.python-package-list article {
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--terminal-bg);
+}
+.python-package-list article > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.python-package-list article b,
+.python-package-list article small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.python-package-list article button:hover {
+  color: #ef7777;
+  background: color-mix(in srgb, #ef7777 10%, transparent);
+}
+.python-package-list > p {
+  margin: 8px 2px;
+  color: var(--terminal-muted);
+  line-height: 1.5;
+}
+.python-package-progress {
+  position: relative;
+  min-height: 38px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  margin-bottom: 9px;
+  overflow: hidden;
+}
+.python-package-progress > span {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line);
+}
+.python-package-progress > span::after {
+  content: "";
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: python-package-slide 1.1s ease-in-out infinite;
+}
+@keyframes python-package-slide {
+  from {
+    transform: translateX(-105%);
+  }
+  to {
+    transform: translateX(270%);
+  }
+}
+.uv-help-entries {
+  display: grid;
+  gap: 8px;
+}
+.uv-help-entries article {
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--terminal-bg);
+}
+.uv-help-entries code {
+  margin: 6px 0 4px;
+}
+.uv-help-entries p {
+  margin: 0;
+}
+
+@media (max-width: 1180px) {
+  .topbar > .brand {
+    min-width: 32px;
+    max-width: 32px;
+  }
+  .topbar > .top-actions {
+    max-width: 64vw;
+  }
+  .topbar .browser-view-control > button {
+    width: 40px;
+    padding: 0;
+    font-size: 0 !important;
+  }
+}
+@media (max-width: 820px) {
+  .topbar {
+    grid-template-columns: 34px minmax(54px, 1fr) minmax(0, 70vw);
+    column-gap: 8px;
+    padding-inline: 10px;
+  }
+  .topbar .top-status > span,
+  .topbar .top-status > i {
+    display: none;
+  }
+  .topbar .top-status {
+    width: 40px;
+    justify-content: center;
+    padding: 0;
+  }
+  .topbar > .top-actions {
+    max-width: 70vw;
+  }
+  .python-help {
+    width: min(330px, 48vw);
+  }
+}
+
+/* Match UV reference help to the established single-column Git helpbook. */
+.uv-helpbook {
+  position: fixed;
+  z-index: 35;
+  top: 72px;
+  left: clamp(16px, calc(var(--sidebar-width, 300px) + 18px), 430px);
+  width: min(430px, calc(100vw - 32px));
+  max-height: calc(100vh - 90px);
+  box-sizing: border-box;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--overlay-surface);
+  color: var(--text);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.44);
+}
+.workspace.sidebar-right .uv-helpbook {
+  right: clamp(16px, calc(var(--sidebar-width, 300px) + 18px), 430px);
+  left: auto;
+}
+.uv-helpbook .compact-panel-head {
+  min-height: 40px;
+  margin: -2px 0 8px;
+  background: var(--overlay-surface);
+}
+.uv-helpbook > input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+.uv-helpbook > input:focus {
+  border-color: var(--accent);
+}
+.uv-helpbook article {
+  display: grid;
+  gap: 4px;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--line);
+}
+.uv-helpbook code {
+  width: fit-content;
+  margin: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--accent);
+}
+.uv-helpbook p {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Make adding a package the primary action; filtering follows installed data. */
+.python-package-form {
+  margin-top: 2px;
+}
+.python-package-form input {
+  font-family: inherit;
+}
+.python-package-hint {
+  margin: -2px 2px 12px !important;
+  color: var(--terminal-muted);
+  line-height: 1.5;
+}
+
+/* Keep live work controls on the same calm padded scale as the rest of AI. */
+.ai-live-work {
+  margin: 0 12px 12px;
+  border-radius: 10px;
+}
+.ai-live-work .ai-thinking {
+  min-height: 54px;
+  padding: 10px 14px;
+}
+.ai-stop-button {
+  min-height: 40px;
+  margin: 12px;
+  gap: 8px;
+  padding: 0 16px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+@media (max-width: 520px) {
+  .uv-helpbook {
+    top: 68px;
+    left: 10px;
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 78px);
+  }
+}
+
+/* Balanced application chrome: one calm row and one consistent control size. */
+.topbar {
+  height: 68px;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: max-content minmax(44px, 1fr) max-content;
+  grid-template-rows: 68px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px 0 20px;
+  overflow: visible;
+}
+.topbar > .brand {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 132px;
+  max-width: 180px;
+  margin: 0;
+}
+.topbar > .global-activity,
+.topbar > .global-activity.has-status {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  min-width: 0;
+  height: 44px;
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+}
+.global-search-toggle {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel2);
+  color: var(--muted);
+  -webkit-app-region: no-drag;
+}
+.global-search-toggle:hover,
+.global-search-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.global-search-toggle:disabled {
+  opacity: 0.45;
+}
+.topbar .global-search.expanded {
+  width: min(100%, 560px);
+  max-width: 560px;
+  height: 44px;
+  flex: 1 1 220px;
+  padding: 0 13px;
+  border-radius: 10px;
+}
+.topbar .browser-view-control {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.topbar .browser-view-control .divider {
+  display: none;
+}
+.topbar .browser-view-control > button {
+  min-height: 42px;
+  padding: 0 13px;
+  border-radius: 9px;
+  white-space: nowrap;
+}
+.topbar .top-status {
+  min-width: 140px;
+  width: min(100%, 430px);
+  max-width: 430px;
+  height: 42px;
+  flex: 1 1 180px;
+  padding-inline: 13px 8px;
+  border-radius: 9px;
+}
+.topbar > .top-actions {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+  max-width: min(76vw, 1080px);
+  height: 46px;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.topbar .top-actions > .divider {
+  display: none;
+}
+.topbar .top-actions .icon-button,
+.topbar .runtime-select {
+  min-height: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  border-radius: 9px;
+}
+.topbar .top-actions .icon-button {
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+}
+.topbar .top-actions .icon-button:hover,
+.topbar .top-actions .icon-button.active {
+  border-color: var(--line);
+  background: var(--panel2);
+}
+.topbar .runtime-select {
+  width: clamp(188px, 16vw, 230px);
+  padding: 0 36px 0 13px;
+  text-overflow: ellipsis;
+}
+.topbar:has(.global-search.expanded) > .top-actions,
+.topbar:has(.top-status) > .top-actions {
+  max-width: min(62vw, 1040px);
+}
+.topbar .global-search-results {
+  top: 50px;
+  left: 0;
+  right: 0;
+}
+
+/* Editor actions use the same padded medium control instead of mixed sizes. */
+.editor-command-bar {
+  min-height: 58px;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.editor-command-bar button {
+  min-height: 42px;
+  height: 42px;
+  gap: 7px;
+  padding: 0 14px;
+  border-radius: 9px;
+}
+.editor-command-bar .autosave-state {
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--muted);
+}
+
+/* Terminal helpers stay in one padded row; their panels slide over the shell. */
+.terminal-tabs {
+  min-height: 52px;
+  height: 52px;
+  flex-wrap: nowrap;
+  align-content: center;
+  gap: 7px;
+  padding: 6px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.terminal-tabs button,
+.terminal-python-tools > button {
+  min-height: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+}
+.shell-tab-strip {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  gap: 5px;
+}
+.shell-tab-strip > div {
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+}
+.shell-tab-strip > div button:last-child,
+.shell-tab-strip .icon-button,
+.terminal-tabs > .icon-button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 10px;
+  border-radius: 9px;
+}
+.terminal-session-actions {
+  display: flex;
+  gap: 5px;
+}
+.terminal-python-tools {
+  margin-left: auto;
+  gap: 6px;
+}
+.terminal-python-tools > button.active,
+.terminal-python-tools > button:hover {
+  border-color: var(--line);
+  background: var(--terminal-surface);
+  color: var(--accent);
+}
+.terminal-python-tools > button,
+.terminal-session-actions .icon-button,
+.terminal-tabs > .icon-button {
+  border-color: var(--line);
+  background: var(--terminal-surface);
+}
+.terminal-panel {
+  transition: flex-basis 160ms ease;
+}
+.terminal-panel:has(.python-help) {
+  flex-basis: clamp(330px, 44vh, 480px);
+}
+.terminal-workspace {
+  position: relative;
+}
+.python-help {
+  position: absolute;
+  z-index: 8;
+  inset: 0 0 0 auto;
+  width: min(440px, calc(100% - 48px));
+  box-sizing: border-box;
+  padding: 18px;
+  border-left: 1px solid var(--line);
+  overflow: auto;
+  background: var(--terminal-surface);
+  box-shadow: -18px 0 42px rgba(0, 0, 0, 0.2);
+}
+[dir="rtl"] .python-help {
+  inset: 0 auto 0 0;
+  border-right: 1px solid var(--line);
+  border-left: 0;
+  box-shadow: 18px 0 42px rgba(0, 0, 0, 0.2);
+}
+.python-drawer-head {
+  min-height: 44px;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.python-drawer-head > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.python-drawer-head > span > b {
+  font-size: 14px;
+}
+.python-drawer-head > span > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.python-drawer-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 6px;
+}
+.python-help .python-drawer-actions > button {
+  width: auto;
+  min-width: max-content;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--terminal-bg);
+  color: var(--terminal-muted);
+}
+.python-help .python-drawer-actions > button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.python-package-search {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 12px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--terminal-bg);
+  color: var(--terminal-muted);
+}
+.python-package-search:focus-within {
+  border-color: var(--accent);
+}
+.python-package-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--terminal-text);
+}
+.python-package-form {
+  margin: 0 0 12px;
+  gap: 8px;
+}
+.python-package-form input,
+.python-help .python-package-form button {
+  min-height: 42px;
+  height: 42px;
+  border-radius: 9px;
+}
+.python-package-form input {
+  padding: 0 12px;
+}
+.python-help .python-package-form button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+}
+.python-package-progress {
+  min-height: 42px;
+  margin: 0 0 12px;
+}
+.python-package-list {
+  display: grid;
+  gap: 8px;
+}
+.python-package-list article {
+  min-height: 54px;
+  padding: 8px 9px 8px 12px;
+  border-radius: 9px;
+}
+.python-help .python-package-list article button {
+  width: auto;
+  min-width: max-content;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+}
+.uv-help-entries {
+  gap: 10px;
+}
+.uv-help-entries article {
+  padding: 12px;
+  border-radius: 9px;
+}
+.uv-help-entries code {
+  margin: 7px 0 5px;
+  padding: 8px 10px;
+}
+
+@media (max-width: 1180px) {
+  .topbar > .brand {
+    min-width: 34px;
+    max-width: 34px;
+  }
+  .topbar .brand-wordmark {
+    display: none;
+  }
+  .topbar > .top-actions {
+    max-width: calc(100vw - 112px);
+  }
+  .topbar .browser-view-control > button {
+    width: auto;
+    min-width: max-content;
+    padding: 0 12px;
+    font-size: 13px !important;
+  }
+}
+@media (max-width: 820px) {
+  .topbar {
+    grid-template-columns: 34px 44px minmax(0, 1fr);
+    gap: 8px;
+    padding-inline: 10px;
+  }
+  .topbar > .global-activity,
+  .topbar > .global-activity.has-status {
+    overflow: visible;
+  }
+  .topbar > .top-actions {
+    max-width: none;
+  }
+  .topbar .runtime-select {
+    width: 190px;
+  }
+  .topbar .global-search.expanded,
+  .topbar .browser-view-control,
+  .topbar .top-status {
+    position: absolute;
+    z-index: 25;
+    top: 52px;
+    left: -42px;
+    width: min(430px, calc(100vw - 20px));
+    max-width: calc(100vw - 20px);
+  }
+  .python-help {
+    width: min(420px, calc(100% - 24px));
+  }
+}
+
+/* Python tools stay inside the terminal and use a vertical, scrollable list. */
+.terminal-panel:has(.uv-helpbook) {
+  flex-basis: clamp(330px, 44vh, 480px);
+}
+.terminal-workspace > .uv-helpbook,
+.workspace.sidebar-right .terminal-workspace > .uv-helpbook {
+  position: absolute;
+  z-index: 9;
+  inset: 10px 10px 10px auto;
+  width: min(440px, calc(100% - 20px));
+  max-height: none;
+  box-sizing: border-box;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--terminal-surface);
+  color: var(--terminal-text);
+  box-shadow: -18px 0 42px rgba(0, 0, 0, 0.24);
+}
+[dir="rtl"] .terminal-workspace > .uv-helpbook {
+  inset: 10px auto 10px 10px;
+  box-shadow: 18px 0 42px rgba(0, 0, 0, 0.24);
+}
+.terminal-workspace > .uv-helpbook .compact-panel-head {
+  background: var(--terminal-surface);
+}
+.terminal-workspace > .uv-helpbook > input,
+.terminal-workspace > .uv-helpbook code {
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+}
+.python-help > .python-package-list {
+  min-height: 72px;
+  max-height: none;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+  padding-right: 3px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.python-package-manager {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.python-help > .python-package-list article {
+  width: 100%;
+  min-height: 54px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+.python-help > .python-package-list article > span {
+  flex: 1 1 auto;
+  color: var(--terminal-text);
+}
+.python-environment-summary {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--terminal-bg);
+}
+.python-environment-summary > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.python-environment-summary > span small {
+  white-space: normal;
+}
+.python-help .python-create-project-env {
+  width: auto;
+  min-width: max-content;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--terminal-surface);
+  color: var(--terminal-muted);
+}
+.python-help .python-create-project-env:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.git-body .git-empty-card {
+  gap: 12px;
+  padding: 14px;
+}
+.git-body .git-empty-card .git-primary-action {
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 9px;
+}
+
+@media (max-width: 620px) {
+  .python-environment-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .python-help .python-create-project-env {
+    width: 100%;
+  }
+  .terminal-workspace > .uv-helpbook,
+  .workspace.sidebar-right .terminal-workspace > .uv-helpbook {
+    inset: 8px;
+    width: auto;
+  }
 }

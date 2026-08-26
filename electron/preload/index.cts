@@ -161,8 +161,17 @@ contextBridge.exposeInMainWorld("oscode", {
   readMarkdownImage: (markdownPath: string, source: string) =>
     ipcRenderer.invoke("markdown:read-image", markdownPath, source),
   readFile: (path: string) => ipcRenderer.invoke("file:read", path),
-  writeFile: (path: string, content: string) =>
-    ipcRenderer.invoke("file:write", path, content),
+  writeFile: (path: string, content: string, source = "manual") =>
+    ipcRenderer.invoke("file:write", path, content, source),
+  listSaveHistory: (path: string) =>
+    ipcRenderer.invoke("file:history-list", path),
+  restoreSaveHistory: (path: string, id: string) =>
+    ipcRenderer.invoke("file:history-restore", path, id),
+  onProjectFileChanged: (callback: (change: unknown) => void) => {
+    const listener = (_event: unknown, change: unknown) => callback(change);
+    ipcRenderer.on("project:file-changed", listener);
+    return () => ipcRenderer.removeListener("project:file-changed", listener);
+  },
   gitState: () => ipcRenderer.invoke("git:state"),
   gitRun: (action: string, payload?: string) =>
     ipcRenderer.invoke("git:run", action, payload),
@@ -191,8 +200,12 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("python:install", version),
   createVenv: (interpreter: string, name?: string) =>
     ipcRenderer.invoke("python:create-venv", interpreter, name),
+  listPythonPackages: (interpreter: string) =>
+    ipcRenderer.invoke("python:list-packages", interpreter),
   installPythonPackage: (interpreter: string, packageSpec: string) =>
     ipcRenderer.invoke("python:install-package", interpreter, packageSpec),
+  uninstallPythonPackage: (interpreter: string, packageName: string) =>
+    ipcRenderer.invoke("python:uninstall-package", interpreter, packageName),
   runPython: (file: string, interpreter: string, debug?: boolean) =>
     ipcRenderer.invoke("python:run", file, interpreter, debug),
   stopPython: () => ipcRenderer.invoke("python:stop"),

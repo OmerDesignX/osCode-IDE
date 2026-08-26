@@ -19,6 +19,7 @@ const permissionKinds = new Set<AiPermissionKind>([
   "project.read",
   "project.write",
   "terminal.run",
+  "packages.install",
   "debug.run",
   "web.search",
   "browser.control",

@@ -9,7 +9,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 if [[ "$(uname -m)" != "x86_64" ]]; then
-  echo "The 0.1.1 Linux package supports x64 hosts only." >&2
+  echo "The current Linux package supports x64 hosts only." >&2
   exit 1
 fi
 

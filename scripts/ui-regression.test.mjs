@@ -34,6 +34,10 @@ const splitEditor = await fs.readFile(
   new URL("../src/LocalSplitEditor.tsx", import.meta.url),
   "utf8",
 );
+const localEditor = await fs.readFile(
+  new URL("../src/LocalEditor.tsx", import.meta.url),
+  "utf8",
+);
 
 test("Git status groups large untracked dependency folders", () => {
   assert.match(main, /--untracked-files=normal/);
@@ -65,6 +69,35 @@ test("split view lets each pane select and edit a different open tab", () => {
     /split\/\$\{side\}\/\$\{encodeURIComponent\(tab\.path\)\}/,
   );
   assert.match(styles, /\.split-editor-pane > label/);
+});
+
+test("external edits, autosave, undo, redo, and encrypted save history stay visible", () => {
+  assert.match(main, /watch\(root, \{ recursive: true \}/);
+  assert.match(main, /project:file-changed/);
+  assert.match(app, /onProjectFileChanged/);
+  assert.doesNotMatch(app, /Autosave on/);
+  assert.match(app, /editor-command-divider/);
+  assert.match(app, /Save history/);
+  assert.match(app, /restoreSaveHistory/);
+  assert.match(app, /trigger\("toolbar", "undo"/);
+  assert.match(app, /trigger\("toolbar", "redo"/);
+  assert.match(localEditor, /saveViewState\(\)/);
+  assert.match(localEditor, /pushEditOperations/);
+  assert.match(localEditor, /isLocalEcho/);
+  assert.doesNotMatch(localEditor, /\.setValue\(/);
+  assert.match(styles, /\.save-history-dialog/);
+});
+
+test("agent paths and development commands are grounded in the open project", () => {
+  assert.match(agentControl, /projectFileFromStalePath/);
+  assert.match(aiMain, /Use an exact listed path instead/);
+  assert.match(aiMain, /localPackageBin/);
+  assert.match(aiMain, /host PATH available/);
+  assert.match(aiMain, /"npm"/);
+  assert.match(aiMain, /"which"/);
+  assert.match(aiMain, /"ls"/);
+  assert.match(aiMain, /Terminal is set to Ask/);
+  assert.doesNotMatch(aiMain, /Never probe for npm, node, yarn, pnpm/);
 });
 
 test("permission continuation does not create a synthetic user message", () => {
@@ -152,7 +185,7 @@ test("light mode reaches the terminal canvas and output surfaces", () => {
   assert.match(styles, /\.run-console[\s\S]*background: var\(--terminal-bg\)/);
 });
 
-test("project Python environments are seeded, selected in terminals, and package-ready", () => {
+test("app-managed and optional project Python environments are package-ready", () => {
   assert.match(
     main,
     /\["venv", "--python", base\.path, "--seed", destination\]/,
@@ -161,11 +194,34 @@ test("project Python environments are seeded, selected in terminals, and package
   assert.match(main, /terminalEnv\.UV_PROJECT_ENVIRONMENT = parent/);
   assert.match(main, /terminalEnv\.UV_CACHE_DIR = uvCacheRoot\(\)/);
   assert.match(main, /"python:install-package"/);
+  assert.match(main, /"python:list-packages"/);
+  assert.match(main, /"python:uninstall-package"/);
+  assert.match(main, /existingProjectPythonEnvironment/);
+  assert.match(main, /ensureProjectPythonEnvironment/);
+  assert.match(main, /appProjectEnvironmentRoot/);
+  assert.match(main, /project-environments/);
   assert.match(
     main,
-    /\["pip", "install", "--python", inspected\.path, packageSpec\]/,
+    /startProjectWatcher[\s\S]*"\.venv"[\s\S]*"__pycache__"/,
+    "project environment files must not flood the live editor watcher",
   );
-  assert.match(app, /aria-label="Python package"/);
+  assert.match(main, /app-managed environment/);
+  assert.match(
+    main,
+    /\["pip", "install", "--python", inspected\.path, \.\.\.packages\]/,
+  );
+  assert.match(main, /\[\s*"pip",\s*"list",[\s\S]*"--format",\s*"json"/);
+  assert.match(main, /\[\s*"pip",\s*"uninstall",[\s\S]*packageName/);
+  assert.match(app, /aria-label="Package to install"/);
+  assert.match(app, /aria-label="Filter installed Python packages"/);
+  assert.match(app, /outside project/);
+  assert.match(app, /Create project \.venv/);
+  assert.match(app, /Use app environment/);
+  assert.match(app, /item\.scope === "app"/);
+  assert.match(app, /className="uv-helpbook"/);
+  assert.match(app, /Project libraries/);
+  assert.match(app, /<b>UV help<\/b>/);
+  assert.match(app, /uvHelpEntries/);
   assert.match(app, /installPythonPackage\([\s\S]*runtime,[\s\S]*packageSpec/);
   assert.match(terminal, /\.createTerminal\(id, interpreter\)/);
   assert.match(terminal, /\[id, interpreter\]/);
@@ -174,6 +230,43 @@ test("project Python environments are seeded, selected in terminals, and package
     main,
     /if \(terminals\.get\(id\) === terminal\) \{[\s\S]*terminalOwners\.delete\(id\)/,
   );
+});
+
+test("the global toolbar and Python drawers use one balanced padded control system", () => {
+  assert.match(app, /global-search-toggle/);
+  assert.match(app, /globalSearchOpen/);
+  assert.match(styles, /Balanced application chrome/);
+  assert.match(
+    styles,
+    /\.topbar\s*\{[\s\S]*height: 68px;[\s\S]*grid-template-rows: 68px/,
+  );
+  assert.match(styles, /\.topbar > \.top-actions\s*\{[\s\S]*grid-row: 1/);
+  assert.match(
+    styles,
+    /\.topbar \.top-actions \.icon-button,[\s\S]*height: 42px/,
+  );
+  assert.match(styles, /\.editor-command-bar button\s*\{[\s\S]*height: 42px/);
+  assert.match(styles, /\.terminal-tabs\s*\{[\s\S]*height: 52px/);
+  assert.match(
+    styles,
+    /\.terminal-panel:has\(\.python-help\)\s*\{[\s\S]*flex-basis: clamp\(330px, 44vh, 480px\)/,
+  );
+  assert.match(styles, /\.python-help\s*\{[\s\S]*position: absolute/);
+  assert.match(app, /python-drawer-actions/);
+  assert.match(
+    app,
+    /className="python-package-form"[\s\S]*className="python-package-search"/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-workspace > \.uv-helpbook,[\s\S]*position: absolute/,
+  );
+  assert.match(
+    styles,
+    /\.python-help > \.python-package-list\s*\{[\s\S]*flex-direction: column/,
+  );
+  assert.match(styles, /\.python-package-progress/);
+  assert.match(styles, /\.terminal-python-tools/);
 });
 
 test("Monaco keeps its minimap and scrollbar visually separate", () => {
@@ -241,14 +334,21 @@ test("accelerated llama.cpp lets memory fitting choose GPU layers", () => {
   assert.doesNotMatch(aiMain, /hardware === "cpu" \? "0" : "999"/);
 });
 
-test("agent browser and Computer Control stay visible, permissioned, and stoppable", () => {
+test("browser, Terminal, and Computer Control stay visible and permissioned", () => {
   for (const label of [
     "Dedicated agent browser:",
+    "Terminal access:",
     "Computer Control:",
     "Web access:",
     "File access:",
   ])
     assert.match(ai, new RegExp(label));
+  assert.match(ai, /terminalMode === "auto"/);
+  assert.match(ai, /kind: "terminal\.run"/);
+  assert.match(
+    ai,
+    /Browser<\/span>[\s\S]*Terminal<\/span>[\s\S]*Control<\/span>/,
+  );
   assert.match(ai, /event\.key !== "Escape"[\s\S]*stopAgentControl/);
   assert.match(agentControl, /sandbox: true/);
   assert.match(agentControl, /nodeIntegration: false/);
@@ -268,11 +368,31 @@ test("agent browser and Computer Control stay visible, permissioned, and stoppab
   assert.match(app, /showAgentBrowser\(\)/);
   assert.match(app, /setInterval\(\(\) => void refresh\(\), 1_000\)/);
   assert.match(app, /agentBrowserTabPath/);
+  assert.match(app, /if \(!browserViewOpen\) return/);
+  assert.doesNotMatch(
+    app,
+    /if \(!next\.active\) \{\s*setBrowserViewOpen\(false\)/,
+  );
   assert.match(main, /agent:browser-show/);
   assert.match(app, /setAiFileAccess\(false\)/);
   assert.match(app, /setAiWebAccess\(false\)/);
   assert.match(app, /setAiBrowserAccess\(false\)/);
   assert.match(app, /setAiComputerAccess\(false\)/);
+});
+
+test("package installation and localhost previews have dedicated safe flows", () => {
+  assert.match(aiMain, /isPackageInstallCommand/);
+  assert.match(aiMain, /python_install_packages/);
+  assert.match(aiMain, /use python_install_packages for Python dependencies/);
+  assert.match(aiMain, /"packages\.install"/);
+  assert.match(aiMain, /background=true/);
+  assert.match(aiMain, /ready_url/);
+  assert.match(aiMain, /previewResponding/);
+  assert.match(aiMain, /ERR_CONNECTION_REFUSED/);
+  assert.match(ai, /permissionRequest\.kind !== "packages\.install"/);
+  assert.match(ai, /Always allow/);
+  assert.match(styles, /\.editor-command-bar[\s\S]*overflow-x: auto/);
+  assert.match(styles, /\.ai-live-work[\s\S]*flex-direction: column/);
 });
 
 test("AI capability controls have readable spacing and explanatory hover text", () => {
@@ -317,9 +437,10 @@ test("Git history exposes safe actions from every commit row", () => {
 });
 
 test("global search separates project code from AI chats", () => {
+  assert.match(app, /placeholder="Search code and chats"/);
   assert.match(
     app,
-    /placeholder=\{[\s\S]*project[\s\S]*"Search code and chats"/,
+    /aria-label=\{globalSearchOpen \? "Close search" : "Open search"\}/,
   );
   assert.match(app, />Code base</);
   assert.match(app, /global-search-divider/);
@@ -332,9 +453,10 @@ test("global search separates project code from AI chats", () => {
   );
   assert.match(
     styles,
-    /search always keeps a dedicated slot[\s\S]*\.global-activity\.has-status[\s\S]*grid-template-columns:\s*minmax\(180px, 1fr\) minmax\(190px, 0\.86fr\)/,
+    /Balanced application chrome[\s\S]*\.topbar > \.global-activity,[\s\S]*display: flex !important/,
   );
   assert.match(main, /globalSearchWithActivityReady/);
+  assert.match(main, /balancedControlSizing/);
 });
 
 test("Git commits use a private repository-local fallback without an author dialog", () => {

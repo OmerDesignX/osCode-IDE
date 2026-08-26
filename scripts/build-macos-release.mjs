@@ -43,6 +43,9 @@ await run("pnpm", ["exec", "vite", "build"], {
 await run("pnpm", ["run", "smoke:run"]);
 for (const architecture of ["arm64", "x64"]) {
   const packageDirectory = path.join(root, "release", `macos-${architecture}`);
+  const localIntegritySeal = requireSigned
+    ? []
+    : ["--config.mac.identity=-", "--config.mac.hardenedRuntime=false"];
   await run(
     "pnpm",
     [
@@ -54,6 +57,7 @@ for (const architecture of ["arm64", "x64"]) {
       `--config.directories.output=${packageDirectory}`,
       "--publish",
       "never",
+      ...localIntegritySeal,
     ],
     requireSigned ? {} : { CSC_IDENTITY_AUTO_DISCOVERY: "false" },
   );

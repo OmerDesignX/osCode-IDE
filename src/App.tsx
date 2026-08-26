@@ -12,6 +12,7 @@ import type {
   AiEditMode,
   AiEngine,
   AiInferenceHardware,
+  AiTerminalMode,
   AgentActivity,
   AgentBrowserSnapshot,
   AppUpdateStatus,
@@ -19,7 +20,9 @@ import type {
   GitCommit,
   GitState,
   ProjectSearchResult,
+  PythonPackage,
   PythonRuntime,
+  SaveHistoryEntry,
   Tab,
   TreeEntry,
 } from "./types";
@@ -308,6 +311,64 @@ const gitHelpEntries = [
     "Open the complete manual for any installed command.",
   ],
 ] as const;
+const uvHelpEntries = [
+  ["Create an environment", "uv venv", "Create the project's .venv."],
+  [
+    "Choose Python",
+    "uv venv --python 3.12",
+    "Create .venv with a specific Python version.",
+  ],
+  [
+    "Add a project dependency",
+    "uv add requests",
+    "Add a dependency to pyproject.toml, update uv.lock, and sync .venv.",
+  ],
+  [
+    "Remove a project dependency",
+    "uv remove requests",
+    "Remove a dependency from pyproject.toml and sync the environment.",
+  ],
+  [
+    "Install into the environment",
+    "uv pip install requests",
+    "Install directly into the active environment without editing project metadata.",
+  ],
+  [
+    "List installed libraries",
+    "uv pip list",
+    "Show every package installed in the active environment.",
+  ],
+  [
+    "Remove an installed library",
+    "uv pip uninstall requests",
+    "Uninstall one package from the active environment.",
+  ],
+  [
+    "Check dependencies",
+    "uv pip check",
+    "Report missing or incompatible installed dependencies.",
+  ],
+  [
+    "Run in the project",
+    "uv run python app.py",
+    "Run a command with the project's environment prepared and active.",
+  ],
+  [
+    "Synchronize the project",
+    "uv sync",
+    "Make .venv match pyproject.toml and uv.lock.",
+  ],
+  [
+    "Lock exact versions",
+    "uv lock",
+    "Resolve and record exact dependency versions in uv.lock.",
+  ],
+  [
+    "Install a Python runtime",
+    "uv python install 3.12",
+    "Download a managed Python runtime.",
+  ],
+] as const;
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error
     ? (() => {
@@ -348,6 +409,7 @@ export function App() {
       ProjectSearchResult[]
     >([]),
     [globalSearch, setGlobalSearch] = useState(""),
+    [globalSearchOpen, setGlobalSearchOpen] = useState(false),
     [globalSearchResults, setGlobalSearchResults] = useState<{
       code: ProjectSearchResult[];
       chats: Array<{ id: string; title: string; preview: string }>;
@@ -370,7 +432,13 @@ export function App() {
     [runtimes, setRuntimes] = useState<PythonRuntime[]>([]),
     [runtime, setRuntime] = useState(""),
     [pythonPackage, setPythonPackage] = useState(""),
-    [installingPackage, setInstallingPackage] = useState(false),
+    [pythonPackageSearch, setPythonPackageSearch] = useState(""),
+    [pythonPackages, setPythonPackages] = useState<PythonPackage[]>([]),
+    [pythonPackageEnvironment, setPythonPackageEnvironment] = useState(""),
+    [pythonPackageLocation, setPythonPackageLocation] = useState<
+      "" | "app" | "project"
+    >(""),
+    [packageOperation, setPackageOperation] = useState(""),
     [running, setRunning] = useState(false),
     [runOutput, setRunOutput] = useState(""),
     [runInput, setRunInput] = useState(""),
@@ -414,6 +482,7 @@ export function App() {
     [aiModel, setAiModel] = useState(""),
     [aiExecutable, setAiExecutable] = useState(""),
     [aiEditMode, setAiEditMode] = useState<AiEditMode>("ask"),
+    [aiTerminalMode, setAiTerminalMode] = useState<AiTerminalMode>("ask"),
     [aiFileAccess, setAiFileAccess] = useState(false),
     [aiWebAccess, setAiWebAccess] = useState(false),
     [aiBrowserAccess, setAiBrowserAccess] = useState(false),
@@ -421,6 +490,7 @@ export function App() {
     [aiContextLimit, setAiContextLimit] = useState(262144),
     [aiHardware, setAiHardware] = useState<AiInferenceHardware>("auto"),
     [spellcheck, setSpellcheck] = useState(true),
+    [autoSave, setAutoSave] = useState(true),
     [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false),
     [autoUpdatePromptAnswered, setAutoUpdatePromptAnswered] = useState(false),
     [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>({
@@ -428,7 +498,9 @@ export function App() {
       message: "Automatic updates are off",
       currentVersion: "",
     }),
-    [pythonHelpOpen, setPythonHelpOpen] = useState(true),
+    [pythonManagerOpen, setPythonManagerOpen] = useState(false),
+    [uvHelpOpen, setUvHelpOpen] = useState(false),
+    [uvHelpSearch, setUvHelpSearch] = useState(""),
     [installing, setInstalling] = useState(""),
     [activity, setActivity] = useState<AgentActivity | null>(null),
     [browserActivity, setBrowserActivity] = useState<AgentActivity | null>(
@@ -439,7 +511,10 @@ export function App() {
       useState<AgentBrowserSnapshot | null>(null),
     [selectedCommit, setSelectedCommit] = useState<GitCommit | null>(null),
     [commitBranchName, setCommitBranchName] = useState(""),
-    [commitTagName, setCommitTagName] = useState("");
+    [commitTagName, setCommitTagName] = useState(""),
+    [saveHistoryOpen, setSaveHistoryOpen] = useState(false),
+    [saveHistory, setSaveHistory] = useState<SaveHistoryEntry[]>([]),
+    [saveHistoryLoading, setSaveHistoryLoading] = useState(false);
   const [, setMonacoReady] = useState(false);
   const monacoRef = useRef<
     typeof import("monaco-editor/editor/editor.api") | null
@@ -450,6 +525,8 @@ export function App() {
   >(null);
   const editorTabsRef = useRef<HTMLDivElement | null>(null);
   const projectPickerOpen = useRef(false);
+  const savingPaths = useRef(new Set<string>());
+  const externalConflictPaths = useRef(new Set<string>());
   const menuActions = useRef<Record<string, () => void>>({});
   const shortcutModifier = /Mac/i.test(navigator.platform) ? "⌘" : "Ctrl";
   const active = tabs.find((t) => t.path === activePath);
@@ -462,8 +539,14 @@ export function App() {
   const dirty = active && active.content !== active.saved;
   const hasDirtyTabs = tabs.some((tab) => tab.content !== tab.saved);
   const selectedRuntime = runtimes.find((x) => x.path === runtime);
+  const appRuntime =
+    runtimes.find(
+      (item) =>
+        item.scope === "app" && item.version === "3.12" && item.installed,
+    ) || runtimes.find((item) => item.scope === "app" && item.installed);
   const projectEnvironment =
-    selectedRuntime?.version.startsWith("Project") || false;
+    selectedRuntime?.scope === "project" ||
+    selectedRuntime?.scope === "app-project";
   const pythonProject = Boolean(
     project?.tree.some(
       (entry) =>
@@ -510,6 +593,7 @@ export function App() {
         setAiExecutable(preferences.aiExecutable);
         setAiContextLimit(preferences.aiContextLimit);
         setAiHardware(preferences.aiHardware);
+        setAutoSave(preferences.autoSave);
       }),
     [preferencesReady],
   );
@@ -591,10 +675,6 @@ export function App() {
     const offAgent = window.oscode.onAgentActivity((next) => {
       if (next.kind === "browser") {
         setBrowserActivity(next.active ? next : null);
-        if (!next.active) {
-          setBrowserViewOpen(false);
-          setBrowserSnapshot(null);
-        }
       }
       if (next.active) {
         setActivity(next);
@@ -646,7 +726,7 @@ export function App() {
     );
   }, [activePath, tabs]);
   useEffect(() => {
-    if (!browserViewOpen || !browserActivity?.active) return;
+    if (!browserViewOpen) return;
     let cancelled = false;
     let refreshing = false;
     const refresh = async () => {
@@ -667,7 +747,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [browserActivity?.active, browserViewOpen]);
+  }, [browserViewOpen]);
   useEffect(() => {
     window.oscode.setDirtyState(hasDirtyTabs);
   }, [hasDirtyTabs]);
@@ -687,7 +767,10 @@ export function App() {
       b();
     };
   }, []);
-  useEffect(() => setNotice(""), [activePath]);
+  useEffect(() => {
+    setNotice("");
+    setSaveHistoryOpen(false);
+  }, [activePath]);
   useEffect(() => {
     if (!notice) return;
     setNotifications((current) => [
@@ -733,14 +816,12 @@ export function App() {
     [],
   );
   useEffect(() => {
-    if (terminalOpen && pythonContext) setPythonHelpOpen(true);
-  }, [terminalOpen, activePath, pythonContext]);
-  useEffect(() => {
     if (!pythonContext && terminalView === "run") setTerminalView("shell");
   }, [pythonContext, terminalView]);
   const activateProject = async (nextProject: ProjectState) => {
     await window.oscode.stopAgentControl();
     setAiEditMode("ask");
+    setAiTerminalMode("ask");
     setAiFileAccess(false);
     setAiWebAccess(false);
     setAiBrowserAccess(false);
@@ -757,6 +838,10 @@ export function App() {
     setCompareOpen(false);
     setTerminalOpen(false);
     setRunning(false);
+    setPythonManagerOpen(false);
+    setUvHelpOpen(false);
+    setPythonPackages([]);
+    setPythonPackageEnvironment("");
     setPathInput(nextProject.root);
     setLastProject(nextProject.root);
     const state = await window.oscode.gitState();
@@ -952,6 +1037,7 @@ export function App() {
     setProject(null);
     await window.oscode.stopAgentControl();
     setAiEditMode("ask");
+    setAiTerminalMode("ask");
     setAiFileAccess(false);
     setAiWebAccess(false);
     setAiBrowserAccess(false);
@@ -1081,21 +1167,125 @@ export function App() {
       setNotice(errorMessage(e, "Project item could not be removed"));
     }
   };
-  const save = async () => {
-    if (!active) return false;
+  const saveTab = async (
+    tab: Tab,
+    source: "manual" | "autosave" = "manual",
+    announce = source === "manual",
+  ) => {
+    if (savingPaths.current.has(tab.path)) return false;
+    savingPaths.current.add(tab.path);
     try {
-      await window.oscode.writeFile(active.path, active.content);
+      await window.oscode.writeFile(tab.path, tab.content, source);
       setTabs((x) =>
-        x.map((t) => (t.path === active.path ? { ...t, saved: t.content } : t)),
+        x.map((current) =>
+          current.path === tab.path && current.content === tab.content
+            ? { ...current, saved: tab.content }
+            : current,
+        ),
       );
-      const state = await window.oscode.gitState();
-      setGit(state);
-      setRemote(state.remote);
-      setNotice("Saved");
+      externalConflictPaths.current.delete(tab.path);
+      if (announce) setNotice("Saved");
       return true;
     } catch (e) {
       setNotice(errorMessage(e, "File could not be saved"));
       return false;
+    } finally {
+      savingPaths.current.delete(tab.path);
+    }
+  };
+  const save = async () => (active ? saveTab(active) : false);
+  useEffect(() => {
+    if (!autoSave || !preferencesReady) return;
+    const dirtyTabs = tabs.filter((tab) => tab.content !== tab.saved);
+    if (!dirtyTabs.length) return;
+    const timeout = window.setTimeout(() => {
+      for (const tab of dirtyTabs) void saveTab(tab, "autosave", false);
+    }, 700);
+    return () => window.clearTimeout(timeout);
+  }, [autoSave, preferencesReady, tabs]);
+  useEffect(() => {
+    if (!project) return;
+    return window.oscode.onProjectFileChanged((change) => {
+      void (async () => {
+        if (!change.exists) {
+          if (change.kind === "rename") {
+            const tree = await window.oscode.refreshProject().catch(() => null);
+            if (tree)
+              setProject((current) =>
+                current ? { ...current, tree } : current,
+              );
+          }
+          return;
+        }
+        let disk: string;
+        try {
+          disk = await window.oscode.readFile(change.path);
+        } catch {
+          if (change.kind === "rename") {
+            const tree = await window.oscode.refreshProject().catch(() => null);
+            if (tree)
+              setProject((current) =>
+                current ? { ...current, tree } : current,
+              );
+          }
+          return;
+        }
+        let conflict = false;
+        setTabs((current) =>
+          current.map((tab) => {
+            if (tab.path !== change.path || tab.saved === disk) return tab;
+            if (tab.content === tab.saved || tab.content === disk) {
+              externalConflictPaths.current.delete(tab.path);
+              return { ...tab, content: disk, saved: disk };
+            }
+            conflict = true;
+            return tab;
+          }),
+        );
+        if (conflict && !externalConflictPaths.current.has(change.path)) {
+          externalConflictPaths.current.add(change.path);
+          setNotice(
+            `${change.path.split(/[\\/]/).at(-1)} changed on disk; your unsaved editor text was preserved`,
+          );
+        }
+        if (change.kind === "rename") {
+          const tree = await window.oscode.refreshProject().catch(() => null);
+          if (tree)
+            setProject((current) => (current ? { ...current, tree } : current));
+        }
+      })();
+    });
+  }, [project?.root]);
+  const openSaveHistory = async () => {
+    if (!active) return;
+    setSaveHistoryOpen(true);
+    setSaveHistoryLoading(true);
+    try {
+      setSaveHistory(await window.oscode.listSaveHistory(active.path));
+    } catch (error) {
+      setNotice(errorMessage(error, "Save history could not load"));
+    } finally {
+      setSaveHistoryLoading(false);
+    }
+  };
+  const restoreSavedVersion = async (entry: SaveHistoryEntry) => {
+    if (!active) return;
+    try {
+      const content = await window.oscode.restoreSaveHistory(
+        active.path,
+        entry.id,
+      );
+      setTabs((current) =>
+        current.map((tab) =>
+          tab.path === active.path ? { ...tab, content, saved: content } : tab,
+        ),
+      );
+      setSaveHistory(await window.oscode.listSaveHistory(active.path));
+      setNotice("Restored an earlier saved version");
+    } catch (error) {
+      setNotice(
+        errorMessage(error, "That saved version could not be restored"),
+      );
     }
   };
   useEffect(() => {
@@ -1301,6 +1491,7 @@ export function App() {
         setProseWrap(preferences.proseWrap);
         setMinimap(preferences.minimap);
         setSpellcheck(preferences.spellcheck);
+        setAutoSave(preferences.autoSave);
         setAutoUpdateEnabled(preferences.autoUpdateEnabled);
         setAutoUpdatePromptAnswered(preferences.autoUpdatePromptAnswered);
         if (!preferences.autoUpdatePromptAnswered) {
@@ -1351,7 +1542,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 9,
+      version: 10,
       theme,
       locale,
       sidebarSide,
@@ -1375,6 +1566,7 @@ export function App() {
       proseWrap,
       minimap,
       spellcheck,
+      autoSave,
       autoUpdateEnabled,
       autoUpdatePromptAnswered,
       lastProject,
@@ -1410,6 +1602,7 @@ export function App() {
     proseWrap,
     minimap,
     spellcheck,
+    autoSave,
     autoUpdateEnabled,
     autoUpdatePromptAnswered,
     lastProject,
@@ -1455,25 +1648,81 @@ export function App() {
       setNotice(errorMessage(e, "Could not create environment"));
     }
   };
+  const useDetectedProjectEnvironment = async (interpreter: string) => {
+    if (!interpreter || interpreter === runtime) return;
+    await refreshRuntimes(true);
+    setRuntime(interpreter);
+    await window.oscode.setProjectPython(interpreter);
+  };
+  const refreshPythonPackages = async (interpreter = runtime) => {
+    if (!project || !interpreter) {
+      setPythonPackages([]);
+      setPythonPackageEnvironment("");
+      setPythonPackageLocation("");
+      return;
+    }
+    try {
+      const state = await window.oscode.listPythonPackages(interpreter);
+      setPythonPackages(state.packages);
+      setPythonPackageEnvironment(state.environment);
+      setPythonPackageLocation(state.location);
+      await useDetectedProjectEnvironment(state.interpreter);
+    } catch (e) {
+      setPythonPackages([]);
+      setPythonPackageEnvironment("");
+      setPythonPackageLocation("");
+      setNotice(errorMessage(e, "Installed Python packages could not load"));
+    }
+  };
   const installProjectPackage = async () => {
     const packageSpec = pythonPackage.trim();
-    if (!packageSpec || !projectEnvironment) return;
-    setInstallingPackage(true);
+    if (!packageSpec || !project || !runtime) return;
+    setPackageOperation(`Installing ${packageSpec}`);
     try {
       const installed = await window.oscode.installPythonPackage(
         runtime,
         packageSpec,
       );
+      await useDetectedProjectEnvironment(installed.interpreter);
       setPythonPackage("");
-      setNotice(`${installed.package} installed in this project environment`);
+      await refreshPythonPackages(installed.interpreter);
+      setNotice(
+        `${installed.package} installed${
+          installed.createdEnvironment ? " in a new app environment" : ""
+        }`,
+      );
     } catch (e) {
       setNotice(errorMessage(e, "Package installation failed"));
     } finally {
-      setInstallingPackage(false);
+      setPackageOperation("");
     }
   };
+  const uninstallProjectPackage = async (packageName: string) => {
+    if (!project || !runtime) return;
+    setPackageOperation(`Removing ${packageName}`);
+    try {
+      const removed = await window.oscode.uninstallPythonPackage(
+        runtime,
+        packageName,
+      );
+      await useDetectedProjectEnvironment(removed.interpreter);
+      await refreshPythonPackages(removed.interpreter);
+      setNotice(`${removed.package} removed from this project environment`);
+    } catch (e) {
+      setNotice(errorMessage(e, "Package removal failed"));
+    } finally {
+      setPackageOperation("");
+    }
+  };
+  useEffect(() => {
+    if (!pythonManagerOpen) return;
+    void refreshPythonPackages();
+  }, [pythonManagerOpen, project?.root, runtime]);
   const selectRuntime = async (value: string) => {
     setRuntime(value);
+    setPythonPackages([]);
+    setPythonPackageEnvironment("");
+    setPythonPackageLocation("");
     if (!project) return;
     try {
       await window.oscode.setProjectPython(value);
@@ -1511,6 +1760,19 @@ export function App() {
       ),
     "toggle-advanced": () => setAdvanced((current) => !current),
   };
+  const runtimeLabel = (item: PythonRuntime) => {
+    if (item.scope === "app-project" || item.scope === "project")
+      return item.version;
+    if (item.version.startsWith("Local "))
+      return `Python ${item.version.slice("Local ".length)} · added`;
+    const location =
+      item.scope === "app"
+        ? " · app runtime"
+        : item.scope === "system"
+          ? " · system"
+          : "";
+    return `Python ${item.version}${location}`;
+  };
   const runtimeOptions = useMemo(
     () =>
       runtimes.map((r) => (
@@ -1519,7 +1781,7 @@ export function App() {
           value={r.installed ? r.path : `download:${r.version}`}
           disabled={Boolean(installing)}
         >
-          Python {r.version}
+          {runtimeLabel(r)}
           {r.installed
             ? ""
             : installing === r.version
@@ -1529,6 +1791,11 @@ export function App() {
       )),
     [installing, runtimes],
   );
+  const activeRuntimeLabel = useMemo(() => {
+    const selected = runtimes.find((item) => item.path === runtime);
+    if (!selected) return "selected Python";
+    return runtimeLabel(selected);
+  }, [runtime, runtimes]);
   const beginHorizontalResize = (event: ReactPointerEvent) => {
     event.preventDefault();
     const start = event.clientX;
@@ -1599,7 +1866,8 @@ export function App() {
     }
   };
   const openAgentBrowserView = async () => {
-    if (!(await refreshAgentBrowserView())) return;
+    const refreshed = await refreshAgentBrowserView();
+    if (!refreshed && !browserSnapshot) return;
     setBrowserViewOpen(true);
     setActivePath(agentBrowserTabPath);
   };
@@ -1676,23 +1944,39 @@ export function App() {
           className={`global-activity ${activity || notice ? "has-status" : ""}`}
           aria-live="polite"
         >
-          <label className="global-search">
-            <FeatherIcon icon="search" size="17" />
-            <input
-              type="search"
-              value={globalSearch}
-              disabled={!project}
-              aria-label="Search project and AI chats"
-              placeholder={
-                project ? "Search code and chats" : "Open a project to search"
-              }
-              onChange={(event) => setGlobalSearch(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setGlobalSearch("");
-              }}
-            />
-          </label>
-          {browserActivity?.active && (
+          <button
+            type="button"
+            className={`global-search-toggle ${globalSearchOpen ? "active" : ""}`}
+            aria-label={globalSearchOpen ? "Close search" : "Open search"}
+            aria-expanded={globalSearchOpen}
+            disabled={!project}
+            onClick={() => {
+              setGlobalSearchOpen((open) => !open);
+              if (globalSearchOpen) setGlobalSearch("");
+            }}
+          >
+            <FeatherIcon icon={globalSearchOpen ? "x" : "search"} size="17" />
+          </button>
+          {globalSearchOpen && (
+            <label className="global-search expanded">
+              <FeatherIcon icon="search" size="17" />
+              <input
+                autoFocus
+                type="search"
+                value={globalSearch}
+                aria-label="Search project and AI chats"
+                placeholder="Search code and chats"
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setGlobalSearch("");
+                    setGlobalSearchOpen(false);
+                  }
+                }}
+              />
+            </label>
+          )}
+          {(browserActivity?.active || browserViewOpen || browserSnapshot) && (
             <div className="browser-view-control">
               <span className="divider" />
               <button
@@ -1818,6 +2102,7 @@ export function App() {
                         });
                         setPendingRevealLine(result.line);
                         setGlobalSearch("");
+                        setGlobalSearchOpen(false);
                       }}
                     >
                       <span>
@@ -1841,6 +2126,7 @@ export function App() {
                         setRequestedAiChat(chat.id);
                         setAiVisible(true);
                         setGlobalSearch("");
+                        setGlobalSearchOpen(false);
                       }}
                     >
                       <span>{chat.title}</span>
@@ -3143,6 +3429,35 @@ export function App() {
                 aria-label="Editor commands"
               >
                 <button
+                  title={`${shortcutModifier}+Z`}
+                  onClick={() => {
+                    editorRef.current?.trigger("toolbar", "undo", null);
+                    editorRef.current?.focus();
+                  }}
+                >
+                  <FeatherIcon icon="corner-up-left" size="15" /> Undo
+                </button>
+                <button
+                  title={`${shortcutModifier}+Shift+Z`}
+                  onClick={() => {
+                    editorRef.current?.trigger("toolbar", "redo", null);
+                    editorRef.current?.focus();
+                  }}
+                >
+                  <FeatherIcon icon="corner-up-right" size="15" /> Redo
+                </button>
+                <button
+                  className={dirty ? "active" : ""}
+                  title={`${shortcutModifier}+S`}
+                  onClick={() => void save()}
+                >
+                  <FeatherIcon icon="save" size="15" /> Save
+                </button>
+                <button onClick={() => void openSaveHistory()}>
+                  <FeatherIcon icon="clock" size="15" /> Save history
+                </button>
+                <span className="editor-command-divider" aria-hidden="true" />
+                <button
                   onClick={() =>
                     editorRef.current?.getAction("actions.find")?.run()
                   }
@@ -3528,6 +3843,64 @@ export function App() {
               )}
             </div>
           )}
+          {saveHistoryOpen && active && (
+            <div
+              className="save-history-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget)
+                  setSaveHistoryOpen(false);
+              }}
+            >
+              <section
+                className="save-history-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Save history for ${active.name}`}
+              >
+                <header>
+                  <span>
+                    <b>Save history</b>
+                    <small>{active.name} · stored locally and encrypted</small>
+                  </span>
+                  <IconButton
+                    icon="x"
+                    label="Close save history"
+                    onClick={() => setSaveHistoryOpen(false)}
+                  />
+                </header>
+                <div className="save-history-list">
+                  {saveHistoryLoading ? (
+                    <p>Loading saved versions…</p>
+                  ) : saveHistory.length ? (
+                    saveHistory.map((entry) => (
+                      <article key={entry.id}>
+                        <span>
+                          <b>{new Date(entry.createdAt).toLocaleString()}</b>
+                          <small>
+                            {entry.source === "autosave"
+                              ? "Autosave"
+                              : entry.source === "agent"
+                                ? "Before agent edit"
+                                : entry.source === "restore"
+                                  ? "Before restore"
+                                  : "Manual save"}
+                            {` · ${Math.max(1, Math.ceil(entry.bytes / 1024))} KB`}
+                          </small>
+                        </span>
+                        <button onClick={() => void restoreSavedVersion(entry)}>
+                          <FeatherIcon icon="rotate-ccw" size="14" /> Restore
+                        </button>
+                      </article>
+                    ))
+                  ) : (
+                    <p>
+                      Earlier content appears here after this file is saved.
+                    </p>
+                  )}
+                </div>
+              </section>
+            </div>
+          )}
           {settingsOpen && (
             <div className="settings-dock">
               <div className="settings-title">
@@ -3669,6 +4042,11 @@ export function App() {
                   value={spellcheck}
                   set={setSpellcheck}
                 />
+                <Toggle
+                  label={tr("Autosave edited files", "الحفظ التلقائي للملفات")}
+                  value={autoSave}
+                  set={setAutoSave}
+                />
               </section>
               <section>
                 <span className="settings-label">
@@ -3710,7 +4088,7 @@ export function App() {
                 </span>
                 <p className="settings-note">
                   {tr(
-                    "Chats and settings are encrypted in application data.",
+                    "Chats and settings are encrypted in application data with an app-managed local key.",
                     "المحادثات والإعدادات مشفرة في بيانات التطبيق.",
                   )}
                 </p>
@@ -3824,7 +4202,11 @@ export function App() {
               )}
               {advancedSection === "runtimes" && (
                 <div className="advanced-content">
-                  <p>Choose Python or create a private project environment.</p>
+                  <p>
+                    Choose an app or system Python runtime. osCode keeps its
+                    default environment in application data, outside the
+                    project.
+                  </p>
                   <button className="secondary-action" onClick={chooseRuntime}>
                     Use installed Python
                   </button>
@@ -3875,7 +4257,7 @@ export function App() {
                 className="secondary-action"
                 onClick={() => createVenv("")}
               >
-                Use local .venv
+                Create project .venv
               </button>
               <div className="named-env">
                 <input
@@ -3895,7 +4277,8 @@ export function App() {
               </div>
               <p>
                 The selected environment is applied to Run, Debug, and Terminal.
-                Package installs stay inside this project.
+                App environments stay in osCode application data. Create a
+                project environment only when you want it stored in the project.
               </p>
             </div>
           )}
@@ -3908,9 +4291,11 @@ export function App() {
               {tr("Terminal", "الطرفية")}
               {projectEnvironment && (
                 <i className="env-badge">
-                  {selectedRuntime?.version
-                    .replace("Project: ", "")
-                    .replace("Project .venv", ".venv")}
+                  {selectedRuntime?.scope === "app-project"
+                    ? "App env"
+                    : selectedRuntime?.version
+                        .replace(/ · .*/, "")
+                        .replace("Project ", "")}
                 </i>
               )}
             </span>
@@ -4024,14 +4409,31 @@ export function App() {
                     Clear
                   </button>
                 )}
-                {pythonContext && !pythonHelpOpen && (
-                  <button
-                    type="button"
-                    className="terminal-help-button"
-                    onClick={() => setPythonHelpOpen(true)}
-                  >
-                    <FeatherIcon icon="help-circle" size="13" /> Python help
-                  </button>
+                {pythonContext && (
+                  <div className="terminal-python-tools">
+                    <button
+                      type="button"
+                      className={pythonManagerOpen ? "active" : ""}
+                      aria-expanded={pythonManagerOpen}
+                      onClick={() => {
+                        setPythonManagerOpen((open) => !open);
+                        setUvHelpOpen(false);
+                      }}
+                    >
+                      <FeatherIcon icon="package" size="13" /> Packages
+                    </button>
+                    <button
+                      type="button"
+                      className={uvHelpOpen ? "active" : ""}
+                      aria-expanded={uvHelpOpen}
+                      onClick={() => {
+                        setUvHelpOpen((open) => !open);
+                        setPythonManagerOpen(false);
+                      }}
+                    >
+                      <FeatherIcon icon="book-open" size="13" /> UV help
+                    </button>
+                  </div>
                 )}
                 <IconButton
                   icon="x"
@@ -4103,18 +4505,86 @@ export function App() {
                     </form>
                   )}
                 </div>
-                {pythonContext && pythonHelpOpen && (
-                  <aside className="python-help">
-                    <div>
-                      <b>Python packages</b>
-                      <button
-                        aria-label="Close Python help"
-                        onClick={() => setPythonHelpOpen(false)}
-                      >
-                        <FeatherIcon icon="x" size="14" />
-                      </button>
+                {pythonContext && pythonManagerOpen && (
+                  <aside className="python-help python-package-manager">
+                    <div className="python-drawer-head">
+                      <span>
+                        <b>Project libraries</b>
+                        <small>
+                          {pythonPackageLocation === "project"
+                            ? "Project .venv · inside project"
+                            : "App environment · outside project"}
+                        </small>
+                      </span>
+                      <div className="python-drawer-actions">
+                        <button
+                          aria-label="Refresh installed Python packages"
+                          disabled={Boolean(packageOperation)}
+                          onClick={() => void refreshPythonPackages()}
+                        >
+                          <FeatherIcon icon="refresh-cw" size="15" />
+                          Refresh
+                        </button>
+                        <button
+                          aria-label="Close Python packages"
+                          onClick={() => setPythonManagerOpen(false)}
+                        >
+                          <FeatherIcon icon="x" size="15" />
+                          Close
+                        </button>
+                      </div>
                     </div>
-                    <p>Create a project environment first, then use:</p>
+                    <div className="python-environment-summary">
+                      <span>
+                        <b>
+                          {pythonPackageLocation === "project"
+                            ? "Using the project environment"
+                            : "Using osCode application data"}
+                        </b>
+                        <small>
+                          {pythonPackageLocation === "project"
+                            ? "Packages are stored in this project's .venv folder."
+                            : `${activeRuntimeLabel}. Packages stay outside the project folder.`}
+                        </small>
+                      </span>
+                      {pythonPackageLocation === "project" ? (
+                        <button
+                          type="button"
+                          className="python-create-project-env"
+                          disabled={!appRuntime || Boolean(packageOperation)}
+                          onClick={() => {
+                            if (!appRuntime) return;
+                            void selectRuntime(appRuntime.path);
+                            setNotice(
+                              "Using an app-managed environment outside the project",
+                            );
+                          }}
+                        >
+                          <FeatherIcon icon="hard-drive" size="14" />
+                          Use app environment
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="python-create-project-env"
+                          disabled={Boolean(packageOperation)}
+                          onClick={() => void createVenv("")}
+                        >
+                          <FeatherIcon icon="folder-plus" size="14" />
+                          Create project .venv
+                        </button>
+                      )}
+                    </div>
+                    {packageOperation && (
+                      <div
+                        className="python-package-progress"
+                        role="progressbar"
+                        aria-label={packageOperation}
+                      >
+                        <span />
+                        <small>{packageOperation}…</small>
+                      </div>
+                    )}
                     <form
                       className="python-package-form"
                       onSubmit={(event) => {
@@ -4123,10 +4593,12 @@ export function App() {
                       }}
                     >
                       <input
-                        aria-label="Python package"
-                        placeholder="requests==2.32.5"
+                        aria-label="Package to install"
+                        placeholder="Package name, e.g. ultralytics"
                         value={pythonPackage}
-                        disabled={!projectEnvironment || installingPackage}
+                        disabled={
+                          !project || !runtime || Boolean(packageOperation)
+                        }
                         onChange={(event) =>
                           setPythonPackage(event.target.value)
                         }
@@ -4134,25 +4606,119 @@ export function App() {
                       <button
                         type="submit"
                         disabled={
-                          !projectEnvironment ||
+                          !project ||
+                          !runtime ||
                           !pythonPackage.trim() ||
-                          installingPackage
+                          Boolean(packageOperation)
                         }
                       >
-                        {installingPackage ? "Installing…" : "Install"}
+                        <FeatherIcon icon="plus" size="15" />
+                        Add
                       </button>
                     </form>
-                    {!projectEnvironment && (
-                      <small>
-                        Select or create a project environment above.
-                      </small>
+                    {!pythonPackageEnvironment && !packageOperation && (
+                      <p className="python-package-hint">
+                        Add creates an app-managed environment for this project.
+                        It lives in osCode application data, not in your project
+                        directory.
+                      </p>
                     )}
-                    <code>uv add requests</code>
-                    <small>Add a package to a uv project.</small>
-                    <code>uv pip install requests</code>
-                    <small>Install into the active .venv.</small>
-                    <code>python -m pip list</code>
-                    <small>Show installed packages.</small>
+                    {!!pythonPackages.length && (
+                      <label className="python-package-search">
+                        <FeatherIcon icon="search" size="15" />
+                        <input
+                          type="search"
+                          aria-label="Filter installed Python packages"
+                          placeholder="Filter installed libraries"
+                          value={pythonPackageSearch}
+                          onChange={(event) =>
+                            setPythonPackageSearch(event.target.value)
+                          }
+                        />
+                      </label>
+                    )}
+                    <div className="python-package-list">
+                      {pythonPackages
+                        .filter((item) =>
+                          `${item.name} ${item.version}`
+                            .toLowerCase()
+                            .includes(pythonPackageSearch.toLowerCase()),
+                        )
+                        .map((item) => (
+                          <article key={item.name}>
+                            <span>
+                              <b>{item.name}</b>
+                              <small>
+                                {item.version}
+                                {item.editableProjectLocation
+                                  ? " · editable"
+                                  : ""}
+                              </small>
+                            </span>
+                            <button
+                              aria-label={`Remove ${item.name}`}
+                              title={`Remove ${item.name}`}
+                              disabled={Boolean(packageOperation)}
+                              onClick={() =>
+                                void uninstallProjectPackage(item.name)
+                              }
+                            >
+                              <FeatherIcon icon="trash-2" size="14" />
+                              Remove
+                            </button>
+                          </article>
+                        ))}
+                      {!packageOperation && !pythonPackages.length && (
+                        <p>
+                          No libraries installed yet. Add a package here, or
+                          create a project .venv if you want the environment in
+                          the project folder.
+                        </p>
+                      )}
+                      {!packageOperation &&
+                        Boolean(pythonPackages.length) &&
+                        !pythonPackages.some((item) =>
+                          `${item.name} ${item.version}`
+                            .toLowerCase()
+                            .includes(pythonPackageSearch.toLowerCase()),
+                        ) && <p>No installed libraries match this search.</p>}
+                    </div>
+                  </aside>
+                )}
+                {pythonContext && uvHelpOpen && (
+                  <aside className="uv-helpbook">
+                    <div className="compact-panel-head">
+                      <b>UV help</b>
+                      <IconButton
+                        icon="x"
+                        label="Close UV help"
+                        onClick={() => setUvHelpOpen(false)}
+                      />
+                    </div>
+                    <input
+                      autoFocus
+                      type="search"
+                      aria-label="Search UV help"
+                      placeholder="Search UV commands"
+                      value={uvHelpSearch}
+                      onChange={(event) => setUvHelpSearch(event.target.value)}
+                    />
+                    <div>
+                      {uvHelpEntries
+                        .filter((entry) =>
+                          entry
+                            .join(" ")
+                            .toLowerCase()
+                            .includes(uvHelpSearch.toLowerCase()),
+                        )
+                        .map(([title, command, detail]) => (
+                          <article key={command}>
+                            <b>{title}</b>
+                            <code>{command}</code>
+                            <p>{detail}</p>
+                          </article>
+                        ))}
+                    </div>
                   </aside>
                 )}
               </div>
@@ -4173,6 +4739,7 @@ export function App() {
               model={aiModel}
               executable={aiExecutable}
               editMode={aiEditMode}
+              terminalMode={aiTerminalMode}
               fileAccess={aiFileAccess}
               webAccess={aiWebAccess}
               browserAccess={aiBrowserAccess}
@@ -4189,6 +4756,7 @@ export function App() {
               }}
               onModel={setAiModel}
               onEditMode={setAiEditMode}
+              onTerminalMode={setAiTerminalMode}
               onFileAccess={setAiFileAccess}
               onWebAccess={setAiWebAccess}
               onBrowserAccess={setAiBrowserAccess}

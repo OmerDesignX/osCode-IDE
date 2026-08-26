@@ -177,6 +177,29 @@ export function cleanBrowserAddress(raw: string) {
   return input;
 }
 
+async function projectFileFromStalePath(root: string, requested: string) {
+  const project = await fs.realpath(root);
+  const parsedRoot = path.parse(requested).root;
+  const parts = path
+    .normalize(requested)
+    .split(path.sep)
+    .filter((part) => part && part !== parsedRoot);
+  for (let index = 0; index < parts.length; index += 1) {
+    const candidate = path.join(project, ...parts.slice(index));
+    const resolved = await fs.realpath(candidate).catch(() => "");
+    if (!resolved) continue;
+    const relative = path.relative(project, resolved);
+    const stat = await fs.stat(resolved).catch(() => null);
+    if (
+      stat?.isFile() &&
+      !relative.startsWith("..") &&
+      !path.isAbsolute(relative)
+    )
+      return resolved;
+  }
+  return "";
+}
+
 async function validatedAddress(raw: string, projectRoot: string) {
   const input = cleanBrowserAddress(raw);
   if (!input) throw new Error("Enter a page address");
@@ -193,11 +216,18 @@ async function validatedAddress(raw: string, projectRoot: string) {
   if (url.username || url.password)
     throw new Error("Addresses containing credentials are blocked");
   if (url.protocol === "file:") {
-    const file = await fs.realpath(fileURLToPath(url));
+    const requested = fileURLToPath(url);
     const root = await fs.realpath(projectRoot);
-    const relative = path.relative(root, file);
-    if (relative.startsWith("..") || path.isAbsolute(relative))
-      throw new Error("The browser can open only files in the current project");
+    let file = await fs.realpath(requested).catch(() => "");
+    let relative = file ? path.relative(root, file) : "";
+    if (!file || relative.startsWith("..") || path.isAbsolute(relative)) {
+      file = await projectFileFromStalePath(root, requested);
+      relative = file ? path.relative(root, file) : "";
+    }
+    if (!file || relative.startsWith("..") || path.isAbsolute(relative))
+      throw new Error(
+        "That preview is not in the open project. Use an existing project-relative HTML path returned by list_files.",
+      );
     return { url: pathToFileURL(file).toString(), network: false };
   }
   if (url.protocol === "http:") {

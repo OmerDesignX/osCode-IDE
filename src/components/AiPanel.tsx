@@ -22,6 +22,7 @@ import type {
   AiPermissionScope,
   AiQueueItem,
   AiSchedule,
+  AiTerminalMode,
   OllamaCliStatus,
 } from "../types";
 
@@ -30,6 +31,7 @@ type Props = {
   model: string;
   executable: string;
   editMode: AiEditMode;
+  terminalMode: AiTerminalMode;
   fileAccess: boolean;
   webAccess: boolean;
   browserAccess: boolean;
@@ -43,6 +45,7 @@ type Props = {
   onEngine: (engine: AiEngine) => void;
   onModel: (model: string) => void;
   onEditMode: (mode: AiEditMode) => void;
+  onTerminalMode: (mode: AiTerminalMode) => void;
   onFileAccess: (enabled: boolean) => void;
   onWebAccess: (enabled: boolean) => void;
   onBrowserAccess: (enabled: boolean) => void;
@@ -64,6 +67,7 @@ const permissionLabels: Record<AiPermissionKind, string> = {
   "project.read": "Read project files",
   "project.write": "Edit project files",
   "terminal.run": "Run terminal commands",
+  "packages.install": "Install packages",
   "debug.run": "Run and debug code",
   "web.search": "Search the web",
   "browser.control": "Control the agent browser",
@@ -223,6 +227,7 @@ export function AiPanel({
   model,
   executable,
   editMode,
+  terminalMode,
   fileAccess,
   webAccess,
   browserAccess,
@@ -236,6 +241,7 @@ export function AiPanel({
   onEngine,
   onModel,
   onEditMode,
+  onTerminalMode,
   onFileAccess,
   onWebAccess,
   onBrowserAccess,
@@ -368,6 +374,7 @@ export function AiPanel({
   const manualEngine = useRef<AiEngine | null>(null);
   const capabilityRef = useRef({
     editMode,
+    terminalMode,
     fileAccess,
     webAccess,
     browserAccess,
@@ -610,12 +617,20 @@ export function AiPanel({
   useEffect(() => {
     capabilityRef.current = {
       editMode,
+      terminalMode,
       fileAccess,
       webAccess,
       browserAccess,
       computerAccess,
     };
-  }, [editMode, fileAccess, webAccess, browserAccess, computerAccess]);
+  }, [
+    editMode,
+    terminalMode,
+    fileAccess,
+    webAccess,
+    browserAccess,
+    computerAccess,
+  ]);
   useEffect(() => {
     chatIdRef.current = chatId;
   }, [chatId]);
@@ -952,6 +967,11 @@ export function AiPanel({
         kind: "browser.control",
         detail: "Browser is enabled for this chat",
       });
+    if (capabilities.terminalMode === "auto")
+      desired.push({
+        kind: "terminal.run",
+        detail: "Terminal is automatic for this chat",
+      });
     if (capabilities.computerAccess)
       desired.push({
         kind: "computer.control",
@@ -978,12 +998,29 @@ export function AiPanel({
     if (granted) await refreshAgentState();
   };
 
+  const revokeAutomaticTerminal = async (currentChatId: string) => {
+    const state = await window.oscode.aiAgentState();
+    const grants = state.permissions.filter(
+      (permission) =>
+        permission.kind === "terminal.run" &&
+        (permission.scope === "always" || permission.chatId === currentChatId),
+    );
+    await Promise.all(
+      grants.map((permission) =>
+        window.oscode.revokeAiPermission(permission.id),
+      ),
+    );
+    if (grants.length) await refreshAgentState();
+  };
+
   const applyCapabilities = (
     next: typeof capabilityRef.current,
     statusMessage: string,
   ) => {
+    const previous = capabilityRef.current;
     capabilityRef.current = next;
     onEditMode(next.editMode);
+    onTerminalMode(next.terminalMode);
     onFileAccess(next.fileAccess);
     onWebAccess(next.webAccess);
     onBrowserAccess(next.browserAccess);
@@ -991,7 +1028,11 @@ export function AiPanel({
     setStatus(statusMessage);
     const currentChatId = chatIdRef.current;
     if (!currentChatId) return;
-    void ensureCapabilityPermissions(currentChatId, next)
+    const permissions =
+      previous.terminalMode === "auto" && next.terminalMode === "ask"
+        ? revokeAutomaticTerminal(currentChatId)
+        : ensureCapabilityPermissions(currentChatId, next);
+    void permissions
       .then(() => setStatus(`${statusMessage} · model updated`))
       .catch((error) =>
         setStatus(publicAiError(error, "Capability permission could not save")),
@@ -1054,6 +1095,7 @@ export function AiPanel({
         executable,
         messages: next,
         editMode: activeCapabilities.editMode,
+        terminalMode: activeCapabilities.terminalMode,
         fileAccess: activeCapabilities.fileAccess,
         webAccess: activeCapabilities.webAccess,
         browserAccess: activeCapabilities.browserAccess,
@@ -1208,6 +1250,7 @@ export function AiPanel({
         executable,
         messages: next,
         editMode,
+        terminalMode,
         fileAccess,
         webAccess,
         browserAccess,
@@ -1434,12 +1477,15 @@ export function AiPanel({
       nextCapabilities.webAccess = true;
     if (permissionRequest.kind === "browser.control")
       nextCapabilities.browserAccess = true;
+    if (permissionRequest.kind === "terminal.run" && scope !== "once")
+      nextCapabilities.terminalMode = "auto";
     if (permissionRequest.kind === "computer.control")
       nextCapabilities.computerAccess = true;
     if (scope !== "once") {
       capabilityRef.current = nextCapabilities;
       onFileAccess(nextCapabilities.fileAccess);
       onEditMode(nextCapabilities.editMode);
+      onTerminalMode(nextCapabilities.terminalMode);
       onWebAccess(nextCapabilities.webAccess);
       onBrowserAccess(nextCapabilities.browserAccess);
       onComputerAccess(nextCapabilities.computerAccess);
@@ -2807,14 +2853,18 @@ export function AiPanel({
               Deny
             </button>
             <button onClick={() => void grantPermission("once")}>Once</button>
-            <button onClick={() => void grantPermission("conversation")}>
-              This chat
-            </button>
+            {permissionRequest.kind !== "packages.install" && (
+              <button onClick={() => void grantPermission("conversation")}>
+                This chat
+              </button>
+            )}
             <button
               className="primary"
               onClick={() => void grantPermission("always")}
             >
-              Always
+              {permissionRequest.kind === "packages.install"
+                ? "Always allow"
+                : "Always"}
             </button>
           </div>
         </div>
@@ -2915,6 +2965,7 @@ export function AiPanel({
                     fileAccess && editMode !== "read-only",
                     webAccess,
                     browserAccess,
+                    terminalMode === "auto",
                     computerAccess,
                   ].filter(Boolean).length
                 }{" "}
@@ -3019,6 +3070,26 @@ export function AiPanel({
             >
               <FeatherIcon icon="compass" size="17" />
               <span>Browser</span>
+            </button>
+            <button
+              className={terminalMode === "auto" ? "enabled" : "guarded"}
+              aria-pressed={terminalMode === "auto"}
+              aria-label={`Terminal access: ${terminalMode === "auto" ? "automatic" : "ask first"}`}
+              title={`Terminal ${terminalMode === "auto" ? "automatic" : "ask first"}: run commands in the host shell`}
+              data-tooltip={`Terminal ${terminalMode === "auto" ? "auto" : "ask"}: run host shell commands`}
+              onClick={() => {
+                const next = terminalMode === "ask" ? "auto" : "ask";
+                applyCapabilities(
+                  { ...capabilityRef.current, terminalMode: next },
+                  `Terminal ${next === "auto" ? "automatic for this chat" : "will ask before commands"}`,
+                );
+              }}
+            >
+              <FeatherIcon
+                icon={terminalMode === "auto" ? "terminal" : "shield"}
+                size="17"
+              />
+              <span>Terminal</span>
             </button>
             <button
               className={computerAccess ? "enabled" : ""}

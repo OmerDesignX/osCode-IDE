@@ -7,7 +7,12 @@ const read = (file) => fs.readFileSync(path.resolve(file), "utf8");
 
 test("the editor registers Monaco's complete built-in language catalog", () => {
   const source = read("src/monaco.ts");
-  assert.match(source, /monaco-editor\/languages\/definitions\/register\.all/);
+  const startup = read("src/main.tsx");
+  const vite = read("vite.config.ts");
+  assert.match(source, /globalThis[\s\S]*monaco/);
+  assert.match(startup, /vs\/editor\/editor\.main/);
+  assert.match(vite, /monaco-editor\/min\/vs/);
+  assert.match(vite, /fs\.cp\(monacoRuntime/);
 });
 
 test("the installed Monaco catalog includes Swift for SwiftUI source files", () => {

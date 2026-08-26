@@ -27,7 +27,7 @@ test("release metadata keeps the requested desktop compatibility", () => {
   assert.equal(manifest.build.linux.icon, "build/icon.png");
 
   const readme = read("README.md");
-  assert.match(readme, /Windows 10 or newer/);
+  assert.match(readme, /Windows 10[\s\S]*Windows 11/);
   assert.match(readme, /macOS 12 Monterey or newer/);
 });
 
@@ -226,7 +226,18 @@ test("manual release build preserves the verified native package pipeline", () =
   assert.match(macBuild, /verify-package\.mjs[\s\S]*"macos"/);
   assert.match(macBuild, /OSCODE_REQUIRE_SIGNED/);
   assert.match(macBuild, /OSCODE_ALLOW_UNSIGNED: requireSigned \? "0" : "1"/);
+  assert.match(macBuild, /--config\.mac\.identity=-/);
+  assert.match(macBuild, /--config\.mac\.hardenedRuntime=false/);
   assert.match(macBuild, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
+  const packageVerifier = read("scripts/verify-package.mjs");
+  assert.match(packageVerifier, /Signature=adhoc/);
+  assert.match(packageVerifier, /--verify", "--deep", "--strict"/);
+  assert.match(packageVerifier, /attempt < 3 && !helperListReady/);
+  assert.match(packageVerifier, /timeout: 20_000/);
+  assert.match(
+    packageVerifier,
+    /expectedMacArch === "x64" && process\.arch === "arm64" \? 60_000 : 15_000/,
+  );
   const macWrapper = read("releaseScripts/macos/build.sh");
   assert.doesNotMatch(macWrapper, /Developer ID Application/);
   assert.doesNotMatch(macWrapper, /find-identity/);
@@ -234,7 +245,7 @@ test("manual release build preserves the verified native package pipeline", () =
     read("docs/RELEASING.md"),
     /bash releaseScripts\/macos\/build\.sh/,
   );
-  assert.equal(read("releaseScripts/VERSION.txt").trim(), "0.1.1");
+  assert.equal(read("releaseScripts/VERSION.txt").trim(), "0.1.2");
   assert.match(
     read("releaseScripts/windows/build-windows-10.sh"),
     /build-windows\.sh/,
@@ -293,8 +304,16 @@ test("manual release build preserves the verified native package pipeline", () =
   );
   assert.match(
     read("electron/main/index.ts"),
-    /smokeMode\s*\? processKeyProtector\(app\.getPath\("userData"\)\)/,
+    /smokeMode\s*\? processKeyProtector\(userData\)/,
   );
+  const main = read("electron/main/index.ts");
+  assert.match(main, /if \(!smokeMode\)[\s\S]*migrateWrappedKeyToAppLocal/);
+  assert.match(
+    main,
+    /smokeMode\s*\? processKeyProtector\(userData\)\s*:\s*appLocalKeyProtector\(\)/,
+  );
+  assert.doesNotMatch(main, /backend:\s*"DPAPI"/);
+  assert.doesNotMatch(main, /osCode refuses Electron's unprotected basic_text/);
 });
 
 test("model tiers are downloaded on demand from the separate verified catalogue", () => {

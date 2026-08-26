@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { monaco } from "./monaco";
+import type * as Monaco from "monaco-editor/editor/editor.api";
 import type { Tab } from "./types";
 
 type SplitSide = "left" | "right";
@@ -14,11 +15,11 @@ function SplitPane({
   side: SplitSide;
   tab: Tab;
   theme: string;
-  options: monaco.editor.IStandaloneEditorConstructionOptions;
+  options: Monaco.editor.IStandaloneEditorConstructionOptions;
   onChange: (path: string, value: string) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const model = useRef<monaco.editor.ITextModel | null>(null);
+  const model = useRef<Monaco.editor.ITextModel | null>(null);
   const change = useRef(onChange);
   const synchronizing = useRef(false);
   change.current = onChange;
@@ -71,7 +72,7 @@ export default function LocalSplitEditor({
   leftPath: string;
   rightPath: string;
   theme: string;
-  options: monaco.editor.IStandaloneEditorConstructionOptions;
+  options: Monaco.editor.IStandaloneEditorConstructionOptions;
   onSelect: (side: SplitSide, path: string) => void;
   onChange: (path: string, value: string) => void;
 }) {

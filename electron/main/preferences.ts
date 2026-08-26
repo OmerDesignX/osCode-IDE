@@ -2,7 +2,7 @@ import path from "node:path";
 import type { EditorPreferences } from "../types.js";
 
 export const defaultPreferences: EditorPreferences = {
-  version: 9,
+  version: 10,
   theme: "dark",
   locale: "en",
   sidebarSide: "left",
@@ -29,6 +29,7 @@ export const defaultPreferences: EditorPreferences = {
   proseWrap: true,
   minimap: true,
   spellcheck: true,
+  autoSave: true,
   autoUpdateEnabled: false,
   autoUpdatePromptAnswered: false,
   lastProject: "",
@@ -39,7 +40,7 @@ export function validPreferences(value: unknown): EditorPreferences {
   const input = value as Partial<EditorPreferences>;
   const legacy = value as { aiAllowEdits?: unknown; theme?: unknown };
   return {
-    version: 9,
+    version: 10,
     theme:
       input.theme === "blue-dark" || input.theme === "blue-light"
         ? input.theme
@@ -119,6 +120,7 @@ export function validPreferences(value: unknown): EditorPreferences {
     proseWrap: typeof input.proseWrap === "boolean" ? input.proseWrap : true,
     minimap: typeof input.minimap === "boolean" ? input.minimap : true,
     spellcheck: typeof input.spellcheck === "boolean" ? input.spellcheck : true,
+    autoSave: typeof input.autoSave === "boolean" ? input.autoSave : true,
     autoUpdateEnabled:
       typeof input.autoUpdateEnabled === "boolean"
         ? input.autoUpdateEnabled

@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SecureDataStore } from "../dist-electron/main/secure-store.js";
+import {
+  appLocalKeyProtector,
+  migrateWrappedKeyToAppLocal,
+  SecureDataStore,
+} from "../dist-electron/main/secure-store.js";
 
 const testProtector = {
   status: () => ({ available: true, backend: "test" }),
@@ -53,6 +57,55 @@ test("secure storage refuses an unavailable key provider", async (t) => {
     unprotect: (value) => value,
   });
   await assert.rejects(store.ready(), /secure key store unavailable/);
+});
+
+test("app-local encryption persists without an operating-system key store", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-local-key-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, "secure", "state", "settings.oscode-data");
+  const value = { privateSetting: "only ciphertext should contain this" };
+  await new SecureDataStore(root, appLocalKeyProtector()).writeJson(
+    target,
+    value,
+    "local-key-test",
+  );
+  const secondProcess = new SecureDataStore(root, appLocalKeyProtector());
+  assert.deepEqual(
+    await secondProcess.readJson(target, {}, "local-key-test"),
+    value,
+  );
+  const keyPath = path.join(root, "secure", "device-key.oscode-key");
+  assert.equal((await fs.readFile(keyPath)).length, 32);
+  if (process.platform !== "win32")
+    assert.equal((await fs.stat(keyPath)).mode & 0o777, 0o600);
+  assert.equal(
+    (await fs.readFile(target)).includes(Buffer.from(value.privateSetting)),
+    false,
+  );
+});
+
+test("an existing wrapped device key migrates once to app-local protection", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-key-migrate-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const secureRoot = path.join(root, "secure");
+  const keyPath = path.join(secureRoot, "device-key.oscode-key");
+  const key = Buffer.alloc(32, 0x4a);
+  await fs.mkdir(secureRoot, { recursive: true });
+  await fs.writeFile(
+    keyPath,
+    Buffer.concat([
+      Buffer.from("legacy:"),
+      Buffer.from(key.map((byte) => byte ^ 0xa5)),
+    ]),
+  );
+  assert.equal(
+    await migrateWrappedKeyToAppLocal(root, (wrapped) =>
+      Buffer.from(wrapped.subarray(7).map((byte) => byte ^ 0xa5)),
+    ),
+    true,
+  );
+  assert.deepEqual(await fs.readFile(keyPath), key);
+  assert.equal(await migrateWrappedKeyToAppLocal(root, () => key), false);
 });
 
 test("legacy plaintext prompt artefacts are removed without broad cleanup", async (t) => {

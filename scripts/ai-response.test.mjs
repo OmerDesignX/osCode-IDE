@@ -122,6 +122,10 @@ test("normalizes a safe command accidentally placed in the executable field", ()
     () => normalizeRunCommand("python & whoami", []),
     /executable name/,
   );
+  assert.deepEqual(normalizeRunCommand("npm", undefined), {
+    command: "npm",
+    args: [],
+  });
 });
 
 test("requires distinct CRUD evidence and an update implementation", () => {
@@ -195,6 +199,7 @@ test("recognizes obsolete permission prose only when the capability is granted",
   const granted = {
     fileAccess: true,
     editMode: "auto",
+    terminalMode: "ask",
     webAccess: false,
     browserAccess: false,
     computerAccess: false,
@@ -213,6 +218,13 @@ test("recognizes obsolete permission prose only when the capability is granted",
   assert.equal(
     isStalePermissionReply("The requested file is ready.", granted),
     false,
+  );
+  assert.equal(
+    isStalePermissionReply("I need terminal permission to run npm.", {
+      ...granted,
+      terminalMode: "auto",
+    }),
+    true,
   );
 });
 
@@ -309,7 +321,7 @@ test("MLX and Ollama use their native tool templates without duplicating the tex
   assert.equal(needsTextToolProtocol("pytorch"), true);
 });
 
-test("shows Qwen the split command and args form", () => {
+test("shows Qwen the development command and args form", () => {
   const prompt = qwenToolInstructions([
     {
       type: "function",
@@ -320,6 +332,23 @@ test("shows Qwen the split command and args form", () => {
       },
     },
   ]);
-  assert.match(prompt, /command is "python"/);
-  assert.match(prompt, /args is \["-m", "unittest"\]/);
+  assert.match(prompt, /command is "npm"/);
+  assert.match(prompt, /args is \["run", "build"\]/);
+  assert.match(prompt, /shell operators[^.]+not interpreted/);
+});
+
+test("tells Qwen to use the dedicated Python package tool", () => {
+  const prompt = qwenToolInstructions([
+    {
+      type: "function",
+      function: {
+        name: "python_install_packages",
+        description: "Install Python packages",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+  ]);
+  assert.match(prompt, /always call python_install_packages/);
+  assert.match(prompt, /"ultralytics", "opencv-python", "numpy"/);
+  assert.match(prompt, /Do not call pip, python -m pip, or uv/);
 });

@@ -5,7 +5,7 @@ export type TreeEntry = {
   children?: TreeEntry[];
 };
 export type EditorPreferences = {
-  version: 9;
+  version: 10;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
@@ -29,6 +29,7 @@ export type EditorPreferences = {
   proseWrap: boolean;
   minimap: boolean;
   spellcheck: boolean;
+  autoSave: boolean;
   autoUpdateEnabled: boolean;
   autoUpdatePromptAnswered: boolean;
   lastProject: string;
@@ -52,6 +53,7 @@ export type AppUpdateStatus = {
 export type AiEngine = "llamacpp" | "ollama" | "pytorch" | "mlx";
 export type AiInferenceHardware = "auto" | "cpu" | "gpu";
 export type AiEditMode = "ask" | "auto" | "read-only";
+export type AiTerminalMode = "ask" | "auto";
 export type AiModel = {
   id: string;
   name: string;
@@ -84,6 +86,7 @@ export type AiPermissionKind =
   | "project.read"
   | "project.write"
   | "terminal.run"
+  | "packages.install"
   | "debug.run"
   | "web.search"
   | "browser.control"
