@@ -54,7 +54,10 @@ test("PlatformIO project creation is local, immediate, and deterministic", async
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-pio-init-"));
   const data = path.join(root, "data");
   const project = path.join(root, "project");
-  const executable = path.join(data, "penv", "bin", "pio");
+  const executable =
+    process.platform === "win32"
+      ? path.join(data, "penv", "Scripts", "pio.exe")
+      : path.join(data, "penv", "bin", "pio");
   await fs.mkdir(path.dirname(executable), { recursive: true });
   await fs.mkdir(project);
   await fs.writeFile(executable, "test placeholder");

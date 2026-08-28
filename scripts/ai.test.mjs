@@ -188,7 +188,7 @@ test("every agent project deletion requires a fresh one-time Trash approval", as
   assert.equal(grant.scope, "once");
   assert.match(
     await service.runTool(call, ...args, "auto", true),
-    /Moved remove-me\.txt to Trash/,
+    /Moved remove-me\.txt to (?:Trash|the Recycle Bin)/,
   );
   await assert.rejects(fs.stat(path.join(root, "remove-me.txt")));
   assert.equal(
@@ -572,7 +572,10 @@ test("successful tool results tell small models to stop repeating actions", () =
   );
   assert.match(platformioFailure, /COMPILER RECOVERY/);
   assert.match(platformioFailure, /oscode_compiler_diagnostics/);
-  assert.match(platformioFailure, /src\/main\.cpp:42: error: invalid conversion/);
+  assert.match(
+    platformioFailure,
+    /src\/main\.cpp:42: error: invalid conversion/,
+  );
   assert.match(platformioFailure, /src\/main\.cpp:51: error: cannot convert/);
   assert.match(platformioFailure, /every listed compiler error/);
   assert.match(platformioFailure, /next write must differ/);
@@ -845,7 +848,8 @@ test("repeated missing-path command failures expose current project paths and fo
     messages: [
       {
         role: "user",
-        content: "Create a script that processes the existing project image and verify it.",
+        content:
+          "Create a script that processes the existing project image and verify it.",
       },
     ],
   });
@@ -916,7 +920,10 @@ test("identical write content is not counted as progress and prompts a real repa
           },
         ],
       };
-    return { content: "Repaired and verified the existing file.", toolCalls: [] };
+    return {
+      content: "Repaired and verified the existing file.",
+      toolCalls: [],
+    };
   };
   const response = await service.chat({
     chatId: chat.id,
@@ -940,7 +947,10 @@ test("identical write content is not counted as progress and prompts a real repa
     ],
   });
   assert.match(response.content, /Repaired and verified/);
-  assert.equal(await fs.readFile(path.join(root, "app.mjs"), "utf8"), 'console.log("fixed")\n');
+  assert.equal(
+    await fs.readFile(path.join(root, "app.mjs"), "utf8"),
+    'console.log("fixed")\n',
+  );
   assert.equal(
     response.actions.filter(
       (action) => action.tool === "write_file" && action.status === "completed",
@@ -1007,16 +1017,14 @@ test("an unchanged firmware write is forced into compiler-guided PlatformIO reco
       };
     if (turn === 2) {
       assert.ok(
-        messages.some(
-          (message) => {
-            const content = String(message.content || "");
-            return (
-              message.role === "tool" &&
-              /src\/main\.cpp:8: error/.test(content) &&
-              /COMPILER RECOVERY:/.test(content)
-            );
-          },
-        ),
+        messages.some((message) => {
+          const content = String(message.content || "");
+          return (
+            message.role === "tool" &&
+            /src\/main\.cpp:8: error/.test(content) &&
+            /COMPILER RECOVERY:/.test(content)
+          );
+        }),
       );
       return {
         content: "",

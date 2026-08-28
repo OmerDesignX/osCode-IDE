@@ -918,7 +918,11 @@ function platformioCompilerDigest(result: string) {
     .filter((index) => index >= 0);
   const selected = new Set<number>();
   for (const index of indexes.slice(0, 16)) {
-    for (let nearby = Math.max(0, index - 2); nearby <= Math.min(lines.length - 1, index + 1); nearby += 1)
+    for (
+      let nearby = Math.max(0, index - 2);
+      nearby <= Math.min(lines.length - 1, index + 1);
+      nearby += 1
+    )
       selected.add(nearby);
   }
   const digest = [...selected]
@@ -940,7 +944,11 @@ function platformioCompilerHints(result: string) {
     hints.push(
       "A multidimensional array lost its rank: make the storage declaration, function parameter dimensions, and every indexing expression agree; use a matching pointer-to-array parameter or flatten both declaration and indexing consistently.",
     );
-  if (/invalid conversion from ['`]?(?:u?int\w*|long|short).* to ['`]?.*\*/i.test(result))
+  if (
+    /invalid conversion from ['`]?(?:u?int\w*|long|short).* to ['`]?.*\*/i.test(
+      result,
+    )
+  )
     hints.push(
       "A scalar was passed where a buffer pointer is required: pass the actual array/address, or change the callee only when it truly consumes one scalar.",
     );
@@ -982,7 +990,10 @@ export function toolResultForModel(toolName: string, result: string) {
   }
   if (toolName === "platformio_run") {
     try {
-      const parsed = JSON.parse(result) as { action?: unknown; output?: unknown };
+      const parsed = JSON.parse(result) as {
+        action?: unknown;
+        output?: unknown;
+      };
       if (typeof parsed.output === "string")
         return `${result}\n\n<oscode_tool_note>VERIFIED: PlatformIO ${String(parsed.action || "task")} completed successfully. Treat the captured output as evidence and continue to the next distinct requested PlatformIO action; do not repeat this successful call.</oscode_tool_note>`;
     } catch {
