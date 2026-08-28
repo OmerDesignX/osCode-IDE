@@ -439,6 +439,7 @@ export function App() {
     [pythonPackageLocation, setPythonPackageLocation] = useState<
       "" | "app" | "project"
     >(""),
+    [pythonPackageError, setPythonPackageError] = useState(""),
     [packageOperation, setPackageOperation] = useState(""),
     [running, setRunning] = useState(false),
     [runOutput, setRunOutput] = useState(""),
@@ -533,6 +534,8 @@ export function App() {
   const projectPickerOpen = useRef(false);
   const savingPaths = useRef(new Set<string>());
   const externalConflictPaths = useRef(new Set<string>());
+  const tabsRef = useRef<Tab[]>([]);
+  tabsRef.current = tabs;
   const menuActions = useRef<Record<string, () => void>>({});
   const autoUpdateEnabledRef = useRef(false);
   const autoUpdateDismissedVersionRef = useRef("");
@@ -872,6 +875,7 @@ export function App() {
     setUvHelpOpen(false);
     setPythonPackages([]);
     setPythonPackageEnvironment("");
+    setPythonPackageError("");
     setPathInput(nextProject.root);
     setLastProject(nextProject.root);
     const state = await window.oscode.gitState();
@@ -1284,6 +1288,16 @@ export function App() {
     return window.oscode.onProjectFileChanged((change) => {
       void (async () => {
         if (!change.exists) {
+          if (change.kind === "rename") {
+            const tree = await window.oscode.refreshProject().catch(() => null);
+            if (tree)
+              setProject((current) =>
+                current ? { ...current, tree } : current,
+              );
+          }
+          return;
+        }
+        if (!tabsRef.current.some((tab) => tab.path === change.path)) {
           if (change.kind === "rename") {
             const tree = await window.oscode.refreshProject().catch(() => null);
             if (tree)
@@ -1740,6 +1754,11 @@ export function App() {
       setPythonPackages([]);
       setPythonPackageEnvironment("");
       setPythonPackageLocation("");
+      setPythonPackageError(
+        project
+          ? "No Python interpreter is selected. Choose an installed or bundled Python runtime first."
+          : "Open a project before managing Python packages.",
+      );
       return;
     }
     try {
@@ -1747,18 +1766,25 @@ export function App() {
       setPythonPackages(state.packages);
       setPythonPackageEnvironment(state.environment);
       setPythonPackageLocation(state.location);
+      setPythonPackageError(state.error || "");
       await useDetectedProjectEnvironment(state.interpreter);
     } catch (e) {
       setPythonPackages([]);
       setPythonPackageEnvironment("");
       setPythonPackageLocation("");
-      setNotice(errorMessage(e, "Installed Python packages could not load"));
+      const message = errorMessage(
+        e,
+        "Installed Python packages could not load",
+      );
+      setPythonPackageError(message);
+      setNotice(message);
     }
   };
   const installProjectPackage = async () => {
     const packageSpec = pythonPackage.trim();
     if (!packageSpec || !project || !runtime) return;
     setPackageOperation(`Installing ${packageSpec}`);
+    setPythonPackageError("");
     try {
       const installed = await window.oscode.installPythonPackage(
         runtime,
@@ -1773,7 +1799,9 @@ export function App() {
         }`,
       );
     } catch (e) {
-      setNotice(errorMessage(e, "Package installation failed"));
+      const message = errorMessage(e, "Package installation failed");
+      setPythonPackageError(message);
+      setNotice(message);
     } finally {
       setPackageOperation("");
     }
@@ -1804,6 +1832,7 @@ export function App() {
     setPythonPackages([]);
     setPythonPackageEnvironment("");
     setPythonPackageLocation("");
+    setPythonPackageError("");
     if (!project) return;
     try {
       await window.oscode.setProjectPython(value);
@@ -4802,6 +4831,15 @@ export function App() {
                         </button>
                       </div>
                     </div>
+                    {pythonPackageError && (
+                      <div className="python-package-error" role="alert">
+                        <FeatherIcon icon="alert-circle" size="17" />
+                        <span>
+                          <b>Python environment unavailable</b>
+                          <small>{pythonPackageError}</small>
+                        </span>
+                      </div>
+                    )}
                     <div className="python-environment-summary">
                       <span>
                         <b>

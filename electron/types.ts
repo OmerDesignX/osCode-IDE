@@ -95,6 +95,7 @@ export type OllamaCliStatus = {
 export type AiPermissionKind =
   | "project.read"
   | "project.write"
+  | "project.delete"
   | "terminal.run"
   | "packages.install"
   | "debug.run"

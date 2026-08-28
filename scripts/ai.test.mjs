@@ -10,8 +10,30 @@ import {
   isPackageInstallCommand,
   LocalAiService,
   ollamaCliAssetName,
+  pythonPackageInstallSpecs,
+  requiredProjectImageDownloadCount,
+  requiresProjectMutation,
   toolResultForModel,
 } from "../dist-electron/main/ai.js";
+
+test("project image delivery obligations are narrow and count requested assets", () => {
+  assert.equal(
+    requiredProjectImageDownloadCount(
+      "Download two public images into an images folder inside this project",
+    ),
+    2,
+  );
+  assert.equal(
+    requiredProjectImageDownloadCount(
+      "Create an image downloader component for the web app",
+    ),
+    0,
+  );
+  assert.equal(
+    requiredProjectImageDownloadCount("Explain how image downloads work"),
+    0,
+  );
+});
 import {
   filesForVariant,
   modelVariants,
@@ -85,7 +107,7 @@ async function fixture({
   return { root, base, service, chat };
 }
 
-test("network, external desktop, and MCP actions always need exact one-shot approval", async (t) => {
+test("web, external desktop, and MCP actions request their scoped permission", async (t) => {
   const { base, service, chat } = await fixture({
     serviceOptions: {
       computerInspect: async (target) => `inspected ${target}`,
@@ -102,7 +124,7 @@ test("network, external desktop, and MCP actions always need exact one-shot appr
       ...baseArgs,
     ),
     (error) => {
-      assert.equal(error.kind, "network.request");
+      assert.equal(error.kind, "web.search");
       return true;
     },
   );
@@ -142,6 +164,41 @@ test("network, external desktop, and MCP actions always need exact one-shot appr
   );
 });
 
+test("every agent project deletion requires a fresh one-time Trash approval", async (t) => {
+  const { root, base, service, chat } = await fixture({
+    serviceOptions: {
+      trashProjectPath: async (target) =>
+        fs.rename(target, path.join(base, "trashed-item")),
+    },
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, "remove-me.txt"), "temporary\n");
+  const call = { name: "delete_path", arguments: { path: "remove-me.txt" } };
+  const args = ["auto", new Set(), [], true, false, chat.id, false, false];
+  await assert.rejects(service.runTool(call, ...args), (error) => {
+    assert.equal(error.kind, "project.delete");
+    return true;
+  });
+  const grant = await service.grantPermission(
+    "project.delete",
+    "always",
+    chat.id,
+    "remove-me.txt",
+  );
+  assert.equal(grant.scope, "once");
+  assert.match(
+    await service.runTool(call, ...args, "auto", true),
+    /Moved remove-me\.txt to Trash/,
+  );
+  await assert.rejects(fs.stat(path.join(root, "remove-me.txt")));
+  assert.equal(
+    (await service.getAgentState()).permissions.some(
+      (permission) => permission.kind === "project.delete",
+    ),
+    false,
+  );
+});
+
 test("Ollama streams reasoning, answer progress, and native tool calls", async (t) => {
   const statuses = [];
   const { base, service } = await fixture({
@@ -176,7 +233,10 @@ test("Ollama streams reasoning, answer progress, and native tool calls", async (
     }),
   ];
   globalThis.fetch = async (_url, init) => {
-    assert.equal(JSON.parse(init.body).stream, true);
+    const request = JSON.parse(init.body);
+    assert.equal(request.stream, true);
+    assert.equal(request.think, true);
+    assert.equal(request.options.num_predict, 1024);
     const encoder = new TextEncoder();
     return new Response(
       new ReadableStream({
@@ -498,6 +558,32 @@ test("successful tool results tell small models to stop repeating actions", () =
   );
   assert.match(failure, /change the code or command/);
   assert.match(failure, /do not repeat the same failing call unchanged/);
+
+  const platformioFailure = toolResultForModel(
+    "platformio_run",
+    [
+      "Tool error: PlatformIO exited with code 1.",
+      "Compiling .pio/build/doit-esp32/src/main.cpp.o",
+      "src/main.cpp:42: note: argument 1 is declared here",
+      "src/main.cpp:42: error: invalid conversion from 'int' to 'const uint8_t*'",
+      "src/main.cpp:51: error: cannot convert 'uint8_t (*)[80]' to 'uint8_t*'",
+      "*** [.pio/build/doit-esp32/src/main.cpp.o] Error 1",
+    ].join("\n"),
+  );
+  assert.match(platformioFailure, /COMPILER RECOVERY/);
+  assert.match(platformioFailure, /oscode_compiler_diagnostics/);
+  assert.match(platformioFailure, /src\/main\.cpp:42: error: invalid conversion/);
+  assert.match(platformioFailure, /src\/main\.cpp:51: error: cannot convert/);
+  assert.match(platformioFailure, /every listed compiler error/);
+  assert.match(platformioFailure, /next write must differ/);
+  assert.match(platformioFailure, /multidimensional array lost its rank/);
+
+  const platformioSuccess = toolResultForModel(
+    "platformio_run",
+    JSON.stringify({ action: "build", output: "[SUCCESS]" }),
+  );
+  assert.match(platformioSuccess, /VERIFIED: PlatformIO build/);
+  assert.match(platformioSuccess, /do not repeat this successful call/);
 });
 
 test("PlatformIO installation uses a dedicated approval and private installer", async (t) => {
@@ -543,6 +629,56 @@ test("PlatformIO installation uses a dedicated approval and private installer", 
   );
   assert.equal(installs, 1);
   assert.equal(JSON.parse(result).installed, true);
+});
+
+test("PlatformIO initialization uses the validated board tool and records starter files", async (t) => {
+  const initializations = [];
+  const { base, service, chat } = await fixture({
+    serviceOptions: {
+      platformioState: async () => ({ installed: true, project: false }),
+      platformioBoards: async () => [
+        {
+          id: "esp32doit-devkit-v1",
+          name: "DOIT ESP32 DEVKIT V1",
+          platform: "espressif32",
+          frameworks: ["arduino"],
+        },
+      ],
+      platformioInitialize: async (board, framework) => {
+        initializations.push({ board, framework });
+        return { installed: true, project: true };
+      },
+    },
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await service.grantPermission(
+    "project.write",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  const changed = new Set();
+  const result = await service.runTool(
+    {
+      name: "platformio_initialize",
+      arguments: { board: "esp32doit-devkit-v1", framework: "arduino" },
+    },
+    "auto",
+    changed,
+    [],
+    true,
+    false,
+    chat.id,
+  );
+  assert.deepEqual(initializations, [
+    { board: "esp32doit-devkit-v1", framework: "arduino" },
+  ]);
+  assert.equal(JSON.parse(result).project, true);
+  assert.deepEqual([...changed].sort(), ["platformio.ini", "src/main.cpp"]);
+  assert.match(
+    toolResultForModel("platformio_initialize", result),
+    /starter source now exist/i,
+  );
 });
 
 test("identical successful file calls are reused without duplicate work-log cards", async (t) => {
@@ -610,6 +746,425 @@ test("identical successful file calls are reused without duplicate work-log card
     /platform = native/,
   );
   await assert.rejects(fs.stat(path.join(root, "platformio")));
+});
+
+test("repeated missing-path command failures expose current project paths and force recovery", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(root, "test_images"), { recursive: true });
+  await fs.writeFile(path.join(root, "test_images", "city.jpg"), "fixture");
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  const originalRunTool = service.runTool.bind(service);
+  let commandRuns = 0;
+  service.runTool = async (call, ...args) => {
+    if (call.name !== "run_command") return originalRunTool(call, ...args);
+    commandRuns += 1;
+    if (call.arguments.args?.includes("missing.jpg"))
+      return JSON.stringify({
+        exitCode: 1,
+        stdout: "",
+        stderr: "FileNotFoundError: no such file or directory: missing.jpg",
+      });
+    return JSON.stringify({ exitCode: 0, stdout: "recovered\n", stderr: "" });
+  };
+  let turn = 0;
+  const failedCall = {
+    name: "run_command",
+    arguments: { command: "node", args: ["missing.jpg"] },
+  };
+  service.remoteReply = async (_request, messages) => {
+    turn += 1;
+    if (turn === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-recovery",
+            name: "write_file",
+            arguments: {
+              path: "recover.mjs",
+              content: 'console.log("recovered")\n',
+            },
+          },
+        ],
+      };
+    if (turn === 2 || turn === 3)
+      return {
+        content: "",
+        toolCalls: [{ id: `missing-${turn}`, ...failedCall }],
+      };
+    if (turn === 4) {
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.role === "tool" &&
+            /Current project paths:[\s\S]*test_images\\?\/city\.jpg/.test(
+              String(message.content || ""),
+            ),
+        ),
+      );
+      assert.match(
+        String(messages.at(-1)?.content || ""),
+        /Failure-recovery correction:[\s\S]*Do not repeat that call again/,
+      );
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "verify-recovery",
+            name: "run_command",
+            arguments: { command: "node", args: ["recover.mjs"] },
+          },
+        ],
+      };
+    }
+    return { content: "Recovered with the exact project path.", toolCalls: [] };
+  };
+  const response = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content: "Create a script that processes the existing project image and verify it.",
+      },
+    ],
+  });
+  assert.equal(commandRuns, 2);
+  assert.match(response.content, /Recovered with the exact project path/);
+});
+
+test("identical write content is not counted as progress and prompts a real repair", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  const original = 'console.log("broken")\n';
+  await fs.writeFile(path.join(root, "app.mjs"), original);
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  let turn = 0;
+  service.remoteReply = async (_request, messages) => {
+    turn += 1;
+    if (turn === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "unchanged-write",
+            name: "write_file",
+            arguments: { path: "app.mjs", content: original },
+          },
+        ],
+      };
+    if (turn === 2) {
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.role === "tool" &&
+            /No change:[\s\S]*not implementation progress/.test(
+              String(message.content || ""),
+            ),
+        ),
+      );
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "corrected-write",
+            name: "write_file",
+            arguments: {
+              path: "app.mjs",
+              content: 'console.log("fixed")\n',
+            },
+          },
+        ],
+      };
+    }
+    if (turn === 3)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "verify-fixed-write",
+            name: "run_command",
+            arguments: { command: "node", args: ["app.mjs"] },
+          },
+        ],
+      };
+    return { content: "Repaired and verified the existing file.", toolCalls: [] };
+  };
+  const response = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content: "Repair the existing app.mjs file and verify it.",
+      },
+    ],
+  });
+  assert.match(response.content, /Repaired and verified/);
+  assert.equal(await fs.readFile(path.join(root, "app.mjs"), "utf8"), 'console.log("fixed")\n');
+  assert.equal(
+    response.actions.filter(
+      (action) => action.tool === "write_file" && action.status === "completed",
+    ).length,
+    1,
+  );
+});
+
+test("an unchanged firmware write is forced into compiler-guided PlatformIO recovery", async (t) => {
+  let builds = 0;
+  const { root, base, service, chat } = await fixture({
+    serviceOptions: {
+      platformioState: async () => ({
+        installed: true,
+        project: true,
+        environments: ["doit-esp32"],
+      }),
+      platformioRun: async (action, environment) => {
+        builds += 1;
+        assert.equal(action, "build");
+        assert.equal(environment, "doit-esp32");
+        if (builds === 1)
+          throw new Error(
+            "PlatformIO exited with code 1.\nsrc/main.cpp:8: error: invalid conversion",
+          );
+        return {
+          installed: true,
+          project: true,
+          action,
+          output: "[SUCCESS] firmware.bin",
+        };
+      },
+    },
+  });
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  const original = "void loop() { broken(); }\n";
+  await fs.writeFile(path.join(root, "src", "main.cpp"), original);
+  await fs.writeFile(
+    path.join(root, "platformio.ini"),
+    "[env:doit-esp32]\nplatform = espressif32\nboard = esp32doit-devkit-v1\nframework = arduino\n",
+  );
+  await service.grantPermission(
+    "platformio.run",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  let turn = 0;
+  service.remoteReply = async (_request, messages) => {
+    turn += 1;
+    if (turn === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "unchanged-firmware",
+            name: "write_file",
+            arguments: { path: "src/main.cpp", content: original },
+          },
+        ],
+      };
+    if (turn === 2) {
+      assert.ok(
+        messages.some(
+          (message) => {
+            const content = String(message.content || "");
+            return (
+              message.role === "tool" &&
+              /src\/main\.cpp:8: error/.test(content) &&
+              /COMPILER RECOVERY:/.test(content)
+            );
+          },
+        ),
+      );
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "corrected-firmware",
+            name: "write_file",
+            arguments: {
+              path: "src/main.cpp",
+              content: "void loop() { /* fixed */ }\n",
+            },
+          },
+        ],
+      };
+    }
+    if (turn === 3)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "verified-firmware",
+            name: "platformio_run",
+            arguments: { action: "build", environment: "doit-esp32" },
+          },
+        ],
+      };
+    return { content: "Firmware repaired and verified.", toolCalls: [] };
+  };
+  const response = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "ask",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content: "Repair this PlatformIO ESP32 firmware and build it.",
+      },
+    ],
+  });
+  assert.equal(builds, 2);
+  assert.match(response.content, /repaired and verified/i);
+  assert.equal(
+    await fs.readFile(path.join(root, "src", "main.cpp"), "utf8"),
+    "void loop() { /* fixed */ }\n",
+  );
+});
+
+test("a failed verification command can run again after the project is repaired", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  const originalRunTool = service.runTool.bind(service);
+  let commandRuns = 0;
+  service.runTool = async (call, ...args) => {
+    if (call.name !== "run_command") return originalRunTool(call, ...args);
+    commandRuns += 1;
+    const source = await fs.readFile(path.join(root, "repair.mjs"), "utf8");
+    return JSON.stringify({
+      command: "node repair.mjs",
+      exitCode: source.includes("fixed") ? 0 : 1,
+      stdout: source.includes("fixed") ? "fixed\n" : "",
+      stderr: source.includes("fixed") ? "" : "broken\n",
+    });
+  };
+  let turn = 0;
+  service.remoteReply = async () => {
+    turn += 1;
+    if (turn === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-broken",
+            name: "write_file",
+            arguments: {
+              path: "repair.mjs",
+              content: 'console.log("broken")\n',
+            },
+          },
+        ],
+      };
+    if (turn === 2 || turn === 4)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: `verify-${turn}`,
+            name: "run_command",
+            arguments: { command: "node", args: ["repair.mjs"] },
+          },
+        ],
+      };
+    if (turn === 3)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-fixed",
+            name: "write_file",
+            arguments: {
+              path: "repair.mjs",
+              content: 'console.log("fixed")\n',
+            },
+          },
+        ],
+      };
+    return { content: "Repaired and verified the script.", toolCalls: [] };
+  };
+  const response = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [{ role: "user", content: "Create and repair repair.mjs." }],
+  });
+  assert.equal(commandRuns, 2);
+  assert.match(response.content, /Repaired and verified/);
+  assert.match(
+    await fs.readFile(path.join(root, "repair.mjs"), "utf8"),
+    /fixed/,
+  );
 });
 
 test("AI write tool obeys the edit permission", async (t) => {
@@ -700,8 +1255,8 @@ test("the agent asks before running global development commands", async (t) => {
   );
   assert.equal(locator.exitCode, 0);
   assert.match(locator.stdout.toLowerCase(), /node/);
-  await assert.rejects(
-    service.runTool(
+  const reused = JSON.parse(
+    await service.runTool(
       {
         name: "run_command",
         arguments: { command: "node", args: ["--help"] },
@@ -716,11 +1271,315 @@ test("the agent asks before running global development commands", async (t) => {
       false,
       "ask",
     ),
+  );
+  assert.equal(reused.exitCode, 0);
+});
+
+test("chat terminal grants persist and Python commands use the selected project environment", async (t) => {
+  const { root, base, service, chat } = await fixture({
+    serviceOptions: {
+      getProjectPython: async () => process.execPath,
+    },
+  });
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "Project commands in this chat",
+  );
+  const mkdirResult = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: { command: "mkdir", args: ["-p", "images", "outputs"] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "ask",
+    ),
+  );
+  assert.equal(mkdirResult.exitCode, 0);
+  assert.equal((await fs.stat(path.join(root, "images"))).isDirectory(), true);
+  assert.equal((await fs.stat(path.join(root, "outputs"))).isDirectory(), true);
+
+  const pythonResult = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: {
+          command: "python3.12",
+          args: ["-e", 'console.log("PROJECT_ENV_OK")'],
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "ask",
+    ),
+  );
+  assert.equal(pythonResult.exitCode, 0);
+  assert.match(pythonResult.stdout, /PROJECT_ENV_OK/);
+});
+
+test("public image downloads request one scoped Web permission", async (t) => {
+  const { base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await assert.rejects(
+    service.runTool(
+      {
+        name: "web_download_image",
+        arguments: {
+          url: "https://ultralytics.com/images/bus.jpg",
+          path: "images/bus.jpg",
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "ask",
+    ),
     (error) => {
-      assert.equal(error.kind, "terminal.run");
-      assert.equal(error.detail, "node --help");
+      assert.equal(error.kind, "web.search");
       return true;
     },
+  );
+});
+
+test("agent web discovery is bounded and steers repeated searches into action", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await service.grantPermission("web.search", "conversation", chat.id, "tests");
+  await service.grantPermission("terminal.run", "always", chat.id, "tests");
+  const originalRunTool = service.runTool.bind(service);
+  const searches = [];
+  service.runTool = async (call, ...args) => {
+    if (call.name === "web_search") {
+      searches.push(call.arguments.query);
+      return JSON.stringify([
+        {
+          title: "Public sample gallery",
+          url: "https://example.com/public-gallery",
+        },
+      ]);
+    }
+    return originalRunTool(call, ...args);
+  };
+  let turn = 0;
+  service.remoteReply = async (_request, messages) => {
+    turn += 1;
+    if (turn <= 3)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: `search-${turn}`,
+            name: "web_search",
+            arguments: { query: `generic public sample ${turn}` },
+          },
+        ],
+      };
+    if (turn === 4) {
+      assert.match(
+        String(messages.at(-1)?.content || ""),
+        /Web progression correction:[\s\S]*Do not call web_search again/,
+      );
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-catalog",
+            name: "write_file",
+            arguments: {
+              path: "catalog.mjs",
+              content: 'console.log("catalog ready")\n',
+            },
+          },
+        ],
+      };
+    }
+    if (turn === 5)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "verify-catalog",
+            name: "run_command",
+            arguments: { command: "node", args: ["catalog.mjs"] },
+          },
+        ],
+      };
+    return { content: "Created and verified the catalog.", toolCalls: [] };
+  };
+  const result = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: true,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Research a public sample image, create catalog.mjs using the result, and verify it.",
+      },
+    ],
+  });
+  assert.deepEqual(searches, [
+    "generic public sample 1",
+    "generic public sample 2",
+  ]);
+  assert.match(result.content, /Created and verified/);
+  assert.match(
+    await fs.readFile(path.join(root, "catalog.mjs"), "utf8"),
+    /catalog ready/,
+  );
+});
+
+test("requested project images must use guarded downloads before commands run", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await service.grantPermission("web.search", "conversation", chat.id, "tests");
+  await service.grantPermission("terminal.run", "always", chat.id, "tests");
+  const originalRunTool = service.runTool.bind(service);
+  const downloaded = [];
+  let executedCommands = 0;
+  service.runTool = async (call, ...args) => {
+    if (call.name === "web_download_image") {
+      downloaded.push(call.arguments.path);
+      return `Saved downloaded image to ${call.arguments.path} (100 bytes) from ${call.arguments.url}`;
+    }
+    if (call.name === "run_command") executedCommands += 1;
+    return originalRunTool(call, ...args);
+  };
+  let turn = 0;
+  service.remoteReply = async (_request, messages) => {
+    turn += 1;
+    if (turn === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-image-script",
+            name: "write_file",
+            arguments: {
+              path: "image_demo.mjs",
+              content: 'console.log("images ready")\n',
+            },
+          },
+        ],
+      };
+    if (turn === 2 || turn === 4)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: `premature-run-${turn}`,
+            name: "run_command",
+            arguments: { command: "node", args: ["image_demo.mjs"] },
+          },
+        ],
+      };
+    if (turn === 3 || turn === 5) {
+      if (turn === 3)
+        assert.match(
+          String(messages.at(-1)?.content || ""),
+          /Asset-delivery correction:[\s\S]*0 of 2/,
+        );
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: `download-${turn}`,
+            name: "web_download_image",
+            arguments: {
+              url: `https://example.com/sample-${turn}.jpg`,
+              path: `images/sample-${turn}.jpg`,
+            },
+          },
+        ],
+      };
+    }
+    if (turn === 6)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "verified-run",
+            name: "run_command",
+            arguments: { command: "node", args: ["image_demo.mjs"] },
+          },
+        ],
+      };
+    return {
+      content: "Created the script, downloaded two images, and verified it.",
+      toolCalls: [],
+    };
+  };
+  const result = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: true,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Create image_demo.mjs, download two public images into an images folder inside this project, and run the script.",
+      },
+    ],
+  });
+  assert.deepEqual(downloaded, ["images/sample-3.jpg", "images/sample-5.jpg"]);
+  assert.equal(executedCommands, 1);
+  assert.match(result.content, /downloaded two images/);
+  assert.match(
+    await fs.readFile(path.join(root, "image_demo.mjs"), "utf8"),
+    /images ready/,
   );
 });
 
@@ -855,6 +1714,112 @@ test("dedicated Python package tool uses the app-managed environment installer",
   assert.match(result.interpreter, /app-data\/project-environment/);
 });
 
+test("already-installed Python packages do not request installation approval", async (t) => {
+  let installs = 0;
+  const { base, service, chat } = await fixture({
+    installPythonPackages: async () => {
+      installs += 1;
+      throw new Error("installer should not run");
+    },
+    serviceOptions: {
+      getProjectPython: async () => "/app-data/env/bin/python",
+    },
+  });
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  service.missingPythonPackages = async () => [];
+  const result = JSON.parse(
+    await service.runTool(
+      {
+        name: "python_install_packages",
+        arguments: { packages: ["ultralytics"] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "ask",
+    ),
+  );
+  assert.equal(result.alreadyInstalled, true);
+  assert.equal(result.interpreter, "/app-data/env/bin/python");
+  assert.equal(installs, 0);
+});
+
+test("Python shell install attempts are routed through the selected project environment", async (t) => {
+  const requested = [];
+  const { base, service, chat } = await fixture({
+    installPythonPackages: async (packages) => {
+      requested.push(packages);
+      return {
+        packages,
+        output: "installed with bundled uv",
+        interpreter: "/app-data/project-environment/bin/python",
+        createdEnvironment: false,
+      };
+    },
+  });
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  assert.deepEqual(
+    pythonPackageInstallSpecs("uv", [
+      "pip",
+      "install",
+      "ultralytics",
+      "opencv-python",
+      "numpy",
+    ]),
+    ["ultralytics", "opencv-python", "numpy"],
+  );
+  assert.deepEqual(
+    pythonPackageInstallSpecs("python3.12", [
+      "-m",
+      "pip",
+      "install",
+      "--upgrade",
+      "ruff",
+    ]),
+    ["ruff"],
+  );
+  await service.grantPermission(
+    "packages.install",
+    "always",
+    chat.id,
+    "Python packages",
+  );
+  const result = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: {
+          command: "uv",
+          args: ["pip", "install", "ultralytics", "opencv-python", "numpy"],
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+      false,
+      false,
+      "auto",
+    ),
+  );
+  assert.deepEqual(requested, [["ultralytics", "opencv-python", "numpy"]]);
+  assert.equal(result.routedThrough, "project-python-environment");
+  assert.match(result.interpreter, /app-data\/project-environment/);
+});
+
 test("background project commands wait for localhost before browser testing", async (t) => {
   const { base, service, chat } = await fixture();
   t.after(async () => {
@@ -924,6 +1889,36 @@ test("missing project files return exact nearby paths", async (t) => {
       chat.id,
     ),
     /src\/App\.jsx/,
+  );
+});
+
+test("empty projects direct the model to create a file instead of relisting", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await fs.rm(path.join(root, "src", "index.ts"));
+  const listing = await service.runTool(
+    { name: "list_files", arguments: {} },
+    "auto",
+    new Set(),
+    [],
+    true,
+    false,
+    chat.id,
+  );
+  assert.match(listing, /project is empty/i);
+  assert.match(listing, /call write_file now/i);
+  assert.match(listing, /do not call list_files/i);
+  await assert.rejects(
+    service.runTool(
+      { name: "read_file", arguments: { path: "platformio.ini" } },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+    /call write_file now/i,
   );
 });
 
@@ -1090,6 +2085,17 @@ test("permission approval resumes the pending tool without asking the model agai
         /export const value = 1/.test(message.content),
     ),
   );
+  assert.ok(
+    resumedMessages.some(
+      (message) =>
+        message.role === "assistant" &&
+        /<function=read_file>/.test(String(message.content || "")) &&
+        /<parameter=path>\nsrc\/index\.ts\n<\/parameter>/.test(
+          String(message.content || ""),
+        ),
+    ),
+    "permission continuation must preserve a Qwen-native tool call in history",
+  );
 });
 
 test("terminal approval preserves file-write evidence across the resumed model turn", async (t) => {
@@ -1216,6 +2222,15 @@ test("confirmed build requests start a goal, inspect the project, and correct pl
       assert.ok(
         messages.some(
           (message) =>
+            message.role === "assistant" &&
+            message.content ===
+              "<tool_call>\n<function=list_files>\n</function>\n</tool_call>",
+        ),
+        "automatic inspection must use the installed Qwen tool-call template",
+      );
+      assert.ok(
+        messages.some(
+          (message) =>
             message.role === "tool" &&
             message.tool_name === "list_files" &&
             /src\/index\.ts/.test(message.content),
@@ -1263,6 +2278,106 @@ test("confirmed build requests start a goal, inspect the project, and correct pl
   assert.match(
     await fs.readFile(path.join(root, "src", "App.jsx"), "utf8"),
     /Notes/,
+  );
+});
+
+test("code-only implementation replies are discarded and replaced by real file actions", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await service.grantPermission(
+    "terminal.run",
+    "always",
+    chat.id,
+    "node generated.mjs",
+  );
+  assert.equal(
+    requiresProjectMutation(
+      "Generate a JavaScript CLI utility in generated.mjs and test it",
+    ),
+    true,
+  );
+  let turn = 0;
+  service.remoteReply = async (_request, messages) => {
+    turn += 1;
+    if (turn === 1)
+      return {
+        content: '```js\nconsole.log("chat only must be rejected")\n```',
+        toolCalls: [],
+      };
+    assert.equal(
+      messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          /chat only must be rejected/.test(String(message.content || "")),
+      ),
+      false,
+      "rejected source code must not be reinforced as assistant history",
+    );
+    if (turn === 2) {
+      assert.equal(messages.at(-1)?.role, "user");
+      assert.match(
+        String(messages.at(-1)?.content || ""),
+        /oscode_runtime_correction[\s\S]*Call write_file now/,
+        "the correction should be the newest model context instead of rewriting the cached system prefix",
+      );
+    }
+    if (turn === 2)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-generated",
+            name: "write_file",
+            arguments: {
+              path: "generated.mjs",
+              content: 'console.log("saved and verified")\n',
+            },
+          },
+        ],
+      };
+    if (turn === 3)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "verify-generated",
+            name: "run_command",
+            arguments: { command: "node", args: ["generated.mjs"] },
+          },
+        ],
+      };
+    return { content: "Created and verified the utility.", toolCalls: [] };
+  };
+  const result = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Generate a JavaScript CLI utility in generated.mjs and test it",
+      },
+    ],
+  });
+  assert.deepEqual(result.changedFiles, ["generated.mjs"]);
+  assert.match(result.content, /Created and verified/);
+  assert.match(
+    await fs.readFile(path.join(root, "generated.mjs"), "utf8"),
+    /saved and verified/,
   );
 });
 
@@ -1319,7 +2434,7 @@ test("granted edit buttons correct stale model permission prose and continue to 
   assert.ok(
     modelMessages[1].some(
       (message) =>
-        message.role === "system" &&
+        message.role === "user" &&
         /visible capability buttons already granted/i.test(message.content),
     ),
   );

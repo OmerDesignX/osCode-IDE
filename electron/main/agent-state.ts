@@ -18,6 +18,7 @@ import type {
 const permissionKinds = new Set<AiPermissionKind>([
   "project.read",
   "project.write",
+  "project.delete",
   "terminal.run",
   "packages.install",
   "debug.run",

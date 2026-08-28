@@ -79,6 +79,10 @@ test("external edits, autosave, undo, redo, and encrypted save history stay visi
   assert.match(main, /watch\(root, \{ recursive: true \}/);
   assert.match(main, /project:file-changed/);
   assert.match(app, /onProjectFileChanged/);
+  assert.match(
+    app,
+    /tabsRef\.current\.some\(\(tab\) => tab\.path === change\.path\)/,
+  );
   assert.doesNotMatch(app, /Autosave on/);
   assert.match(app, /editor-command-divider/);
   assert.match(app, /Save history/);
@@ -110,7 +114,11 @@ test("permission continuation does not create a synthetic user message", () => {
     /Continue the previous request\. Permission was granted/,
   );
   assert.match(ai, /permissionContinuation\.current/);
-  assert.match(ai, /scope === "once" \? "conversation" : scope/);
+  assert.match(
+    ai,
+    /grantAiPermission\([\s\S]*permissionRequest\.kind,[\s\S]*scope,/,
+  );
+  assert.doesNotMatch(ai, /scope === "once" \? "conversation" : scope/);
 });
 
 test("AI defaults to Small, bundled context maximum, and custom 8k", () => {
@@ -224,12 +232,15 @@ test("app-managed and optional project Python environments are package-ready", (
   assert.match(app, /item\.scope === "app"/);
   assert.match(app, /className="uv-helpbook"/);
   assert.match(app, /Project libraries/);
+  assert.match(app, /Python environment unavailable/);
+  assert.match(app, /state\.error \|\| ""/);
   assert.match(app, /<b>UV help<\/b>/);
   assert.match(app, /uvHelpEntries/);
   assert.match(app, /installPythonPackage\([\s\S]*runtime,[\s\S]*packageSpec/);
   assert.match(terminal, /\.createTerminal\(id, interpreter\)/);
   assert.match(terminal, /\[id, interpreter\]/);
   assert.match(main, /if \(terminals\.get\(id\) !== terminal\) return/);
+  assert.match(main, /No Python environment was found for this project/);
   assert.match(
     main,
     /if \(terminals\.get\(id\) === terminal\) \{[\s\S]*terminalOwners\.delete\(id\)/,
@@ -308,7 +319,10 @@ test("AI chat uses a separate neutral canvas and quiet global scrollbars", () =>
 test("AI chat shows a steerable queue and can expand to the full window", () => {
   assert.match(ai, /className="ai-queue-stack"/);
   assert.match(ai, />Steer</);
+  assert.match(ai, />Edit</);
   assert.match(ai, />Delete</);
+  assert.match(ai, /Queued message returned to the composer/);
+  assert.match(ai, /composerInputRef\.current/);
   assert.match(ai, /prioritizeAiQueue\(item\.id\)/);
   assert.match(ai, /if \(busyRef\.current\) \{[\s\S]*scheduleQueueRun\(250\)/);
   assert.match(
@@ -447,6 +461,13 @@ test("PlatformIO agent flow has explicit setup guidance and install approval", (
   assert.match(aiMain, /platformio_install/);
   assert.match(aiMain, /PlatformIO is integrated into osCode/);
   assert.match(aiMain, /never create a file or folder named only platformio/);
+  assert.match(aiMain, /platformio_boards/);
+  assert.match(aiMain, /platformio_initialize/);
+  assert.match(aiMain, /platformio_monitor/);
+  assert.match(aiMain, /GOLDEN UNCERTAINTY RULE/);
+  assert.match(aiMain, /delete_path/);
+  assert.match(ai, /"project\.delete": "Move a project item to Trash"/);
+  assert.match(ai, /oneShotPermissionKinds[\s\S]*"project\.delete"/);
   assert.match(ai, /"platformio\.install": "Install PlatformIO Core"/);
   assert.match(ai, /oneShotPermissionKinds[\s\S]*"platformio\.install"/);
 });

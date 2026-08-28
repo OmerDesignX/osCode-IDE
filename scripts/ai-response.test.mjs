@@ -3,20 +3,157 @@ import test from "node:test";
 import {
   actionForTool,
   finishToolAction,
+  focusedAgentTools,
   parseLocalToolCall,
   parseLocalToolCalls,
   parseQwenContent,
+  qwenToolCallMarkup,
   qwenToolInstructions,
   normalizeRunCommand,
   validateGoalEvidence,
   automaticGoalText,
   isCasualGreeting,
   isDeferredActionReply,
+  isDestructiveProjectCommand,
   isStalePermissionReply,
   needsTextToolProtocol,
+  normalizeAgentWebSearchQuery,
   shouldCreateAutomaticGoal,
   workRequestForAgent,
 } from "../dist-electron/main/ai.js";
+
+test("destructive project commands are redirected to the Trash approval tool", () => {
+  assert.equal(isDestructiveProjectCommand("rm", ["-rf", "src"]), true);
+  assert.equal(isDestructiveProjectCommand("git", ["clean", "-fdx"]), true);
+  assert.equal(
+    isDestructiveProjectCommand("python3", [
+      "-c",
+      "import shutil; shutil.rmtree('src')",
+    ]),
+    true,
+  );
+  assert.equal(isDestructiveProjectCommand("pio", ["run"]), false);
+});
+import {
+  publicImageCandidates,
+  receiveOnlyServerRedirect,
+} from "../dist-electron/main/web-search.js";
+
+test("extracts safe representative images from public page metadata", () => {
+  assert.deepEqual(
+    publicImageCandidates(
+      '<meta property="og:image" content="/assets/sample.jpg"><img src="https://cdn.example.org/backup.png"><img src="data:image/png;base64,AAAA">',
+      "https://example.com/gallery/item",
+    ),
+    [
+      "https://example.com/assets/sample.jpg",
+      "https://cdn.example.org/backup.png",
+    ],
+  );
+});
+
+test("server redirects permit signed CDN queries without weakening HTTPS boundaries", () => {
+  const redirect = receiveOnlyServerRedirect(
+    `https://cdn.example.com/image.jpg?${"signature=abcdef".repeat(40)}`,
+  );
+  assert.equal(redirect.hostname, "cdn.example.com");
+  assert.throws(
+    () => receiveOnlyServerRedirect("http://cdn.example.com/image.jpg"),
+    /HTTPS redirects/,
+  );
+  assert.throws(
+    () =>
+      receiveOnlyServerRedirect("https://user:pass@cdn.example.com/image.jpg"),
+    /credential-free/,
+  );
+});
+
+test("web search hygiene removes internal agent vocabulary and keeps the public subject", () => {
+  assert.equal(
+    normalizeAgentWebSearchQuery(
+      "osCode YOLO sample images permission",
+      "Create a YOLO image detection script",
+    ),
+    "YOLO sample images",
+  );
+  assert.throws(
+    () =>
+      normalizeAgentWebSearchQuery(
+        "osCode web download permission",
+        "Create a YOLO image detection script",
+      ),
+    /no public task subject/,
+  );
+  assert.equal(
+    normalizeAgentWebSearchQuery(
+      "current Electron security guidance",
+      "Research current Electron security guidance",
+    ),
+    "current Electron security guidance",
+  );
+});
+
+test("focuses small-model tools without removing capabilities from relevant turns", () => {
+  const tools = [
+    "write_file",
+    "python_install_packages",
+    "web_download_image",
+    "browser_open",
+    "computer_inspect",
+    "platformio_run",
+    "mcp_list_tools",
+    "set_goal",
+    "complete_goal",
+    "schedule_task",
+  ].map((name) => ({ type: "function", function: { name } }));
+  const names = (request, state = {}) =>
+    focusedAgentTools(tools, request, {
+      goal: true,
+      browser: false,
+      computer: false,
+      ...state,
+    }).map((tool) => tool.function.name);
+  assert.deepEqual(names("Create a YOLO Python script and download images"), [
+    "write_file",
+    "python_install_packages",
+    "web_download_image",
+    "complete_goal",
+  ]);
+  assert.ok(
+    names("Build ESP32 firmware with PlatformIO").includes("platformio_run"),
+  );
+  assert.ok(names("Inspect another desktop app").includes("computer_inspect"));
+  assert.ok(
+    names("Test the localhost preview in a browser").includes("browser_open"),
+  );
+  assert.ok(names("Use the configured MCP server").includes("mcp_list_tools"));
+});
+
+test("records synthetic tool history in the installed Qwen template format", () => {
+  assert.equal(
+    qwenToolCallMarkup("list_files", {}),
+    "<tool_call>\n<function=list_files>\n</function>\n</tool_call>",
+  );
+  assert.equal(
+    qwenToolCallMarkup("write_file", {
+      path: "src/index.js",
+      content: "export const revision = 2;\n",
+    }),
+    [
+      "<tool_call>",
+      "<function=write_file>",
+      "<parameter=path>",
+      "src/index.js",
+      "</parameter>",
+      "<parameter=content>",
+      "export const revision = 2;",
+      "",
+      "</parameter>",
+      "</function>",
+      "</tool_call>",
+    ].join("\n"),
+  );
+});
 
 test("agent action records retain public sources without recording typed text", () => {
   const search = actionForTool(
@@ -68,6 +205,18 @@ test("agent action records retain public sources without recording typed text", 
   );
   assert.equal(page.url, "https://example.com/docs");
   assert.doesNotMatch(JSON.stringify(page), /secret|private|person/);
+});
+
+test("malformed command actions remain visible so the model can repair them", () => {
+  assert.doesNotThrow(() =>
+    actionForTool(
+      {
+        name: "run_command",
+        arguments: { command: "python script.py", args: [] },
+      },
+      "chat-1",
+    ),
+  );
 });
 
 test("separates Qwen thinking from the formatted final answer", () => {
@@ -311,6 +460,8 @@ test("renders the compact Qwen tool protocol expected by the local model", () =>
   ]);
   assert.match(prompt, /<tools>/);
   assert.match(prompt, /<function=tool_name>/);
+  assert.match(prompt, /"type":"function"/);
+  assert.match(prompt, /IMPLEMENTATION WORKFLOW/);
   assert.match(prompt, /write_file/);
 });
 

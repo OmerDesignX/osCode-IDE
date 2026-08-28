@@ -14,6 +14,7 @@ const emptyState: PlatformioState = {
   environments: [],
   autoUpdate: false,
   running: false,
+  devices: [],
   telemetry: false,
 };
 
@@ -46,15 +47,7 @@ export function PlatformioPanel({
   const [monitorInput, setMonitorInput] = useState("");
   const [busy, setBusy] = useState("");
   const [boards, setBoards] = useState<PlatformioBoard[]>([]);
-  const boardMatches = board.trim()
-    ? boards
-        .filter((item) =>
-          `${item.id} ${item.name} ${item.platform}`
-            .toLowerCase()
-            .includes(board.toLowerCase()),
-        )
-        .slice(0, 30)
-    : boards.slice(0, 30);
+  const boardMatches = boards.slice(0, 60);
 
   const refresh = async () => {
     try {
@@ -82,6 +75,17 @@ export function PlatformioPanel({
       removeState();
     };
   }, [projectRoot]);
+
+  useEffect(() => {
+    if (!state.installed || state.project) return;
+    const timer = setTimeout(() => {
+      void window.oscode
+        .platformioBoards(board.trim())
+        .then(setBoards)
+        .catch(() => undefined);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [board, state.installed, state.project]);
 
   const perform = async (
     label: string,
@@ -220,6 +224,11 @@ export function PlatformioPanel({
                     ))}
                   </div>
                 )}
+                {board.trim() && boardMatches.length === 0 && (
+                  <small className="platformio-board-empty">
+                    No matching board. Try a model, vendor, or board ID.
+                  </small>
+                )}
               </label>
               <label>
                 Framework
@@ -261,6 +270,22 @@ export function PlatformioPanel({
                   <FeatherIcon icon="refresh-cw" size="16" />
                 </button>
               </div>
+              {state.devices.length > 0 && (
+                <div
+                  className="platformio-devices"
+                  aria-label="Connected devices"
+                >
+                  <span>CONNECTED</span>
+                  {state.devices.map((device) => (
+                    <div key={device.port}>
+                      <b>{device.port}</b>
+                      <small>
+                        {device.description || device.hwid || "Serial device"}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              )}
               <label>
                 Environment
                 <select

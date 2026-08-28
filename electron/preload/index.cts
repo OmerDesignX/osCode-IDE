@@ -49,7 +49,8 @@ contextBridge.exposeInMainWorld("oscode", {
   setZoomFactor: (factor: number) =>
     webFrame.setZoomFactor(Math.max(1, Math.min(1.7, Number(factor) || 1))),
   platformioState: () => ipcRenderer.invoke("platformio:state"),
-  platformioBoards: () => ipcRenderer.invoke("platformio:boards"),
+  platformioBoards: (query?: string) =>
+    ipcRenderer.invoke("platformio:boards", query),
   installPlatformio: () => ipcRenderer.invoke("platformio:install"),
   updatePlatformio: () => ipcRenderer.invoke("platformio:update"),
   setPlatformioAutoUpdate: (enabled: boolean) =>

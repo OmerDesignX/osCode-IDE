@@ -17,7 +17,13 @@ export type PlatformioState = {
   environments: string[];
   autoUpdate: boolean;
   running: boolean;
+  devices: PlatformioDevice[];
   telemetry: false;
+};
+export type PlatformioDevice = {
+  port: string;
+  description: string;
+  hwid: string;
 };
 export type PlatformioBoard = {
   id: string;
@@ -28,6 +34,110 @@ export type PlatformioBoard = {
 
 type PlatformioConfig = { autoUpdate: boolean; lastUpdateCheck: number };
 type PlatformioAction = "build" | "upload" | "clean" | "test" | "monitor";
+
+const compactSearch = (value: string) =>
+  value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+function damerauDistance(left: string, right: string) {
+  const rows = Array.from({ length: left.length + 1 }, () =>
+    Array(right.length + 1).fill(0),
+  );
+  for (let index = 0; index <= left.length; index += 1) rows[index][0] = index;
+  for (let index = 0; index <= right.length; index += 1) rows[0][index] = index;
+  for (let row = 1; row <= left.length; row += 1) {
+    for (let column = 1; column <= right.length; column += 1) {
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      rows[row][column] = Math.min(
+        rows[row - 1][column] + 1,
+        rows[row][column - 1] + 1,
+        rows[row - 1][column - 1] + cost,
+      );
+      if (
+        row > 1 &&
+        column > 1 &&
+        left[row - 1] === right[column - 2] &&
+        left[row - 2] === right[column - 1]
+      )
+        rows[row][column] = Math.min(
+          rows[row][column],
+          rows[row - 2][column - 2] + cost,
+        );
+    }
+  }
+  return rows[left.length][right.length];
+}
+
+function fuzzyContains(value: string, query: string) {
+  if (value.includes(query)) return true;
+  if (query.length < 4 || value.length < query.length) return false;
+  for (let index = 0; index <= value.length - query.length; index += 1) {
+    if (damerauDistance(value.slice(index, index + query.length), query) <= 1)
+      return true;
+  }
+  return false;
+}
+
+export function rankPlatformioBoards(
+  boards: PlatformioBoard[],
+  rawQuery: string,
+) {
+  const query = compactSearch(rawQuery);
+  if (!query) return boards.slice();
+  const popular = new Map([
+    ["esp32doit-devkit-v1", 0],
+    ["esp32dev", 1],
+    ["esp32cam", 2],
+  ]);
+  return boards
+    .map((board) => {
+      const id = compactSearch(board.id);
+      const name = compactSearch(board.name);
+      const platform = compactSearch(board.platform);
+      const exact = [id, name, platform].findIndex((value) =>
+        value.includes(query),
+      );
+      const fuzzy = [id, name, platform].some((value) =>
+        fuzzyContains(value, query),
+      );
+      if (exact < 0 && !fuzzy) return null;
+      return {
+        board,
+        score:
+          (exact >= 0 ? exact : 4) * 100 +
+          (id.startsWith(query) ? -25 : 0) +
+          (popular.get(board.id) ?? 20),
+      };
+    })
+    .filter(
+      (entry): entry is { board: PlatformioBoard; score: number } =>
+        entry !== null,
+    )
+    .sort(
+      (left, right) =>
+        left.score - right.score ||
+        left.board.name.localeCompare(right.board.name),
+    )
+    .map((entry) => entry.board);
+}
+
+export function preferredPlatformioSerialDevice(devices: PlatformioDevice[]) {
+  return devices
+    .map((device, index) => {
+      const text = `${device.port} ${device.description} ${device.hwid}`;
+      const physicalUsb =
+        /(?:usb|cp210|uart|ftdi|ch340|wch|vid:pid|ttyacm|ttyusb|com\d+)/i.test(
+          text,
+        );
+      const pseudo = /(?:bluetooth|debug-console|wlan-debug|\bn\/a\b)/i.test(
+        text,
+      );
+      return {
+        device,
+        score: (physicalUsb ? -100 : 0) + (pseudo ? 100 : 0) + index,
+      };
+    })
+    .sort((left, right) => left.score - right.score)[0]?.device;
+}
 
 const validEnvironment = (value: string) =>
   !value || /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(value);
@@ -57,6 +167,12 @@ export class PlatformioService {
     return process.platform === "win32"
       ? path.join(this.penvRoot, "Scripts", "pio.exe")
       : path.join(this.penvRoot, "bin", "pio");
+  }
+
+  private get penvPython() {
+    return process.platform === "win32"
+      ? path.join(this.penvRoot, "Scripts", "python.exe")
+      : path.join(this.penvRoot, "bin", "python");
   }
 
   private get configPath() {
@@ -160,6 +276,7 @@ export class PlatformioService {
       environments: await this.environments(projectRoot),
       autoUpdate: config.autoUpdate,
       running: Boolean(this.child),
+      devices: installed && !this.child ? await this.devices() : [],
       telemetry: false,
     };
   }
@@ -209,13 +326,41 @@ export class PlatformioService {
     return true;
   }
 
-  async boards(): Promise<PlatformioBoard[]> {
+  async boards(query = ""): Promise<PlatformioBoard[]> {
     if (await this.exists(this.pioExecutable)) {
       const cached = await this.readBoards();
-      if (cached.length) return cached;
-      return this.refreshBoards();
+      const boards = cached.length ? cached : await this.refreshBoards();
+      return rankPlatformioBoards(boards, query);
     }
     return [];
+  }
+
+  async devices(): Promise<PlatformioDevice[]> {
+    if (!(await this.exists(this.pioExecutable))) return [];
+    try {
+      const result = await exec(
+        this.pioExecutable,
+        ["device", "list", "--json-output"],
+        {
+          env: this.environment(),
+          windowsHide: true,
+          timeout: 15_000,
+          maxBuffer: 2 * 1024 * 1024,
+        },
+      );
+      const raw = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
+      return raw
+        .map((item) => ({
+          port: typeof item.port === "string" ? item.port : "",
+          description:
+            typeof item.description === "string" ? item.description : "",
+          hwid: typeof item.hwid === "string" ? item.hwid : "",
+        }))
+        .filter((item) => item.port)
+        .slice(0, 32);
+    } catch {
+      return [];
+    }
   }
 
   private async readBoards(): Promise<PlatformioBoard[]> {
@@ -283,10 +428,118 @@ export class PlatformioService {
       throw new Error("Enter a valid PlatformIO board ID");
     if (!validFramework(framework))
       throw new Error("Enter a valid framework name");
-    const args = ["project", "init", "--board", board];
-    if (framework) args.push("--project-option", `framework=${framework}`);
-    await this.runPio(args, projectRoot);
+    const catalogue = await this.boards(board);
+    const selected = catalogue.find((item) => item.id === board);
+    if (!selected) throw new Error("Choose a board from the PlatformIO list");
+    if (framework && !selected.frameworks.includes(framework))
+      throw new Error(`${selected.name} does not support ${framework}`);
+    const iniPath = path.join(projectRoot, "platformio.ini");
+    if (await this.exists(iniPath))
+      throw new Error("This folder already has a PlatformIO project");
+    await Promise.all(
+      ["include", "lib", "src", "test"].map((name) =>
+        fs.mkdir(path.join(projectRoot, name), { recursive: true }),
+      ),
+    );
+    const environmentName = board.replace(/[^A-Za-z0-9_.-]/g, "-");
+    await fs.writeFile(
+      iniPath,
+      [
+        `; ${selected.name}`,
+        `[env:${environmentName}]`,
+        `platform = ${selected.platform}`,
+        `board = ${selected.id}`,
+        ...(framework ? [`framework = ${framework}`] : []),
+        "monitor_speed = 115200",
+        "",
+      ].join("\n"),
+      { encoding: "utf8", flag: "wx" },
+    );
+    const source =
+      framework === "espidf"
+        ? '#include <stdio.h>\n\nvoid app_main(void) {\n  printf("osCode PlatformIO project ready\\n");\n}\n'
+        : "#include <Arduino.h>\n\nvoid setup() {\n  Serial.begin(115200);\n}\n\nvoid loop() {\n  delay(1000);\n}\n";
+    const sourceName = framework === "espidf" ? "main.c" : "main.cpp";
+    await fs
+      .writeFile(path.join(projectRoot, "src", sourceName), source, {
+        encoding: "utf8",
+        flag: "wx",
+      })
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+    this.output(
+      `Created PlatformIO project for ${selected.name} (${selected.id}).\n`,
+    );
     return this.state(projectRoot);
+  }
+
+  async monitorSnapshot(
+    projectRoot: string,
+    environment: string,
+    durationMs = 5_000,
+  ) {
+    if (!projectRoot) throw new Error("Open a project first");
+    if (!(await this.exists(path.join(projectRoot, "platformio.ini"))))
+      throw new Error("This folder is not a PlatformIO project");
+    if (!validEnvironment(environment))
+      throw new Error("Invalid PlatformIO environment");
+    const duration = Math.max(1_000, Math.min(15_000, durationMs));
+    const ini = await fs.readFile(
+      path.join(projectRoot, "platformio.ini"),
+      "utf8",
+    );
+    const escapedEnvironment = environment.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&",
+    );
+    const section = environment
+      ? ini.match(
+          new RegExp(
+            `^\\s*\\[env:${escapedEnvironment}\\]\\s*$([\\s\\S]*?)(?=^\\s*\\[|$)`,
+            "im",
+          ),
+        )?.[1] || ""
+      : ini;
+    const setting = (name: string) =>
+      section
+        .match(new RegExp(`^\\s*${name}\\s*=\\s*([^;#\\r\\n]+)`, "im"))?.[1]
+        .trim() ||
+      ini
+        .match(new RegExp(`^\\s*${name}\\s*=\\s*([^;#\\r\\n]+)`, "im"))?.[1]
+        .trim() ||
+      "";
+    const connected = await this.devices();
+    const port =
+      setting("monitor_port") ||
+      setting("upload_port") ||
+      preferredPlatformioSerialDevice(connected)?.port;
+    if (!port) throw new Error("No connected serial device was found");
+    const configuredBaud = Number(setting("monitor_speed"));
+    const boardHint = `${environment} ${setting("board")} ${setting("platform")}`;
+    const baud =
+      Number.isInteger(configuredBaud) && configuredBaud > 0
+        ? configuredBaud
+        : /esp32/i.test(boardHint)
+          ? 115200
+          : 9600;
+    const reader = `import serial,sys,time
+port=sys.argv[1]
+baud=int(sys.argv[2])
+duration=float(sys.argv[3])
+with serial.Serial(port,baud,timeout=0.2) as device:
+ end=time.monotonic()+duration
+ while time.monotonic()<end:
+  data=device.read(max(1,device.in_waiting))
+  if data:
+   sys.stdout.buffer.write(data)
+   sys.stdout.buffer.flush()`;
+    const output = await this.stream(
+      this.penvPython,
+      ["-c", reader, port, String(baud), String(duration / 1000)],
+      projectRoot,
+    );
+    return { durationMs: duration, output, devices: await this.devices() };
   }
 
   async run(
@@ -308,8 +561,12 @@ export class PlatformioService {
     if (environment) args.push("--environment", environment);
     if (action === "upload") args.push("--target", "upload");
     if (action === "clean") args.push("--target", "clean");
-    await this.runPio(args, projectRoot);
-    return this.state(projectRoot);
+    const output = await this.runPio(args, projectRoot);
+    return {
+      ...(await this.state(projectRoot)),
+      action,
+      output,
+    };
   }
 
   stop() {
@@ -337,12 +594,12 @@ export class PlatformioService {
     if (!(await this.exists(this.pioExecutable)))
       throw new Error("Install PlatformIO Core first");
     this.output(`\n> pio ${args.join(" ")}\n`);
-    await this.stream(this.pioExecutable, args, cwd);
+    return this.stream(this.pioExecutable, args, cwd);
   }
 
   private stream(command: string, args: string[], cwd: string) {
     if (this.child) throw new Error("A PlatformIO task is already running");
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<string>((resolve, reject) => {
       const child = spawn(command, args, {
         cwd,
         env: this.environment(),
@@ -350,17 +607,88 @@ export class PlatformioService {
         stdio: "pipe",
       });
       this.child = child;
-      child.stdout.on("data", (data) => this.output(String(data)));
-      child.stderr.on("data", (data) => this.output(String(data)));
+      let captured = "";
+      const append = (data: unknown) => {
+        const text = String(data);
+        captured = `${captured}${text}`.slice(-120_000);
+        this.output(text);
+      };
+      child.stdout.on("data", append);
+      child.stderr.on("data", append);
       child.once("error", (error) => {
+        if (this.child === child) this.child = null;
+        const diagnostic = captured.trim();
+        reject(
+          new Error(
+            diagnostic ? `${error.message}\n${diagnostic}` : error.message,
+          ),
+        );
+      });
+      child.once("exit", (code, signal) => {
+        if (this.child === child) this.child = null;
+        const diagnostic = captured.trim();
+        if (code === 0 || signal) resolve(diagnostic);
+        else
+          reject(
+            new Error(
+              [`PlatformIO exited with code ${code ?? "unknown"}.`, diagnostic]
+                .filter(Boolean)
+                .join("\n"),
+            ),
+          );
+      });
+    });
+  }
+
+  private captureForDuration(
+    command: string,
+    args: string[],
+    cwd: string,
+    durationMs: number,
+  ) {
+    if (this.child) throw new Error("A PlatformIO task is already running");
+    return new Promise<string>((resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd,
+        env: this.environment(),
+        windowsHide: true,
+        stdio: "pipe",
+      });
+      this.child = child;
+      let captured = "";
+      let timedOut = false;
+      const append = (data: unknown) => {
+        const text = String(data);
+        captured = `${captured}${text}`.slice(-120_000);
+        this.output(text);
+      };
+      child.stdout.on("data", append);
+      child.stderr.on("data", append);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGINT");
+        setTimeout(() => child.kill(), 1_000).unref();
+      }, durationMs);
+      child.once("error", (error) => {
+        clearTimeout(timer);
         if (this.child === child) this.child = null;
         reject(error);
       });
       child.once("exit", (code, signal) => {
+        clearTimeout(timer);
         if (this.child === child) this.child = null;
-        if (code === 0 || signal) resolve();
+        if (timedOut || code === 0 || signal) resolve(captured.trim());
         else
-          reject(new Error(`PlatformIO exited with code ${code ?? "unknown"}`));
+          reject(
+            new Error(
+              [
+                `PlatformIO exited with code ${code ?? "unknown"}.`,
+                captured.trim(),
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            ),
+          );
       });
     });
   }

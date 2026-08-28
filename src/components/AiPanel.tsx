@@ -66,6 +66,7 @@ const labels: Record<AiEngine, string> = {
 const permissionLabels: Record<AiPermissionKind, string> = {
   "project.read": "Read project files",
   "project.write": "Edit project files",
+  "project.delete": "Move a project item to Trash",
   "terminal.run": "Run terminal commands",
   "packages.install": "Install packages",
   "debug.run": "Run and debug code",
@@ -79,6 +80,7 @@ const permissionLabels: Record<AiPermissionKind, string> = {
   "platformio.run": "Control PlatformIO",
 };
 const oneShotPermissionKinds = new Set<AiPermissionKind>([
+  "project.delete",
   "network.request",
   "computer.external",
   "mcp.call",
@@ -346,6 +348,7 @@ export function AiPanel({
   const followConversationRef = useRef(true);
   const previousBusyRef = useRef(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const queueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const steeringRef = useRef(false);
   const stoppingRef = useRef(false);
@@ -1391,6 +1394,18 @@ export function AiPanel({
     setStatus("Queued message removed");
   };
 
+  const editQueued = async (item: AiQueueItem) => {
+    await window.oscode.removeAiQueue(item.id);
+    setInput(item.prompt);
+    await refreshAgentState();
+    setStatus("Queued message returned to the composer");
+    requestAnimationFrame(() => {
+      const composer = composerInputRef.current;
+      composer?.focus();
+      composer?.setSelectionRange(item.prompt.length, item.prompt.length);
+    });
+  };
+
   const handleCommand = async (text: string) => {
     if (text === "/new") {
       const chat = await window.oscode.createAiChat();
@@ -1497,7 +1512,7 @@ export function AiPanel({
     if (oneShotPermissionKinds.has(permissionRequest.kind)) scope = "once";
     const grant = await window.oscode.grantAiPermission(
       permissionRequest.kind,
-      scope === "once" ? "conversation" : scope,
+      scope,
       chatId,
       permissionRequest.detail,
     );
@@ -1511,6 +1526,7 @@ export function AiPanel({
     if (
       permissionRequest.kind === "project.read" ||
       permissionRequest.kind === "project.write" ||
+      permissionRequest.kind === "project.delete" ||
       permissionRequest.kind === "platformio.install" ||
       permissionRequest.kind === "platformio.run"
     )
@@ -2167,14 +2183,25 @@ export function AiPanel({
                                       : "added by you"}
                                   </span>
                                 </div>
-                                <IconButton
-                                  icon="x"
-                                  label="Remove queued work"
-                                  onClick={async () => {
-                                    await window.oscode.removeAiQueue(item.id);
-                                    await refreshAgentState();
-                                  }}
-                                />
+                                <div className="ai-row-actions">
+                                  {item.status === "queued" && (
+                                    <IconButton
+                                      icon="edit-2"
+                                      label="Edit queued work"
+                                      onClick={() => void editQueued(item)}
+                                    />
+                                  )}
+                                  <IconButton
+                                    icon="x"
+                                    label="Remove queued work"
+                                    onClick={async () => {
+                                      await window.oscode.removeAiQueue(
+                                        item.id,
+                                      );
+                                      await refreshAgentState();
+                                    }}
+                                  />
+                                </div>
                               </div>
                             ))
                         )}
@@ -2993,6 +3020,15 @@ export function AiPanel({
                 <p title={item.prompt}>{item.prompt}</p>
                 <button
                   type="button"
+                  className="ai-queue-edit"
+                  title="Edit this queued message in the composer"
+                  onClick={() => void editQueued(item)}
+                >
+                  <FeatherIcon icon="edit-2" size="15" />
+                  <span>Edit</span>
+                </button>
+                <button
+                  type="button"
                   className="ai-queue-steer"
                   title="Stop the current reply and run this message next"
                   onClick={() => void steerQueued(item)}
@@ -3224,6 +3260,7 @@ export function AiPanel({
           <FeatherIcon icon="paperclip" size="17" />
         </button>
         <textarea
+          ref={composerInputRef}
           aria-label="Message local AI"
           placeholder={
             projectName

@@ -95,6 +95,7 @@ export type OllamaCliStatus = {
 export type AiPermissionKind =
   | "project.read"
   | "project.write"
+  | "project.delete"
   | "terminal.run"
   | "packages.install"
   | "debug.run"
@@ -291,6 +292,7 @@ export type PythonPackageState = {
   environment: string;
   location: "" | "app" | "project";
   packages: PythonPackage[];
+  error?: string;
 };
 export type PlatformioState = {
   installed: boolean;
@@ -299,7 +301,13 @@ export type PlatformioState = {
   environments: string[];
   autoUpdate: boolean;
   running: boolean;
+  devices: PlatformioDevice[];
   telemetry: false;
+};
+export type PlatformioDevice = {
+  port: string;
+  description: string;
+  hwid: string;
 };
 export type PlatformioAction =
   "build" | "upload" | "clean" | "test" | "monitor";
@@ -384,7 +392,7 @@ declare global {
       onAppUpdateStatus(cb: (status: AppUpdateStatus) => void): () => void;
       setZoomFactor(factor: number): void;
       platformioState(): Promise<PlatformioState>;
-      platformioBoards(): Promise<PlatformioBoard[]>;
+      platformioBoards(query?: string): Promise<PlatformioBoard[]>;
       installPlatformio(): Promise<PlatformioState>;
       updatePlatformio(): Promise<PlatformioState>;
       setPlatformioAutoUpdate(enabled: boolean): Promise<PlatformioState>;

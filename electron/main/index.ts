@@ -960,9 +960,9 @@ async function uvExecutable() {
   };
   return (await find(bundledToolPath("uv"))) || "uv";
 }
-async function appProjectEnvironmentRoot() {
-  if (!projectRoot) throw new Error("Open a project first");
-  const root = await fs.realpath(projectRoot);
+async function appProjectEnvironmentRoot(project = projectRoot) {
+  if (!project) throw new Error("Open a project first");
+  const root = await fs.realpath(project);
   const id = crypto
     .createHash("sha256")
     .update(root)
@@ -970,14 +970,17 @@ async function appProjectEnvironmentRoot() {
     .slice(0, 32);
   return path.join(managedPythonRoot(), "project-environments", id);
 }
-async function appProjectEnvironmentInterpreter() {
+async function appProjectEnvironmentInterpreter(project = projectRoot) {
   return path.join(
-    await appProjectEnvironmentRoot(),
+    await appProjectEnvironmentRoot(project),
     process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
   );
 }
-async function ownedProjectPythonEnvironment(interpreter: string) {
-  if (!projectRoot) throw new Error("Open a project first");
+async function ownedProjectPythonEnvironment(
+  interpreter: string,
+  project = projectRoot,
+) {
+  if (!project) throw new Error("Open a project first");
   const inspected = await inspectPython(interpreter);
   const binaryDirectory = path.dirname(inspected.path);
   if (
@@ -985,9 +988,9 @@ async function ownedProjectPythonEnvironment(interpreter: string) {
   )
     throw new Error("Select a project environment before installing packages");
   const [root, environment, appEnvironment] = await Promise.all([
-    fs.realpath(projectRoot),
+    fs.realpath(project),
     fs.realpath(path.dirname(binaryDirectory)),
-    appProjectEnvironmentRoot(),
+    appProjectEnvironmentRoot(project),
   ]);
   const relative = path.relative(root, environment);
   const insideProject =
@@ -1004,9 +1007,9 @@ async function ownedProjectPythonEnvironment(interpreter: string) {
     location: insideProject ? ("project" as const) : ("app" as const),
   };
 }
-async function projectEnvironmentInterpreters() {
-  if (!projectRoot) return [];
-  const root = await fs.realpath(projectRoot);
+async function projectEnvironmentInterpreters(project = projectRoot) {
+  if (!project) return [];
+  const root = await fs.realpath(project);
   const executable =
     process.platform === "win32" ? "Scripts/python.exe" : "bin/python";
   const candidates = [
@@ -1024,30 +1027,36 @@ async function projectEnvironmentInterpreters() {
     candidates.push(path.join(namedRoot, entry.name, executable));
   return candidates;
 }
-async function existingProjectPythonEnvironment(interpreter = "") {
+async function existingProjectPythonEnvironment(
+  interpreter = "",
+  project = projectRoot,
+) {
   if (interpreter) {
     try {
-      return await ownedProjectPythonEnvironment(interpreter);
+      return await ownedProjectPythonEnvironment(interpreter, project);
     } catch {
       // A bundled or system interpreter is a valid base, but not the place
       // where a project's packages should be installed.
     }
   }
-  const candidates = [await appProjectEnvironmentInterpreter()];
+  const candidates = [await appProjectEnvironmentInterpreter(project)];
   if (!interpreter)
-    candidates.push(...(await projectEnvironmentInterpreters()));
+    candidates.push(...(await projectEnvironmentInterpreters(project)));
   for (const candidate of candidates) {
     try {
-      return await ownedProjectPythonEnvironment(candidate);
+      return await ownedProjectPythonEnvironment(candidate, project);
     } catch {
       /* continue through common and named project environments */
     }
   }
   return null;
 }
-async function rememberProjectPython(interpreter: string) {
-  if (!projectRoot) return;
-  const root = await fs.realpath(projectRoot);
+async function rememberProjectPython(
+  interpreter: string,
+  project = projectRoot,
+) {
+  if (!project) return;
+  const root = await fs.realpath(project);
   await savePythonSelections(
     setPythonSelection(await readPythonSelections(), root, interpreter),
   );
@@ -1055,15 +1064,16 @@ async function rememberProjectPython(interpreter: string) {
 async function createProjectPythonEnvironment(
   baseInterpreter: string,
   destination: string,
+  project = projectRoot,
 ) {
-  if (!projectRoot) throw new Error("Open a project first");
+  if (!project) throw new Error("Open a project first");
   const base = await inspectPython(baseInterpreter);
   await fs.mkdir(uvCacheRoot(), { recursive: true });
   await exec(
     await uvExecutable(),
     ["venv", "--python", base.path, "--seed", destination],
     {
-      cwd: projectRoot,
+      cwd: project,
       timeout: 10 * 60_000,
       env: uvEnvironment({ UV_PYTHON_DOWNLOADS: "never" }),
     },
@@ -1072,18 +1082,21 @@ async function createProjectPythonEnvironment(
     destination,
     process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
   );
-  return ownedProjectPythonEnvironment(python);
+  return ownedProjectPythonEnvironment(python, project);
 }
-async function ensureProjectPythonEnvironment(interpreter: string) {
-  const existing = await existingProjectPythonEnvironment(interpreter);
+async function ensureProjectPythonEnvironment(
+  interpreter: string,
+  project = projectRoot,
+) {
+  const existing = await existingProjectPythonEnvironment(interpreter, project);
   if (existing) {
-    await rememberProjectPython(existing.inspected.path);
+    await rememberProjectPython(existing.inspected.path, project);
     return { ...existing, created: false };
   }
-  if (!projectRoot) throw new Error("Open a project first");
+  if (!project) throw new Error("Open a project first");
   if (!interpreter)
     throw new Error("Select an installed or bundled Python interpreter first");
-  const destination = await appProjectEnvironmentRoot();
+  const destination = await appProjectEnvironmentRoot(project);
   if (await fs.lstat(destination).catch(() => null))
     throw new Error(
       "The app-managed environment is incomplete. Rename it from application data before trying again.",
@@ -1092,17 +1105,18 @@ async function ensureProjectPythonEnvironment(interpreter: string) {
     const created = await createProjectPythonEnvironment(
       interpreter,
       destination,
+      project,
     );
-    await rememberProjectPython(created.inspected.path);
+    await rememberProjectPython(created.inspected.path, project);
     return { ...created, location: "app" as const, created: true };
   } catch (error) {
     await fs.rm(destination, { recursive: true, force: true });
     throw error;
   }
 }
-async function preferredProjectPythonInterpreter() {
-  if (!projectRoot) throw new Error("Open a project first");
-  const root = await fs.realpath(projectRoot);
+async function preferredProjectPythonInterpreter(project = projectRoot) {
+  if (!project) throw new Error("Open a project first");
+  const root = await fs.realpath(project);
   const selected = (await readPythonSelections())[root];
   if (selected) {
     try {
@@ -1120,20 +1134,21 @@ async function preferredProjectPythonInterpreter() {
 async function installProjectPythonPackages(
   interpreter: string,
   requestedPackages: unknown[],
+  project = projectRoot,
 ) {
   if (!requestedPackages.length || requestedPackages.length > 16)
     throw new Error("Choose between 1 and 16 Python packages to install");
   const packages = requestedPackages.map(validPythonPackageSpec);
   const baseInterpreter =
-    interpreter || (await preferredProjectPythonInterpreter());
+    interpreter || (await preferredProjectPythonInterpreter(project));
   const { inspected, environment, created } =
-    await ensureProjectPythonEnvironment(baseInterpreter);
+    await ensureProjectPythonEnvironment(baseInterpreter, project);
   await fs.mkdir(uvCacheRoot(), { recursive: true });
   const result = await exec(
     await uvExecutable(),
     ["pip", "install", "--python", inspected.path, ...packages],
     {
-      cwd: projectRoot,
+      cwd: project,
       timeout: 10 * 60_000,
       env: uvEnvironment({
         VIRTUAL_ENV: environment,
@@ -2413,7 +2428,11 @@ function registerIpc() {
     }
     return state;
   });
-  ipcMain.handle("platformio:boards", () => platformioService.boards());
+  ipcMain.handle("platformio:boards", (_event, query: unknown) =>
+    platformioService.boards(
+      typeof query === "string" ? query.slice(0, 120) : "",
+    ),
+  );
   ipcMain.handle("platformio:install", async (event) => {
     activateSender(event);
     await platformioService.install(false);
@@ -2457,11 +2476,16 @@ function registerIpc() {
         typeof environment !== "string"
       )
         throw new Error("Invalid PlatformIO task");
-      return platformioService.run(
-        action as (typeof allowed)[number],
-        environment.trim(),
-        projectRoot,
-      );
+      try {
+        return await platformioService.run(
+          action as (typeof allowed)[number],
+          environment.trim(),
+          projectRoot,
+        );
+      } finally {
+        const state = await platformioService.state(projectRoot);
+        broadcastToRenderers("platformio:state-changed", state);
+      }
     },
   );
   ipcMain.handle("platformio:stop", async () => platformioService.stop());
@@ -3605,6 +3629,8 @@ function registerIpc() {
         environment: "",
         location: "",
         packages: [],
+        error:
+          "No Python environment was found for this project. Add a package to create an app-managed environment, or create a project .venv.",
       };
     await rememberProjectPython(selected.inspected.path);
     const result = await exec(
@@ -3871,7 +3897,9 @@ app.whenReady().then(async () => {
     getProjectRoot: currentAiProjectRoot,
     getUv: uvExecutable,
     installPythonPackages: (packages) =>
-      installProjectPythonPackages("", packages),
+      installProjectPythonPackages("", packages, currentAiProjectRoot()),
+    getProjectPython: () =>
+      preferredProjectPythonInterpreter(currentAiProjectRoot()),
     getPython: async () => {
       const runtimes = await containedPythonList();
       const python =
@@ -3892,8 +3920,32 @@ app.whenReady().then(async () => {
       await platformioService.install(false);
       return platformioService.state(currentAiProjectRoot());
     },
-    platformioRun: (action, environment) =>
-      platformioService.run(action, environment, currentAiProjectRoot()),
+    platformioRun: async (action, environment) => {
+      const root = currentAiProjectRoot();
+      try {
+        return await platformioService.run(action, environment, root);
+      } finally {
+        const state = await platformioService.state(root);
+        broadcastToRenderers("platformio:state-changed", state);
+      }
+    },
+    platformioBoards: (query) => platformioService.boards(query),
+    platformioInitialize: (board, framework) =>
+      platformioService.initialize(currentAiProjectRoot(), board, framework),
+    platformioMonitor: (environment, durationMs) =>
+      platformioService.monitorSnapshot(
+        currentAiProjectRoot(),
+        environment,
+        durationMs,
+      ),
+    trashProjectPath: async (target) => {
+      const root = await fs.realpath(currentAiProjectRoot());
+      const resolved = await fs.realpath(target);
+      const relative = path.relative(root, resolved);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+        throw new Error("The project item cannot be moved to Trash");
+      await shell.trashItem(resolved);
+    },
     browserOpen: (url) => agentControlService.openBrowser(url),
     browserInspect: () => agentControlService.inspectBrowser(),
     browserClick: (query) => agentControlService.clickBrowser(query),

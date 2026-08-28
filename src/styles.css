@@ -2697,6 +2697,44 @@ select option:checked {
 .platformio-board-list span {
   color: var(--muted);
 }
+.platformio-board-empty {
+  display: block;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.platformio-devices {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.platformio-devices > span {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+}
+.platformio-devices > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 10px;
+}
+.platformio-devices b,
+.platformio-devices small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.platformio-devices small {
+  color: var(--muted);
+}
 .git-utility-actions {
   display: grid;
   gap: 6px;
@@ -3328,7 +3366,7 @@ textarea,
 /* Queued chat work and the full-window conversation surface. */
 .ai-queue-stack {
   width: calc(100% - 20px);
-  max-height: 210px;
+  max-height: 238px;
   flex: none;
   align-self: center;
   overflow: hidden;
@@ -3364,17 +3402,17 @@ textarea,
   font-weight: 700;
 }
 .ai-queue-stack > div {
-  max-height: 164px;
+  max-height: 192px;
   overflow-y: auto;
   padding: 5px;
 }
 .ai-queue-stack article {
   min-width: 0;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  grid-template-columns: 22px minmax(0, 1fr) repeat(3, auto);
   align-items: center;
-  gap: 7px;
-  padding: 6px;
+  gap: 8px;
+  padding: 8px 7px;
   border-radius: 7px;
 }
 .ai-queue-stack article + article {
@@ -3394,12 +3432,13 @@ textarea,
   white-space: nowrap;
 }
 .ai-queue-stack article > button {
-  min-height: 30px;
+  min-width: 34px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 4px 8px;
+  padding: 5px 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--bg);
@@ -3411,6 +3450,9 @@ textarea,
   color: var(--text);
 }
 .ai-queue-stack .ai-queue-steer:hover {
+  color: var(--accent);
+}
+.ai-queue-stack .ai-queue-edit:hover {
   color: var(--accent);
 }
 .ai-queue-stack .ai-queue-delete:hover {
@@ -8257,6 +8299,31 @@ textarea,
   gap: 3px;
 }
 .python-environment-summary > span small {
+  white-space: normal;
+}
+.python-package-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--danger, #f16d6d);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--danger, #f16d6d) 9%, var(--terminal-bg));
+  color: var(--terminal-text);
+}
+.python-package-error > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--danger, #f16d6d);
+}
+.python-package-error > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.python-package-error small {
+  color: var(--terminal-muted);
   white-space: normal;
 }
 .python-help .python-create-project-env {
