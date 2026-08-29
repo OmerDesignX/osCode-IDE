@@ -35,6 +35,10 @@ const assets = {
     name: "llama-b10517-bin-ubuntu-vulkan-x64.tar.gz",
     sha256: "0740df99b45a384672ae5983e1cc32f6c831a08e78d6f192691944cb39b6840d",
   },
+  "win32-x64": {
+    name: "llama-b10517-bin-win-cpu-x64.zip",
+    sha256: "f3fed0673c934ade45663a8e29220a0903b58ad7eff91eeeef606a37061cd031",
+  },
   "win32-x64-vulkan": {
     name: "llama-b10517-bin-win-vulkan-x64.zip",
     sha256: "afa3b2d38b2b461e45a3df7783009b22b2b7e4bb92b40bcb910d0c8924925c88",
@@ -108,6 +112,48 @@ const copyDlls = async (source, destination, depth = 0) => {
   }
 };
 
+const windowsMsvcDependencies = [
+  "vcruntime140.dll",
+  "vcruntime140_1.dll",
+  "msvcp140.dll",
+];
+
+const readWindowsMsvcDependencies = async (currentTarget) => {
+  const system32 = path.join(
+    process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+    "System32",
+  );
+  const candidates = [
+    currentTarget,
+    path.join(root, "vendor", "llama", "win32-x64-vulkan"),
+    path.join(root, "vendor", "llama", "win32-x64-cuda-13.3"),
+    path.join(root, "vendor", "llama", "win32-x64-cuda-12.4"),
+    path.join(
+      root,
+      "vendor",
+      "python",
+      "win32-x64",
+      "cpython-3.12-windows-x86_64-none",
+    ),
+    system32,
+  ];
+  const dependencies = new Map();
+  for (const name of windowsMsvcDependencies) {
+    for (const directory of candidates) {
+      const contents = await readFile(path.join(directory, name)).catch(
+        () => null,
+      );
+      if (contents) {
+        dependencies.set(name, contents);
+        break;
+      }
+    }
+    if (!dependencies.has(name))
+      throw new Error(`Unable to locate the portable dependency ${name}`);
+  }
+  return dependencies;
+};
+
 const runtimeReady = async (target, runtimeAssets, requiredDlls) => {
   try {
     const metadata = JSON.parse(
@@ -178,9 +224,15 @@ const prepareWindowsRuntime = async (
       asset.name.replace(/\.zip$/i, ""),
     );
     await mkdir(extraction, { recursive: true });
-    const unpack = spawnSync("tar", ["-xf", archive, "-C", extraction], {
+    const windowsTar = path.join(
+      process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+      "System32",
+      "tar.exe",
+    );
+    const unpack = spawnSync(windowsTar, ["-xf", archive, "-C", extraction], {
       encoding: "utf8",
-      timeout: 180_000,
+      timeout: 300_000,
+      windowsHide: true,
     });
     if (unpack.status !== 0)
       throw new Error(
@@ -191,21 +243,25 @@ const prepareWindowsRuntime = async (
   const completion = await findFile(extracted[0], "llama-completion.exe");
   if (!completion)
     throw new Error(`${runtimeAssets[0].name} has no llama-completion.exe`);
+  const msvcDependencies =
+    targetName === "win32-x64"
+      ? await readWindowsMsvcDependencies(target)
+      : null;
   await rm(target, { recursive: true, force: true });
   await mkdir(target, { recursive: true });
   await cp(path.dirname(completion), target, { recursive: true });
   for (const extraction of extracted.slice(1))
     await copyDlls(extraction, target);
-  for (const dependency of [
-    "vcruntime140.dll",
-    "vcruntime140_1.dll",
-    "msvcp140.dll",
-  ])
-    await cp(
-      path.join(root, "vendor", "llama", "win32-x64", dependency),
-      path.join(target, dependency),
-      { force: true },
-    );
+  if (msvcDependencies)
+    for (const [dependency, contents] of msvcDependencies)
+      await writeFile(path.join(target, dependency), contents);
+  else
+    for (const dependency of windowsMsvcDependencies)
+      await cp(
+        path.join(root, "vendor", "llama", "win32-x64", dependency),
+        path.join(target, dependency),
+        { force: true },
+      );
   for (const entry of await readdir(target, { withFileTypes: true })) {
     const runtimeDll =
       entry.isFile() &&
@@ -258,22 +314,11 @@ const prepareWindowsRuntime = async (
 };
 
 if (process.platform === "win32") {
-  const completion = path.join(
-    root,
-    "vendor",
-    "llama",
+  await prepareWindowsRuntime(
     "win32-x64",
-    "llama-completion.exe",
+    [assets["win32-x64"]],
+    windowsMsvcDependencies,
   );
-  const check = spawnSync(completion, ["--version"], {
-    cwd: path.dirname(completion),
-    encoding: "utf8",
-    timeout: 10_000,
-    windowsHide: true,
-  });
-  if (check.status !== 0)
-    throw new Error("The checked-in Windows llama.cpp runtime is not ready");
-  console.log("Verified the checked-in Windows llama.cpp CPU runtime");
   await prepareWindowsRuntime(
     "win32-x64-vulkan",
     [assets["win32-x64-vulkan"]],
