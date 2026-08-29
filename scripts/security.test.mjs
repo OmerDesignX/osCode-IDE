@@ -11,6 +11,11 @@ import {
   validateTextContent,
   validTerminalSize,
 } from "../dist-electron/main/security.js";
+import {
+  MAX_IMAGE_PREVIEW_BYTES,
+  projectMediaType,
+  validateProjectMedia,
+} from "../dist-electron/main/media-preview.js";
 
 test("accepts explicit HTTPS, SSH, SCP-style, and local file remotes", () => {
   assert.equal(
@@ -93,4 +98,30 @@ test("caps text files before they reach the renderer", () => {
     () => validateTextContent("a".repeat(MAX_TEXT_FILE_BYTES + 1)),
     /10 MB/,
   );
+});
+
+test("classifies common local image, video, and audio preview formats", () => {
+  assert.deepEqual(projectMediaType("photo.JPEG"), {
+    kind: "image",
+    mimeType: "image/jpeg",
+  });
+  assert.deepEqual(projectMediaType("clip.mp4"), {
+    kind: "video",
+    mimeType: "video/mp4",
+  });
+  assert.deepEqual(projectMediaType("voice.flac"), {
+    kind: "audio",
+    mimeType: "audio/flac",
+  });
+  assert.equal(projectMediaType("main.ts"), null);
+});
+
+test("bounds decoded images without preventing streamed audio and video", () => {
+  assert.equal(validateProjectMedia("photo.webp", 1024).kind, "image");
+  assert.equal(validateProjectMedia("movie.webm", 2_000_000_000).kind, "video");
+  assert.throws(
+    () => validateProjectMedia("photo.png", MAX_IMAGE_PREVIEW_BYTES + 1),
+    /64 MB/,
+  );
+  assert.throws(() => validateProjectMedia("archive.zip", 100));
 });

@@ -3,9 +3,12 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
+  net,
   nativeImage,
+  protocol,
   session,
   shell,
   type MenuItemConstructorOptions,
@@ -51,6 +54,10 @@ import {
   validPythonSelections,
 } from "./python-selections.js";
 import {
+  pythonBytecodeCacheRoot,
+  pythonRuntimeEnvironment,
+} from "./python-environment.js";
+import {
   decodeTextFile,
   validateGitBranch,
   validateGitRemote,
@@ -59,6 +66,23 @@ import {
   validateTextContent,
   validTerminalSize,
 } from "./security.js";
+import {
+  projectMediaType,
+  validateProjectMedia,
+  type ProjectMediaKind,
+} from "./media-preview.js";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "oscode-media",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
+]);
 
 const exec = promisify(execFile);
 guardBrokenOutputPipe(process.stdout);
@@ -74,6 +98,18 @@ type WindowContext = {
 };
 const windowContexts = new Map<number, WindowContext>();
 const projectWatchers = new Map<number, FSWatcher>();
+type MediaPreviewEntry = {
+  file: string;
+  root: string;
+  ownerId: number;
+  kind: ProjectMediaKind;
+  mimeType: string;
+  createdAt: number;
+};
+const mediaPreviewEntries = new Map<string, MediaPreviewEntry>();
+type AppAttentionKind = "response" | "permission" | "input";
+type AppAttentionBadge = { count: number; kind: AppAttentionKind };
+const appAttentionBadges = new Map<number, AppAttentionBadge>();
 let aiProjectRoot = "";
 let aiExecutionOwner: WebContents | null = null;
 let aiExecutionTail: Promise<void> = Promise.resolve();
@@ -119,6 +155,49 @@ function broadcastToRenderers(channel: string, ...args: unknown[]) {
       window.webContents.send(channel, ...args);
   }
 }
+function attentionOverlay(kind: AppAttentionKind, count: number) {
+  const fill = kind === "permission" ? "#f4b860" : "#89cff0";
+  const label = count > 9 ? "9+" : String(count);
+  const fontSize = count > 9 ? 8 : 11;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${fill}" stroke="#071b25" stroke-width="2"/><text x="16" y="20" text-anchor="middle" font-family="Arial,sans-serif" font-size="${fontSize}" font-weight="700" fill="#071b25">${label}</text></svg>`;
+  return nativeImage
+    .createFromDataURL(
+      `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+    )
+    .resize({ width: 16, height: 16 });
+}
+function updateApplicationAttentionBadge() {
+  const entries = [...appAttentionBadges.values()].filter(
+    (entry) => entry.count > 0,
+  );
+  const count = Math.min(
+    99,
+    entries.reduce((total, entry) => total + entry.count, 0),
+  );
+  const kind: AppAttentionKind = entries.some(
+    (entry) => entry.kind === "permission",
+  )
+    ? "permission"
+    : entries.some((entry) => entry.kind === "input")
+      ? "input"
+      : "response";
+  if (process.platform === "win32") {
+    const overlay = count ? attentionOverlay(kind, count) : null;
+    for (const window of BrowserWindow.getAllWindows())
+      if (!window.isDestroyed())
+        window.setOverlayIcon(
+          overlay,
+          count ? `${count} osCode notification${count === 1 ? "" : "s"}` : "",
+        );
+    return;
+  }
+  try {
+    app.setBadgeCount(count);
+  } catch {
+    if (process.platform === "darwin" && app.dock)
+      app.dock.setBadge(count ? String(count) : "");
+  }
+}
 function activateSender(event: IpcMainInvokeEvent) {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (window && !window.isDestroyed()) mainWindow = window;
@@ -128,6 +207,8 @@ function activateSender(event: IpcMainInvokeEvent) {
 }
 function setSenderProject(event: IpcMainInvokeEvent, root: string) {
   const context = activateSender(event);
+  for (const [token, entry] of mediaPreviewEntries)
+    if (entry.ownerId === event.sender.id) mediaPreviewEntries.delete(token);
   if (context) context.projectRoot = root;
   projectRoot = root;
   startProjectWatcher(event.sender, root);
@@ -313,11 +394,48 @@ async function stopProjectProcesses() {
   runningScript = null;
   runningScriptOwner = null;
   runningDebug = false;
-  child?.kill();
+  if (child) await terminateProcessTree(child);
   await aiService?.stop();
   await agentControlService?.stop();
   platformioService?.stop();
   await Promise.all([...terminals.keys()].map(disposeTerminal));
+}
+
+async function terminateProcessTree(child: ReturnType<typeof spawn>) {
+  if (child.exitCode !== null) return;
+  if (process.platform === "win32" && child.pid) {
+    await new Promise<void>((resolve) => {
+      const terminator = spawn(
+        "taskkill.exe",
+        ["/pid", String(child.pid), "/t", "/f"],
+        { stdio: "ignore", windowsHide: true },
+      );
+      terminator.once("error", () => {
+        child.kill();
+        resolve();
+      });
+      terminator.once("close", () => resolve());
+    });
+    return;
+  }
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      child.kill("SIGTERM");
+    }
+  } else child.kill("SIGTERM");
+  await Promise.race([
+    new Promise<void>((resolve) => child.once("close", () => resolve())),
+    new Promise<void>((resolve) => setTimeout(resolve, 350)),
+  ]);
+  if (child.exitCode === null && child.pid) {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      child.kill("SIGKILL");
+    }
+  }
 }
 
 function disposeAiServiceSafely() {
@@ -496,6 +614,80 @@ async function safeProjectPath(target: string) {
   if (relative.startsWith("..") || path.isAbsolute(relative))
     throw new Error("Path is outside the project");
   return resolved;
+}
+async function safePathWithinRoot(rootPath: string, target: string) {
+  const [root, resolved] = await Promise.all([
+    fs.realpath(rootPath),
+    fs.realpath(target),
+  ]);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative))
+    throw new Error("Path is outside the project");
+  return { root, resolved };
+}
+function mediaPreviewUrl(entry: Omit<MediaPreviewEntry, "createdAt">) {
+  const owned = [...mediaPreviewEntries.entries()]
+    .filter(([, item]) => item.ownerId === entry.ownerId)
+    .sort((left, right) => left[1].createdAt - right[1].createdAt);
+  for (const [token] of owned.slice(0, Math.max(0, owned.length - 127)))
+    mediaPreviewEntries.delete(token);
+  const token = crypto.randomBytes(24).toString("hex");
+  mediaPreviewEntries.set(token, { ...entry, createdAt: Date.now() });
+  return `oscode-media://preview/${token}/${encodeURIComponent(path.basename(entry.file))}`;
+}
+function mediaProtocolError(status: number, message: string) {
+  return new Response(message, {
+    status,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+async function handleMediaPreviewRequest(request: Request) {
+  if (!["GET", "HEAD"].includes(request.method))
+    return mediaProtocolError(405, "Method not allowed");
+  let parsed: URL;
+  try {
+    parsed = new URL(request.url);
+  } catch {
+    return mediaProtocolError(400, "Invalid media preview address");
+  }
+  if (parsed.hostname !== "preview")
+    return mediaProtocolError(404, "Media preview not found");
+  const token = parsed.pathname.split("/").filter(Boolean)[0] || "";
+  const entry = mediaPreviewEntries.get(token);
+  if (!entry || !windowContexts.has(entry.ownerId))
+    return mediaProtocolError(404, "Media preview expired");
+  try {
+    const { resolved } = await safePathWithinRoot(entry.root, entry.file);
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile()) return mediaProtocolError(404, "Media file not found");
+    const media = validateProjectMedia(resolved, stat.size);
+    if (media.kind !== entry.kind || media.mimeType !== entry.mimeType)
+      return mediaProtocolError(409, "Media file type changed");
+    const forwarded = new Headers();
+    const range = request.headers.get("range");
+    if (range) forwarded.set("Range", range);
+    const response = await net.fetch(pathToFileURL(resolved).toString(), {
+      method: request.method,
+      headers: forwarded,
+    });
+    const headers = new Headers(response.headers);
+    headers.set("Content-Type", entry.mimeType);
+    headers.set("Cache-Control", "no-store");
+    headers.set("X-Content-Type-Options", "nosniff");
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  } catch (error) {
+    return mediaProtocolError(
+      404,
+      error instanceof Error ? error.message : "Media preview unavailable",
+    );
+  }
 }
 async function projectPrivateDirectory(parts: string[], create: boolean) {
   if (!projectRoot) throw new Error("Open a project first");
@@ -809,7 +1001,10 @@ async function inspectPython(requested: string) {
       "-c",
       `import json,sys;print(${JSON.stringify(marker)}+json.dumps({"version":list(sys.version_info[:3]),"executable":sys.executable}))`,
     ],
-    { timeout: 10_000 },
+    {
+      timeout: 10_000,
+      env: pythonRuntimeEnvironment(app.getPath("userData")),
+    },
   );
   const line = stdout
     .split(/\r?\n/)
@@ -882,7 +1077,7 @@ const managedPythonRoot = () => path.join(app.getPath("userData"), "python");
 const uvCacheRoot = () => path.join(app.getPath("userData"), "uv-cache");
 function uvEnvironment(extra: NodeJS.ProcessEnv = {}) {
   return {
-    ...process.env,
+    ...pythonRuntimeEnvironment(app.getPath("userData")),
     UV_CACHE_DIR: uvCacheRoot(),
     UV_LINK_MODE: "copy",
     UV_PYTHON_INSTALL_DIR: managedPythonRoot(),
@@ -1190,7 +1385,7 @@ function createWindow(show = true, restoreLastProject = true) {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     autoHideMenuBar: process.platform !== "darwin",
     show,
-    backgroundColor: "#111719",
+    backgroundColor: "#171819",
     icon: app.isPackaged
       ? undefined
       : path.join(app.getAppPath(), "build", "icon.png"),
@@ -1214,6 +1409,7 @@ function createWindow(show = true, restoreLastProject = true) {
   window.on("focus", () => {
     mainWindow = window;
     projectRoot = windowContexts.get(webContentsId)?.projectRoot || "";
+    if (process.platform === "win32") window.flashFrame(false);
   });
   window.webContents.session.setSpellCheckerLanguages(["en-US"]);
   // Never let an inherited environment variable redirect a packaged build.
@@ -1289,9 +1485,13 @@ function createWindow(show = true, restoreLastProject = true) {
   });
   window.on("closed", () => {
     const ownerId = webContentsId;
+    for (const [token, entry] of mediaPreviewEntries)
+      if (entry.ownerId === ownerId) mediaPreviewEntries.delete(token);
     projectWatchers.get(ownerId)?.close();
     projectWatchers.delete(ownerId);
     windowContexts.delete(ownerId);
+    appAttentionBadges.delete(ownerId);
+    updateApplicationAttentionBadge();
     rendererHasUnsavedChanges = [...windowContexts.values()].some(
       (item) => item.dirty,
     );
@@ -1299,7 +1499,7 @@ function createWindow(show = true, restoreLastProject = true) {
       if (owner.id === ownerId) void disposeTerminal(id);
     }
     if (runningScriptOwner?.id === ownerId) {
-      runningScript?.kill();
+      if (runningScript) void terminateProcessTree(runningScript);
       runningScript = null;
       runningScriptOwner = null;
       runningDebug = false;
@@ -1347,6 +1547,31 @@ async function runSmokeTest(window: BrowserWindow) {
       path.join(smokeProject, "agent-preview.html"),
       "<!doctype html><html><body><label>Test value<input placeholder=\"Test value\"></label><button onclick=\"document.querySelector('output').textContent='Browser test passed'\">Run test</button><output></output></body></html>",
       "utf8",
+    );
+    await fs.writeFile(
+      path.join(smokeProject, "preview.png"),
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const smokeWav = Buffer.alloc(44 + 800);
+    smokeWav.write("RIFF", 0);
+    smokeWav.writeUInt32LE(smokeWav.length - 8, 4);
+    smokeWav.write("WAVEfmt ", 8);
+    smokeWav.writeUInt32LE(16, 16);
+    smokeWav.writeUInt16LE(1, 20);
+    smokeWav.writeUInt16LE(1, 22);
+    smokeWav.writeUInt32LE(8_000, 24);
+    smokeWav.writeUInt32LE(16_000, 28);
+    smokeWav.writeUInt16LE(2, 32);
+    smokeWav.writeUInt16LE(16, 34);
+    smokeWav.write("data", 36);
+    smokeWav.writeUInt32LE(800, 40);
+    await fs.writeFile(path.join(smokeProject, "preview.wav"), smokeWav);
+    await fs.writeFile(
+      path.join(smokeProject, "preview.mp4"),
+      Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex"),
     );
     const smokeGit = (args: string[]) => executeGit(args, smokeProject);
     try {
@@ -1453,6 +1678,34 @@ async function runSmokeTest(window: BrowserWindow) {
         }
         throw lastError;
       };
+      const clickIconCenter = (root, label) => {
+        const button = root.querySelector('[aria-label="' + label + '"]');
+        const icon = button?.querySelector('svg');
+        if (!button || !icon) throw new Error('Missing ' + label + ' icon');
+        const bounds = icon.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2
+        );
+        const hitButton = hit?.closest?.('button');
+        if (hitButton !== button)
+          throw new Error(
+            label +
+              ' icon center is not inside its button target; hit=' +
+              (hit?.tagName || 'none') +
+              ':' +
+              (hit?.getAttribute?.('aria-label') || hit?.className || '') +
+              '; bounds=' +
+              JSON.stringify({
+                left: bounds.left,
+                top: bounds.top,
+                width: bounds.width,
+                height: bounds.height
+              })
+          );
+        hitButton.click();
+        return true;
+      };
       const bridgeReady =
         typeof window.oscode?.platform === 'string' &&
         typeof window.oscode?.confirmDiscardChanges === 'function' &&
@@ -1480,6 +1733,7 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.listAiModels === 'function' &&
         typeof window.oscode?.removeAiModel === 'function' &&
         typeof window.oscode?.exportDiagram === 'function' &&
+        typeof window.oscode?.openProjectFile === 'function' &&
         typeof window.oscode?.platformioState === 'function' &&
         typeof window.oscode?.installPlatformio === 'function' &&
         typeof window.oscode?.runPlatformio === 'function' &&
@@ -1572,10 +1826,47 @@ async function runSmokeTest(window: BrowserWindow) {
         [...markdownPreview.querySelectorAll('button')].some(
           button => button.textContent.trim() === 'Copy SVG'
         );
+      const imageFile = [...document.querySelectorAll('.tree-row')].find(
+        item => item.textContent.trim() === 'preview.png'
+      );
+      imageFile.click();
+      const previewImage = await waitFor(
+        () => document.querySelector('.media-preview img'),
+        'project image preview'
+      );
+      const imageMediaReady = await waitFor(
+        () => previewImage.complete && previewImage.naturalWidth === 1,
+        'decoded project image'
+      );
+      const audioMedia = await window.oscode.openProjectFile(
+        ${JSON.stringify(path.join(smokeProject, "preview.wav"))}
+      );
+      const videoMedia = await window.oscode.openProjectFile(
+        ${JSON.stringify(path.join(smokeProject, "preview.mp4"))}
+      );
+      const streamedMediaReady =
+        audioMedia.kind === 'media' &&
+        audioMedia.media.kind === 'audio' &&
+        audioMedia.media.url.startsWith('oscode-media://preview/') &&
+        videoMedia.kind === 'media' &&
+        videoMedia.media.kind === 'video' &&
+        videoMedia.media.url.startsWith('oscode-media://preview/');
       file.click();
       await waitFor(
         () => document.querySelector('[aria-label="Python interpreter"]'),
         'Python controls after Markdown preview'
+      );
+      const editorTabs = document.querySelector('.tabs');
+      const tabCountBeforeClose = editorTabs.querySelectorAll('.tab').length;
+      const fileTabCloseHitReady = clickIconCenter(
+        editorTabs,
+        'Close SmokeView.swift'
+      );
+      const fileTabCloseReady = await waitFor(
+        () =>
+          !document.querySelector('[aria-label="Close SmokeView.swift"]') &&
+          editorTabs.querySelectorAll('.tab').length === tabCountBeforeClose - 1,
+        'file tab close'
       );
       const gitBeforeAbsorb = await window.oscode.gitState();
       if (!gitBeforeAbsorb.submodules.some(
@@ -1679,7 +1970,15 @@ async function runSmokeTest(window: BrowserWindow) {
         mcpSettings.innerText.includes('local stdio MCP servers') &&
         mcpServers.some(server => server.id === savedMcp.id);
       await window.oscode.removeMcpServer(savedMcp.id);
-      advancedButton.click();
+      const advancedPanelWidth = advancedDock.getBoundingClientRect().width;
+      const advancedCloseHitReady = clickIconCenter(
+        advancedDock,
+        'Close Advanced'
+      );
+      await waitFor(
+        () => !document.querySelector('.advanced-dock'),
+        'Advanced icon close'
+      );
       const settingsButton = [...document.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'Settings'
       );
@@ -1688,11 +1987,12 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('.settings-dock'),
         'settings panel'
       );
+      const settingsPanelWidth = settingsDock.getBoundingClientRect().width;
       const themeLabels = [...settingsDock.querySelectorAll('.theme-choice button')]
         .map(button => button.textContent.trim());
       const themeChoicesReady =
         themeLabels.length === 3 &&
-        ['Grey + blue', 'Blue dark', 'Blue light'].every(label =>
+        ['Gunmetal + blue', 'Blue dark', 'Blue light'].every(label =>
           themeLabels.includes(label)
         );
       const proseWrapToggle = [...settingsDock.querySelectorAll('label')].find(
@@ -1758,9 +2058,17 @@ async function runSmokeTest(window: BrowserWindow) {
         platformioDock.innerText.includes('Install Core');
       platformioDock.querySelector('[aria-label="Close PlatformIO"]').click();
       settingsButton.click();
+      const reopenedSettingsDock = await waitFor(
+        () => document.querySelector('.settings-dock'),
+        'reopened settings panel'
+      );
+      const settingsCloseHitReady = clickIconCenter(
+        reopenedSettingsDock,
+        'Close settings'
+      );
       await waitFor(
         () => !document.querySelector('.settings-dock'),
-        'settings panel close'
+        'settings icon close'
       );
       await openAiPopup(
         'Chats and tasks',
@@ -1791,6 +2099,9 @@ async function runSmokeTest(window: BrowserWindow) {
         },
         'exclusive AI settings popup'
       );
+      const aiSettingsPopover = aiSettings.closest('.ai-model-popover');
+      const aiSettingsPanelWidth =
+        aiSettingsPopover?.getBoundingClientRect().width || 0;
       const contextSelect = [...aiSettings.querySelectorAll('label')].find(
         item => item.querySelector('span')?.textContent.trim() === 'Context'
       )?.querySelector('select');
@@ -1801,7 +2112,10 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('[data-ai-selected-model]')?.textContent.trim(),
         'automatic local model selection'
       );
-      document.querySelector('[aria-label="AI settings"]').click();
+      const aiSettingsCloseHitReady = clickIconCenter(
+        aiSettingsPopover,
+        'Close AI settings'
+      );
       const aiPopupsExclusive = await waitFor(
         () =>
           !document.querySelector(
@@ -1911,6 +2225,9 @@ async function runSmokeTest(window: BrowserWindow) {
         projectReady: document.body.innerText.includes('smoke-project'),
         sidebarWidth: document.querySelector('.sidebar')?.getBoundingClientRect().width || 0,
         editorReady: Boolean(editor),
+        fileTabCloseReady: Boolean(
+          fileTabCloseHitReady && fileTabCloseReady
+        ),
         editorCommandsReady: (() => {
           const bar = document.querySelector('.editor-command-bar');
           const buttons = [...(bar?.querySelectorAll('button') || [])];
@@ -1927,6 +2244,8 @@ async function runSmokeTest(window: BrowserWindow) {
         })(),
         editorModelLength: Number(editor.dataset.oscodeModelLength || 0),
         markdownReady,
+        imageMediaReady: Boolean(imageMediaReady),
+        streamedMediaReady,
         swiftReady: Boolean(swiftReady),
         proseWrapSettingReady,
         pythonControlsReady: Boolean(runtimeSelect),
@@ -1958,6 +2277,16 @@ async function runSmokeTest(window: BrowserWindow) {
         advancedReady: Boolean(advancedDock),
         mcpReady,
         settingsReady: Boolean(settingsDock),
+        utilityPanelGeometryReady:
+          advancedPanelWidth >= 480 &&
+          settingsPanelWidth >= 480 &&
+          aiSettingsPanelWidth >= 480 &&
+          Math.abs(advancedPanelWidth - settingsPanelWidth) <= 2 &&
+          Math.abs(settingsPanelWidth - aiSettingsPanelWidth) <= 2,
+        closeIconHitTargetsReady:
+          advancedCloseHitReady &&
+          settingsCloseHitReady &&
+          aiSettingsCloseHitReady,
         autosaveSettingReady,
         saveHistoryReady,
         themeChoicesReady,
@@ -2002,6 +2331,12 @@ async function runSmokeTest(window: BrowserWindow) {
       const status = document.querySelector('.top-status')?.getBoundingClientRect();
       const bar = document.querySelector('.topbar')?.getBoundingClientRect();
       const actions = document.querySelector('.top-actions')?.getBoundingClientRect();
+      const activityStrip = document.querySelector(
+        '.global-activity-strip[data-horizontal-menu]'
+      );
+      const nonDownloadProgressHidden = Boolean(
+        status && !document.querySelector('.top-status [role="progressbar"]')
+      );
       const actionControl = document
         .querySelector('.top-actions .runtime-select, .top-actions .icon-button')
         ?.getBoundingClientRect();
@@ -2010,6 +2345,60 @@ async function runSmokeTest(window: BrowserWindow) {
         ...document.querySelectorAll('.editor-command-bar button'),
         ...document.querySelectorAll('.terminal-tabs button')
       ].map(item => Math.round(item.getBoundingClientRect().height)).filter(Boolean);
+      const terminalSessionHeights = [...document.querySelectorAll('.terminal-session-control')]
+        .map(item => Math.round(item.getBoundingClientRect().height));
+      const horizontalMenu = document.querySelector('.top-actions[data-horizontal-menu]');
+      let globalActivityScrollReady = false;
+      if (activityStrip instanceof HTMLElement) {
+        const originalWidth = activityStrip.style.width;
+        const originalMaxWidth = activityStrip.style.maxWidth;
+        const originalScrollBehavior = activityStrip.style.scrollBehavior;
+        activityStrip.style.width = '360px';
+        activityStrip.style.maxWidth = '360px';
+        activityStrip.style.scrollBehavior = 'auto';
+        activityStrip.scrollLeft = 0;
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const activityOverflows =
+          activityStrip.scrollWidth > activityStrip.clientWidth + 1;
+        activityStrip.scrollLeft = 160;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        globalActivityScrollReady = Boolean(
+          activityOverflows &&
+          activityStrip.scrollLeft > 0 &&
+          getComputedStyle(activityStrip).overflowX === 'auto'
+        );
+        activityStrip.style.width = originalWidth;
+        activityStrip.style.maxWidth = originalMaxWidth;
+        activityStrip.style.scrollBehavior = originalScrollBehavior;
+        activityStrip.scrollLeft = 0;
+      }
+      let horizontalMenuScrollReady = false;
+      if (horizontalMenu instanceof HTMLElement) {
+        const originalWidth = horizontalMenu.style.width;
+        const originalMaxWidth = horizontalMenu.style.maxWidth;
+        const originalScrollBehavior = horizontalMenu.style.scrollBehavior;
+        horizontalMenu.style.width = '300px';
+        horizontalMenu.style.maxWidth = '300px';
+        horizontalMenu.style.scrollBehavior = 'auto';
+        horizontalMenu.scrollLeft = 0;
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const menuControlHeights = [...horizontalMenu.querySelectorAll('button')]
+          .map(item => Math.round(item.getBoundingClientRect().height));
+        const menuOverflows = horizontalMenu.scrollWidth > horizontalMenu.clientWidth + 1;
+        horizontalMenu.scrollLeft = 140;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        horizontalMenuScrollReady = Boolean(
+          menuOverflows &&
+          horizontalMenu.scrollLeft > 0 &&
+          getComputedStyle(horizontalMenu).overflowX === 'auto' &&
+          menuControlHeights.length >= 4 &&
+          menuControlHeights.every(height => height >= 40)
+        );
+        horizontalMenu.style.width = originalWidth;
+        horizontalMenu.style.maxWidth = originalMaxWidth;
+        horizontalMenu.style.scrollBehavior = originalScrollBehavior;
+        horizontalMenu.scrollLeft = 0;
+      }
       return {
         ready: Boolean(
         toggle && search && status && actions && actionControl && bar &&
@@ -2022,13 +2411,25 @@ async function runSmokeTest(window: BrowserWindow) {
         Math.abs(search.top - actionControl.top) <= 4 &&
         search.right <= status.left + 2 &&
         search.left >= bar.left &&
-        status.right <= bar.right
+        globalActivityScrollReady &&
+        nonDownloadProgressHidden
         ),
         balancedControls: Boolean(
           controlHeights.length >= 10 &&
           controlHeights.every(height => height >= 38 && height <= 46) &&
           Math.max(...controlHeights) - Math.min(...controlHeights) <= 4
         ),
+        terminalSessionControlsBalanced: Boolean(
+          terminalSessionHeights.length === 0 ||
+          (
+            terminalSessionHeights.length === 2 &&
+            terminalSessionHeights.every(height => height >= 40) &&
+            Math.max(...terminalSessionHeights) - Math.min(...terminalSessionHeights) <= 1
+          )
+        ),
+        globalActivityScrollReady,
+        nonDownloadProgressHidden,
+        horizontalMenuScrollReady,
         search: search ? { top: search.top, bottom: search.bottom, width: search.width } : null,
         status: status ? { top: status.top, right: status.right, width: status.width } : null,
         actions: actions ? {
@@ -2044,10 +2445,50 @@ async function runSmokeTest(window: BrowserWindow) {
     result.globalSearchWithActivityReady = Boolean(
       (result.globalSearchLayout as { ready?: boolean } | undefined)?.ready,
     );
+    result.globalActivityScrollReady = Boolean(
+      (
+        result.globalSearchLayout as
+          { globalActivityScrollReady?: boolean } | undefined
+      )?.globalActivityScrollReady,
+    );
+    result.nonDownloadProgressHidden = Boolean(
+      (
+        result.globalSearchLayout as
+          { nonDownloadProgressHidden?: boolean } | undefined
+      )?.nonDownloadProgressHidden,
+    );
     result.balancedControlSizing = Boolean(
       (result.globalSearchLayout as { balancedControls?: boolean } | undefined)
         ?.balancedControls,
     );
+    result.terminalSessionControlsBalanced = Boolean(
+      (
+        result.globalSearchLayout as
+          { terminalSessionControlsBalanced?: boolean } | undefined
+      )?.terminalSessionControlsBalanced,
+    );
+    result.horizontalMenuScrollReady = Boolean(
+      (
+        result.globalSearchLayout as
+          { horizontalMenuScrollReady?: boolean } | undefined
+      )?.horizontalMenuScrollReady,
+    );
+    result.computerControlBannerReady =
+      await contents.executeJavaScript(`(() => {
+      const banner = document.querySelector('.computer-control-banner');
+      const stop = banner?.querySelector('button[aria-label="Stop Computer Control"]');
+      const stopStyle = stop ? getComputedStyle(stop) : null;
+      return Boolean(
+        banner && stop &&
+        stop.classList.contains('computer-control-stop') &&
+        /Esc/.test(banner.textContent || '') &&
+        getComputedStyle(banner).backgroundColor === 'rgb(137, 207, 240)' &&
+        stopStyle?.backgroundColor !== 'rgb(255, 255, 255)' &&
+        stopStyle?.backgroundColor !== 'rgb(229, 245, 252)' &&
+        banner.getBoundingClientRect().height >= 48 &&
+        stop.getBoundingClientRect().height >= 36
+      );
+    })()`);
     sendToRenderer("agent:activity", {
       kind: "computer",
       label: "Computer Control stopped",
@@ -2055,6 +2496,12 @@ async function runSmokeTest(window: BrowserWindow) {
       network: false,
     });
     try {
+      const computerTargets = JSON.parse(
+        await agentControlService.listComputerTargets(),
+      ) as { applications?: unknown[] };
+      result.nativeComputerControlReady =
+        process.platform === "linux" ||
+        Array.isArray(computerTargets.applications);
       await agentControlService.openBrowser(
         "'file:///Users/runneradmin/Code/example/agent-preview.html'",
       );
@@ -2109,10 +2556,12 @@ async function runSmokeTest(window: BrowserWindow) {
       const computerBefore = JSON.parse(
         await agentControlService.inspectComputer(),
       ) as { controls?: Array<{ label?: string }> };
+      result.computerEmergencyStopReady = globalShortcut.isRegistered("Esc");
       await agentControlService.clickComputer("Notifications");
       const computerAfter = JSON.parse(
         await agentControlService.inspectComputer(),
       ) as { text?: string };
+      const computerSnapshot = await agentControlService.computerSnapshot();
       result.agentBrowserReady =
         browserBefore.controls?.some((item) => item.label === "Run test") ===
           true &&
@@ -2122,7 +2571,10 @@ async function runSmokeTest(window: BrowserWindow) {
       result.computerControlReady =
         computerBefore.controls?.some(
           (item) => item.label === "Notifications",
-        ) === true && /Notifications/.test(computerAfter.text || "");
+        ) === true &&
+        /Notifications/.test(computerAfter.text || "") &&
+        computerSnapshot.scope === "oscode" &&
+        computerSnapshot.dataUrl.startsWith("data:image/png;base64,");
     } catch (error) {
       result.agentControlError =
         error instanceof Error ? error.message : String(error);
@@ -2139,10 +2591,14 @@ async function runSmokeTest(window: BrowserWindow) {
       result.autoUpdatePromptReady !== true ||
       result.pythonControlsBeforeFile !== false ||
       result.projectReady !== true ||
-      Number(result.sidebarWidth) < 200 ||
+      Number(result.sidebarWidth) < 470 ||
+      Number(result.sidebarWidth) > 490 ||
       result.editorReady !== true ||
+      result.fileTabCloseReady !== true ||
       result.editorCommandsReady !== true ||
       result.markdownReady !== true ||
+      result.imageMediaReady !== true ||
+      result.streamedMediaReady !== true ||
       result.swiftReady !== true ||
       result.proseWrapSettingReady !== true ||
       result.pythonControlsReady !== true ||
@@ -2158,6 +2614,8 @@ async function runSmokeTest(window: BrowserWindow) {
       result.advancedReady !== true ||
       result.mcpReady !== true ||
       result.settingsReady !== true ||
+      result.utilityPanelGeometryReady !== true ||
+      result.closeIconHitTargetsReady !== true ||
       result.autosaveSettingReady !== true ||
       result.saveHistoryReady !== true ||
       result.themeChoicesReady !== true ||
@@ -2169,11 +2627,18 @@ async function runSmokeTest(window: BrowserWindow) {
       result.agentBrowserViewReady !== true ||
       result.agentBrowserButtonsReady !== true ||
       result.computerControlReady !== true ||
+      result.nativeComputerControlReady !== true ||
+      result.computerControlBannerReady !== true ||
+      result.computerEmergencyStopReady !== true ||
       result.aiPopupsExclusive !== true ||
       result.aiContextReady !== true ||
       result.aiModelSelected !== true ||
       result.globalSearchWithActivityReady !== true ||
+      result.globalActivityScrollReady !== true ||
+      result.nonDownloadProgressHidden !== true ||
       result.balancedControlSizing !== true ||
+      result.terminalSessionControlsBalanced !== true ||
+      result.horizontalMenuScrollReady !== true ||
       result.lightThemeReady !== true ||
       result.pythonPackageManagerReady !== true ||
       result.pythonPackageInputReady !== true ||
@@ -2352,6 +2817,32 @@ function createApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 function registerIpc() {
+  ipcMain.handle(
+    "app:set-attention-badge",
+    (event, rawCount: unknown, rawKind: unknown) => {
+      activateSender(event);
+      const count = Math.max(
+        0,
+        Math.min(99, Math.floor(Number(rawCount) || 0)),
+      );
+      const kind: AppAttentionKind = [
+        "response",
+        "permission",
+        "input",
+      ].includes(String(rawKind))
+        ? (rawKind as AppAttentionKind)
+        : "response";
+      const hadAttention =
+        (appAttentionBadges.get(event.sender.id)?.count || 0) > 0;
+      if (count) appAttentionBadges.set(event.sender.id, { count, kind });
+      else appAttentionBadges.delete(event.sender.id);
+      updateApplicationAttentionBadge();
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (count && !hadAttention && owner && !owner.isFocused())
+        owner.flashFrame(true);
+      return true;
+    },
+  );
   ipcMain.on("app:set-dirty", (event, dirty: unknown) => {
     if (typeof dirty !== "boolean") return;
     const context = windowContexts.get(event.sender.id);
@@ -2806,11 +3297,25 @@ function registerIpc() {
   );
   ipcMain.handle("agent:browser-show", () => agentControlService.showBrowser());
   ipcMain.handle("activity:stop", async () => {
+    const script = runningScript;
+    const scriptOwner = runningScriptOwner;
+    runningScript = null;
+    runningScriptOwner = null;
+    runningDebug = false;
     const stopped = [
       aiService.stopDownload(),
       platformioService.stop(),
       await agentControlService.stop(),
+      await aiService.stopProjectCommand(),
+      Boolean(script),
     ];
+    if (script) {
+      await terminateProcessTree(script);
+      if (scriptOwner && !scriptOwner.isDestroyed()) {
+        scriptOwner.send("run:data", "\r\nProcess stopped\r\n");
+        scriptOwner.send("run:stopped");
+      }
+    }
     return stopped.some(Boolean);
   });
   ipcMain.handle("spellcheck:set", (_event, enabled: unknown) => {
@@ -2972,6 +3477,35 @@ function registerIpc() {
       return `data:${mime};base64,${(await fs.readFile(imageFile)).toString("base64")}`;
     },
   );
+  ipcMain.handle("file:open", async (event, target: string) => {
+    const context = activateSender(event);
+    if (!context?.projectRoot) throw new Error("Open a project first");
+    const file = await safeProjectPath(target);
+    const stat = await fs.stat(file);
+    if (!stat.isFile()) throw new Error("Only regular files can be opened");
+    const media = projectMediaType(file);
+    if (!media) {
+      return {
+        kind: "text" as const,
+        content: decodeTextFile(await fs.readFile(file)),
+      };
+    }
+    validateProjectMedia(file, stat.size);
+    const root = await fs.realpath(context.projectRoot);
+    return {
+      kind: "media" as const,
+      media: {
+        ...media,
+        bytes: stat.size,
+        url: mediaPreviewUrl({
+          file,
+          root,
+          ownerId: event.sender.id,
+          ...media,
+        }),
+      },
+    };
+  });
   ipcMain.handle("file:read", async (event, target: string) => {
     activateSender(event);
     const file = await safeProjectPath(target);
@@ -3304,6 +3838,9 @@ function registerIpc() {
       terminalEnv.UV_CACHE_DIR = uvCacheRoot();
       terminalEnv.UV_LINK_MODE = "copy";
       terminalEnv.UV_PYTHON_INSTALL_DIR = managedPythonRoot();
+      terminalEnv.PYTHONPYCACHEPREFIX = pythonBytecodeCacheRoot(
+        app.getPath("userData"),
+      );
       if (path.isAbsolute(uv))
         terminalEnv[pathKey] =
           `${path.dirname(uv)}${path.delimiter}${terminalEnv[pathKey] || ""}`;
@@ -3756,6 +4293,10 @@ function registerIpc() {
           "Another project is already running Python. Stop it or wait for it to finish.",
         );
       }
+      if (aiService.isProjectCommandRunning())
+        throw new Error(
+          "The agent is already running Python in the shared Run terminal. Stop it before starting another Python process.",
+        );
       const script = await safeProjectPath(file);
       if (path.extname(script) !== ".py")
         throw new Error("Select a Python file in the current project");
@@ -3765,9 +4306,26 @@ function registerIpc() {
       const command = inspected.path;
       const scriptArgs = debug ? ["-m", "pdb", script] : [script];
       const args = scriptArgs;
+      let runEnvironment: NodeJS.ProcessEnv = pythonRuntimeEnvironment(
+        app.getPath("userData"),
+      );
+      try {
+        const owned = await ownedProjectPythonEnvironment(inspected.path);
+        const binaryDirectory = path.dirname(owned.inspected.path);
+        const pathKey = process.platform === "win32" ? "Path" : "PATH";
+        runEnvironment = {
+          ...runEnvironment,
+          VIRTUAL_ENV: owned.environment,
+          [pathKey]: `${binaryDirectory}${path.delimiter}${runEnvironment[pathKey] || ""}`,
+        };
+        delete runEnvironment.PYTHONHOME;
+      } catch {
+        // A system interpreter runs directly without virtual-environment vars.
+      }
       const child = spawn(command, args, {
         cwd: projectRoot,
-        env: process.env,
+        env: runEnvironment,
+        detached: process.platform !== "win32",
       });
       runningScript = child;
       runningScriptOwner = event.sender;
@@ -3805,30 +4363,34 @@ function registerIpc() {
       return true;
     },
   );
-  ipcMain.handle("python:stop", () => {
+  ipcMain.handle("python:stop", async () => {
     const child = runningScript;
     runningScript = null;
     runningDebug = false;
     if (child) {
-      child.kill();
+      await terminateProcessTree(child);
       if (runningScriptOwner && !runningScriptOwner.isDestroyed()) {
         runningScriptOwner.send("run:data", "\r\nProcess stopped\r\n");
         runningScriptOwner.send("run:stopped");
       }
       runningScriptOwner = null;
+      return true;
     }
-    return true;
+    return aiService.stopProjectCommand();
   });
   ipcMain.handle("python:input", (_e, data: string) => {
     if (typeof data !== "string" || data.length === 0 || data.length > 10_000)
       throw new Error("Invalid process input");
-    if (!runningScript?.stdin?.writable)
+    if (!runningScript?.stdin?.writable) {
+      if (aiService.writeProjectCommandInput(data)) return true;
       throw new Error("No Python process is accepting input");
+    }
     runningScript.stdin.write(data);
     return true;
   });
 }
 app.whenReady().then(async () => {
+  await protocol.handle("oscode-media", handleMediaPreviewRequest);
   const userData = app.getPath("userData");
   if (!smokeMode) {
     try {
@@ -3896,8 +4458,24 @@ app.whenReady().then(async () => {
       : path.join(app.getAppPath(), "vendor", "llama"),
     getProjectRoot: currentAiProjectRoot,
     getUv: uvExecutable,
-    installPythonPackages: (packages) =>
-      installProjectPythonPackages("", packages, currentAiProjectRoot()),
+    installPythonPackages: async (packages) => {
+      const installed = await installProjectPythonPackages(
+        "",
+        packages,
+        currentAiProjectRoot(),
+      );
+      broadcastToRenderers("python:environment-changed");
+      return installed;
+    },
+    projectRunData: (data) => {
+      if (aiExecutionOwner && !aiExecutionOwner.isDestroyed())
+        aiExecutionOwner.send("run:data", data);
+    },
+    projectRunStopped: () => {
+      if (aiExecutionOwner && !aiExecutionOwner.isDestroyed())
+        aiExecutionOwner.send("run:stopped");
+    },
+    projectRunBusy: () => Boolean(runningScript),
     getProjectPython: () =>
       preferredProjectPythonInterpreter(currentAiProjectRoot()),
     getPython: async () => {
@@ -3959,6 +4537,7 @@ app.whenReady().then(async () => {
       mcpClientService.callReadOnlyTool(serverId, name, argumentsValue),
     computerList: () => agentControlService.listComputerTargets(),
     computerInspect: (target) => agentControlService.inspectComputer(target),
+    computerSnapshot: (target) => agentControlService.computerSnapshot(target),
     computerClick: (query, target) =>
       agentControlService.clickComputer(query, target),
     computerType: (query, text, target) =>
@@ -3975,6 +4554,7 @@ app.whenReady().then(async () => {
     },
     (data) => sendToRenderer("platformio:output", data),
     secureStore,
+    (activity) => broadcastToRenderers("agent:activity", activity),
   );
   registerIpc();
   createWindow(!smokeMode);

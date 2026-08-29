@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AiHardwareProfile, AiModel, AiModelTier } from "../types.js";
-import { filesForVariant, modelVariants } from "./model-catalog.js";
+import { modelVariants } from "./model-catalog.js";
 
 const exec = promisify(execFile);
 const tiers: Array<Exclude<AiModelTier, "custom">> = [
@@ -103,7 +103,13 @@ async function findMlx(
   variant: (typeof modelVariants)[number],
 ) {
   const modelRoot = path.join(directory, variant.folder);
-  const required = filesForVariant(variant).map((file) => path.basename(file));
+  const required = [
+    "config.json",
+    "chat_template.jinja",
+    "model.safetensors.index.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+  ];
   const ready = await Promise.all(
     required.map((file) =>
       fs
@@ -125,12 +131,20 @@ async function findMlx(
         (value): value is string => typeof value === "string",
       ),
     );
-    const expectedShards = required.filter((file) =>
-      file.endsWith(".safetensors"),
-    );
+    const expectedShards = [...referenced];
     if (
-      referenced.size !== expectedShards.length ||
-      expectedShards.some((file) => !referenced.has(file))
+      !expectedShards.length ||
+      expectedShards.some(
+        (file) => path.basename(file) !== file || file.includes(".."),
+      ) ||
+      !(await Promise.all(
+        expectedShards.map((file) =>
+          fs
+            .stat(path.join(modelRoot, file))
+            .then((value) => value.isFile() && value.size > 0)
+            .catch(() => false),
+        ),
+      ).then((values) => values.every(Boolean)))
     )
       return "";
   } catch {
@@ -183,8 +197,8 @@ export async function bundledModels(modelsRoot: string): Promise<AiModel[]> {
 
 function executableNames() {
   return process.platform === "win32"
-    ? ["llama-completion.exe", "llama-cli.exe"]
-    : ["llama-completion", "llama-cli", "llama"];
+    ? ["llama-completion.exe", "llama-mtmd-cli.exe"]
+    : ["llama-completion", "llama-mtmd-cli", "llama"];
 }
 
 type AcceleratorCandidate = {
@@ -411,9 +425,12 @@ export async function hardwareProfile(
       recommendedTier: "small",
       gpuAvailable: true,
       gpuName: "Apple silicon GPU",
+      gpuNames: ["Apple silicon GPU"],
+      gpuCount: 1,
       accelerator: "metal",
     };
   let gpuName = "";
+  let gpuNames: string[] = [];
   let accelerator: AiHardwareProfile["accelerator"] = "none";
   let acceleratorVersion: string | undefined;
   const nvidia = await nvidiaProfile();
@@ -438,8 +455,18 @@ export async function hardwareProfile(
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean);
+      gpuNames = [
+        ...new Set(
+          lines.filter(
+            (line) =>
+              /^(?:CUDA|Vulkan|Metal)\d*\s*:/i.test(line) ||
+              (!/available devices|\(none\)/i.test(line) &&
+                /NVIDIA|AMD|Intel|Apple/i.test(line)),
+          ),
+        ),
+      ];
       gpuName =
-        lines.find((line) => /^(?:CUDA|Vulkan|Metal)\d*\s*:/i.test(line)) ||
+        gpuNames[0] ||
         lines.find(
           (line) =>
             !/available devices|\(none\)/i.test(line) &&
@@ -495,6 +522,12 @@ export async function hardwareProfile(
       nvidia?.name ||
       gpuName.replace(/^[-*\s]+/, "") ||
       "No supported GPU detected",
+    gpuNames: gpuNames.length
+      ? gpuNames.map((name) => name.replace(/^[-*\s]+/, ""))
+      : nvidia?.name
+        ? [nvidia.name]
+        : [],
+    gpuCount: Math.max(gpuNames.length, nvidia ? 1 : 0),
     accelerator,
     acceleratorVersion,
     nvidiaDetected: Boolean(nvidia),

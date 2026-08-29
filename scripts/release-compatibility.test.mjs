@@ -62,25 +62,45 @@ test("native releases package local inference runtimes without model weights or 
   assert.deepEqual(
     windowsResources.find(({ from }) => from === "vendor/llama/win32-x64")
       ?.filter,
-    ["llama-completion.exe", "*.dll", "!llama-server-impl.dll"],
+    [
+      "llama-completion.exe",
+      "llama-mtmd-cli.exe",
+      "*.dll",
+      "!llama-server-impl.dll",
+    ],
   );
   assert.deepEqual(
     windowsResources.find(
       ({ from }) => from === "vendor/llama/win32-x64-vulkan",
     )?.filter,
-    ["llama-completion.exe", "llama-cli.exe", "*.dll", "OSCODE_RUNTIME.json"],
+    [
+      "llama-completion.exe",
+      "llama-mtmd-cli.exe",
+      "*.dll",
+      "OSCODE_RUNTIME.json",
+    ],
   );
   assert.deepEqual(
     windowsResources.find(
       ({ from }) => from === "vendor/llama/win32-x64-cuda-13.3",
     )?.filter,
-    ["llama-completion.exe", "llama-cli.exe", "*.dll", "OSCODE_RUNTIME.json"],
+    [
+      "llama-completion.exe",
+      "llama-mtmd-cli.exe",
+      "*.dll",
+      "OSCODE_RUNTIME.json",
+    ],
   );
   assert.deepEqual(
     windowsResources.find(
       ({ from }) => from === "vendor/llama/win32-x64-cuda-12.4",
     )?.filter,
-    ["llama-completion.exe", "llama-cli.exe", "*.dll", "OSCODE_RUNTIME.json"],
+    [
+      "llama-completion.exe",
+      "llama-mtmd-cli.exe",
+      "*.dll",
+      "OSCODE_RUNTIME.json",
+    ],
   );
   assert.ok(linuxResources.includes("vendor/llama/linux-x64"));
   assert.ok(linuxResources.includes("vendor/llama/linux-x64-vulkan"));
@@ -90,6 +110,7 @@ test("native releases package local inference runtimes without model weights or 
   assert.doesNotMatch(snapConfig, /vendor\/models/);
   const prepareLlama = read("scripts/prepare-llama.mjs");
   assert.match(prepareLlama, /llama-completion/);
+  assert.match(prepareLlama, /llama-mtmd-cli/);
   assert.match(prepareLlama, /win32-x64-vulkan/);
   assert.match(prepareLlama, /llama-b10517-bin-win-cuda-12\.4-x64\.zip/);
   assert.match(prepareLlama, /llama-b10517-bin-win-cuda-13\.3-x64\.zip/);
@@ -109,7 +130,8 @@ test("native releases package local inference runtimes without model weights or 
     /CMAKE_OSX_DEPLOYMENT_TARGET=\$\{deploymentTarget\}/,
   );
   assert.match(prepareLlama, /deploymentTarget = "12\.0"/);
-  assert.match(prepareLlama, /GGML_ACCELERATE=OFF/);
+  assert.match(prepareLlama, /GGML_ACCELERATE=ON/);
+  assert.match(prepareLlama, /GGML_METAL=ON/);
   assert.match(prepareLlama, /LLAMA_OPENSSL=OFF/);
 
   const aiService = read("electron/main/ai.ts");
@@ -176,29 +198,90 @@ test("native Computer Control is local, permissioned, and packaged", () => {
   assert.ok(
     windowsResources.includes("node_modules/@microsoft/winappcli/bin/win-x64"),
   );
-  assert.match(afterPack, /vendor\/computer-control\/darwin-universal/);
+  assert.match(afterPack, /darwin-universal\/oscode-computer-control\.node/);
   assert.match(afterPack, /const target = `darwin-\$\{architecture\}`/);
+  const afterSign = read("build/after-sign.cjs");
+  assert.equal(manifest.build.afterSign, "./build/after-sign.cjs");
+  assert.match(afterSign, /makeTreeReadOnly/);
+  assert.match(afterSign, /`darwin-\$\{architecture\}`/);
+
+  const packageVerifier = read("scripts/verify-package.mjs");
+  assert.match(packageVerifier, /PYTHONDONTWRITEBYTECODE: "1"/);
+  assert.match(
+    packageVerifier,
+    /Packaged macOS smoke test mutated the signed app bundle/,
+  );
+
+  const pythonEnvironment = read("electron/main/python-environment.ts");
+  assert.match(pythonEnvironment, /PYTHONPYCACHEPREFIX/);
+  assert.match(
+    read("electron/main/index.ts"),
+    /pythonRuntimeEnvironment\(app\.getPath\("userData"\)\)/,
+  );
+  assert.match(read("electron/main/ai.ts"), /this\.pythonEnvironment\(\)/);
 
   const control = read("electron/main/agent-control.ts");
   assert.match(control, /WINAPP_CLI_TELEMETRY_OPTOUT: "1"/);
   assert.match(control, /DOTNET_CLI_TELEMETRY_OPTOUT: "1"/);
   assert.match(control, /UI Automation|nativeArgs\("invoke"/);
   assert.match(control, /Computer Control cannot operate terminals/);
+  assert.match(control, /desktopCapturer\.getSources/);
+  assert.match(control, /types: wholeDesktop \? \["screen"\] : \["window"\]/);
+  assert.match(control, /systemPreferences\.getMediaAccessStatus\("screen"\)/);
+  assert.match(control, /addon\.requestScreenCaptureAccess\(\)/);
   assert.match(
-    read("native/computer-control/macos/main.swift"),
+    control,
+    /requestMacScreenCaptureAccess\(\)[\s\S]*desktopCapturer\.getSources/,
+  );
+  assert.match(control, /dialog\.showMessageBox/);
+  assert.match(control, /ComputerSystemPermissionError/);
+  assert.match(control, /phase: "permission"/);
+  assert.match(control, /shell\.openExternal\(guidance\.settingsUrl\)/);
+  assert.match(control, /openLinuxComputerSettings/);
+  assert.match(control, /globalShortcut\.register\("Esc"/);
+  assert.match(control, /monitorForegroundPointer/);
+  assert.match(control, /systemPreferences\.isTrustedAccessibilityClient/);
+  assert.match(control, /requireNativeModule\(addonPath\)/);
+  assert.match(read("electron/main/index.ts"), /app\.setBadgeCount/);
+  assert.match(read("electron/main/index.ts"), /setOverlayIcon/);
+  assert.match(
+    read("native/computer-control/macos-addon/addon.mm"),
     /kAXPressAction/,
   );
   assert.match(
-    read("native/computer-control/macos/main.swift"),
+    read("native/computer-control/macos-addon/addon.mm"),
     /AXIsProcessTrustedWithOptions/,
   );
   assert.match(
-    read("scripts/prepare-computer-control.mjs"),
-    /arm64-apple-macos12/,
+    read("native/computer-control/macos-addon/addon.mm"),
+    /CGPreflightScreenCaptureAccess/,
+  );
+  assert.match(
+    read("native/computer-control/macos-addon/addon.mm"),
+    /CGRequestScreenCaptureAccess/,
+  );
+  const macComputerControl = read(
+    "native/computer-control/macos-addon/addon.mm",
+  );
+  assert.match(macComputerControl, /kAXSubroleAttribute/);
+  assert.match(macComputerControl, /kAXPlaceholderValueAttribute/);
+  assert.match(macComputerControl, /SemanticControlText/);
+  assert.match(macComputerControl, /CGEventCreateMouseEvent/);
+  assert.match(macComputerControl, /CGEventKeyboardSetUnicodeString/);
+  assert.match(macComputerControl, /kAXFocusedAttribute/);
+  assert.match(control, /nativeInputMethod\(output\) === "mouse"/);
+  assert.match(control, /nativeInputMethod\(output\) === "keyboard"/);
+  assert.match(
+    read("native/computer-control/macos-addon/addon.mm"),
+    /NAPI_MODULE_INIT/,
   );
   assert.match(
     read("scripts/prepare-computer-control.mjs"),
-    /x86_64-apple-macos12/,
+    /-mmacosx-version-min=12\.0/,
+  );
+  assert.match(
+    read("scripts/prepare-computer-control.mjs"),
+    /"arm64"[\s\S]*"-arch"[\s\S]*"x86_64"/,
   );
   assert.match(read("scripts/build-macos-release.mjs"), /computer:prepare/);
 });
@@ -229,11 +312,18 @@ test("manual release build preserves the verified native package pipeline", () =
   assert.match(macBuild, /--config\.mac\.identity=-/);
   assert.match(macBuild, /--config\.mac\.hardenedRuntime=false/);
   assert.match(macBuild, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
+  assert.match(macBuild, /makeDirectoriesWritable/);
+  assert.match(macBuild, /removeGeneratedRelease\(packageDirectory\)/);
   const packageVerifier = read("scripts/verify-package.mjs");
   assert.match(packageVerifier, /Signature=adhoc/);
   assert.match(packageVerifier, /--verify", "--deep", "--strict"/);
-  assert.match(packageVerifier, /attempt < 3 && !helperListReady/);
-  assert.match(packageVerifier, /timeout: 20_000/);
+  assert.match(packageVerifier, /requireNativeModule\(macComputerControl\)/);
+  assert.match(packageVerifier, /computerControlAddon\.list\(\)/);
+  assert.match(packageVerifier, /computerControlAddon\.isScreenCaptureTrusted/);
+  assert.match(
+    packageVerifier,
+    /computerControlAddon\.requestScreenCaptureAccess/,
+  );
   assert.match(
     packageVerifier,
     /expectedMacArch === "x64" && process\.arch === "arm64" \? 60_000 : 15_000/,

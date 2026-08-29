@@ -1,6 +1,6 @@
 {
   "name": "oscode",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "A calm, cross-platform code editor",
   "desktopName": "studio.oscode.editor.desktop",
   "main": "dist-electron/main/index.js",
@@ -45,10 +45,12 @@
     "@xterm/xterm": "^5.5.0",
     "dompurify": "3.4.13",
     "feather-icons": "^4.29.2",
+    "mammoth": "^1.12.1",
     "marked": "^18.0.9",
     "mermaid": "^11.16.1",
     "monaco-editor": "^0.56.0",
     "node-pty": "^1.1.0",
+    "pdfjs-dist": "^6.2.108",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
@@ -73,6 +75,7 @@
     "productName": "osCode",
     "asar": true,
     "afterPack": "./build/after-pack.cjs",
+    "afterSign": "./build/after-sign.cjs",
     "npmRebuild": false,
     "directories": {
       "output": "release",
@@ -115,6 +118,7 @@
           "to": "llama",
           "filter": [
             "llama-completion.exe",
+            "llama-mtmd-cli.exe",
             "*.dll",
             "!llama-server-impl.dll"
           ]
@@ -124,7 +128,7 @@
           "to": "llama/vulkan",
           "filter": [
             "llama-completion.exe",
-            "llama-cli.exe",
+            "llama-mtmd-cli.exe",
             "*.dll",
             "OSCODE_RUNTIME.json"
           ]
@@ -134,7 +138,7 @@
           "to": "llama/cuda-system-13",
           "filter": [
             "llama-completion.exe",
-            "llama-cli.exe",
+            "llama-mtmd-cli.exe",
             "*.dll",
             "OSCODE_RUNTIME.json"
           ]
@@ -144,7 +148,7 @@
           "to": "llama/cuda-system-12",
           "filter": [
             "llama-completion.exe",
-            "llama-cli.exe",
+            "llama-mtmd-cli.exe",
             "*.dll",
             "OSCODE_RUNTIME.json"
           ]

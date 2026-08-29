@@ -6,12 +6,14 @@ import { FileTree } from "./components/FileTree";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { MarkdownPreview } from "./components/MarkdownPreview";
+import { MediaPreview } from "./components/MediaPreview";
 import { PlatformioPanel } from "./components/PlatformioPanel";
 import osCodeIcon from "./assets/oscode-icon.png";
 import type {
   AiEditMode,
   AiEngine,
   AiInferenceHardware,
+  AiAttention,
   AiTerminalMode,
   AgentActivity,
   AgentBrowserSnapshot,
@@ -35,7 +37,7 @@ type AppNotification = {
   id: string;
   message: string;
   createdAt: number;
-  kind?: "auto-update-prompt" | "app-update" | "message";
+  kind?: "auto-update-prompt" | "app-update" | "ai-attention" | "message";
 };
 type FileComparison = {
   leftPath: string;
@@ -45,6 +47,30 @@ type FileComparison = {
   rightName: string;
   rightContent: string;
 };
+
+function scrollHorizontalMenu(event: WheelEvent) {
+  const origin = event.target;
+  const menu =
+    origin instanceof Element
+      ? origin.closest<HTMLElement>("[data-horizontal-menu]")
+      : null;
+  if (
+    !menu ||
+    menu.scrollWidth <= menu.clientWidth + 1 ||
+    Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+  )
+    return;
+  const nextScroll = Math.max(
+    0,
+    Math.min(
+      menu.scrollWidth - menu.clientWidth,
+      menu.scrollLeft + event.deltaY,
+    ),
+  );
+  if (Math.abs(nextScroll - menu.scrollLeft) < 0.5) return;
+  menu.scrollLeft = nextScroll;
+  event.preventDefault();
+}
 const agentBrowserTabPath = "oscode://agent-browser";
 const projectFiles = (entries: TreeEntry[]): TreeEntry[] =>
   entries.flatMap((entry) =>
@@ -446,6 +472,11 @@ export function App() {
     [runInput, setRunInput] = useState(""),
     [notice, setNotice] = useState("");
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [aiAttention, setAiAttention] = useState<AiAttention | null>(null);
+  const [permissionCompletionReady, setPermissionCompletionReady] =
+    useState(false);
+  const [permissionCompleting, setPermissionCompleting] = useState(false);
+  const permissionCompletionRef = useRef<(() => Promise<void>) | null>(null);
   const [pathInput, setPathInput] = useState("");
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [lastProject, setLastProject] = useState("");
@@ -463,7 +494,7 @@ export function App() {
     [sidebarSide, setSidebarSide] = useState<"left" | "right">("left"),
     [uiScale, setUiScale] = useState<1 | 1.15 | 1.3 | 1.5 | 1.7>(1),
     [editorFontSize, setEditorFontSize] = useState(14),
-    [sidebarWidth, setSidebarWidth] = useState(300),
+    [sidebarWidth, setSidebarWidth] = useState(480),
     [gitHeight, setGitHeight] = useState(390),
     [aiPanelWidth, setAiPanelWidth] = useState(330),
     [sidebarVisible, setSidebarVisible] = useState(true),
@@ -541,14 +572,19 @@ export function App() {
   const autoUpdateDismissedVersionRef = useRef("");
   const shortcutModifier = /Mac/i.test(navigator.platform) ? "⌘" : "Ctrl";
   const active = tabs.find((t) => t.path === activePath);
+  const textTabs = tabs.filter((tab) => !tab.media);
   const splitLeftTab =
-    tabs.find((tab) => tab.path === splitLeftPath) || active || tabs[0];
+    textTabs.find((tab) => tab.path === splitLeftPath) ||
+    (active?.media ? undefined : active) ||
+    textTabs[0];
   const splitRightTab =
-    tabs.find((tab) => tab.path === splitRightPath) ||
-    tabs.find((tab) => tab.path !== splitLeftTab?.path) ||
+    textTabs.find((tab) => tab.path === splitRightPath) ||
+    textTabs.find((tab) => tab.path !== splitLeftTab?.path) ||
     splitLeftTab;
-  const dirty = active && active.content !== active.saved;
-  const hasDirtyTabs = tabs.some((tab) => tab.content !== tab.saved);
+  const dirty = active && !active.media && active.content !== active.saved;
+  const hasDirtyTabs = tabs.some(
+    (tab) => !tab.media && tab.content !== tab.saved,
+  );
   const selectedRuntime = runtimes.find((x) => x.path === runtime);
   const appRuntime =
     runtimes.find(
@@ -573,6 +609,14 @@ export function App() {
   );
   const pythonContext =
     active?.name.toLowerCase().endsWith(".py") || pythonProject;
+  useEffect(() => {
+    document.addEventListener("wheel", scrollHorizontalMenu, {
+      capture: true,
+      passive: false,
+    });
+    return () =>
+      document.removeEventListener("wheel", scrollHorizontalMenu, true);
+  }, []);
   useEffect(() => {
     if (!pythonContext && terminalView !== "shell") setTerminalView("shell");
   }, [pythonContext, terminalView]);
@@ -663,24 +707,12 @@ export function App() {
     });
   }, []);
   useEffect(() => {
-    const offOutput = window.oscode.onPlatformioOutput((data) => {
-      if (/install|download|update|fetch/i.test(data))
-        setActivity({
-          kind: "platformio",
-          label: "PlatformIO is receiving packages",
-          active: true,
-          network: true,
-          cancellable: true,
-        });
-      else if (/build|upload|clean|test|monitor/i.test(data))
-        setActivity({
-          kind: "platformio",
-          label: "PlatformIO is working locally",
-          active: true,
-          network: false,
-          cancellable: true,
-        });
-    });
+    void window.oscode.setAppAttentionBadge(
+      aiAttention ? 1 : 0,
+      aiAttention?.kind || "response",
+    );
+  }, [aiAttention]);
+  useEffect(() => {
     const offState = window.oscode.onPlatformioState((state) => {
       if (!state.running)
         setActivity((current) =>
@@ -731,7 +763,6 @@ export function App() {
         );
     });
     return () => {
-      offOutput();
       offState();
       offAi();
       offAgent();
@@ -918,27 +949,41 @@ export function App() {
       return;
     }
     try {
-      const content = await window.oscode.readFile(e.path);
+      const opened = await window.oscode.openProjectFile(e.path);
       setTabs((x) => [
         ...x,
-        { path: e.path, name: e.name, content, saved: content },
+        opened.kind === "media"
+          ? {
+              path: e.path,
+              name: e.name,
+              content: "",
+              saved: "",
+              media: opened.media,
+            }
+          : {
+              path: e.path,
+              name: e.name,
+              content: opened.content,
+              saved: opened.content,
+            },
       ]);
+      if (opened.kind === "media") setEditorView("single");
       setActivePath(e.path);
-    } catch {
-      setNotice("This file cannot be shown as text.");
+    } catch (error) {
+      setNotice(errorMessage(error, "This file cannot be opened"));
     }
   };
   const toggleSplitView = () => {
-    if (!active) return;
+    if (!active || active.media) return;
     if (editorView === "split") {
       setEditorView("single");
       return;
     }
     setSplitLeftPath(active.path);
     setSplitRightPath((current) =>
-      tabs.some((tab) => tab.path === current && current !== active.path)
+      textTabs.some((tab) => tab.path === current && current !== active.path)
         ? current
-        : tabs.find((tab) => tab.path !== active.path)?.path || active.path,
+        : textTabs.find((tab) => tab.path !== active.path)?.path || active.path,
     );
     setEditorView("split");
   };
@@ -1175,7 +1220,9 @@ export function App() {
       const removedPath = selectedEntry.path;
       const hasUnsavedChanges = tabs.some(
         (tab) =>
-          entryContains(removedPath, tab.path) && tab.content !== tab.saved,
+          !tab.media &&
+          entryContains(removedPath, tab.path) &&
+          tab.content !== tab.saved,
       );
       const result = await window.oscode.trashProjectItem(
         removedPath,
@@ -1206,6 +1253,7 @@ export function App() {
     source: "manual" | "autosave" = "manual",
     announce = source === "manual",
   ) => {
+    if (tab.media) return true;
     if (savingPaths.current.has(tab.path)) return false;
     savingPaths.current.add(tab.path);
     try {
@@ -1276,7 +1324,9 @@ export function App() {
   }, [advanced, advancedSection]);
   useEffect(() => {
     if (!autoSave || !preferencesReady) return;
-    const dirtyTabs = tabs.filter((tab) => tab.content !== tab.saved);
+    const dirtyTabs = tabs.filter(
+      (tab) => !tab.media && tab.content !== tab.saved,
+    );
     if (!dirtyTabs.length) return;
     const timeout = window.setTimeout(() => {
       for (const tab of dirtyTabs) void saveTab(tab, "autosave", false);
@@ -1307,9 +1357,9 @@ export function App() {
           }
           return;
         }
-        let disk: string;
+        let opened: Awaited<ReturnType<typeof window.oscode.openProjectFile>>;
         try {
-          disk = await window.oscode.readFile(change.path);
+          opened = await window.oscode.openProjectFile(change.path);
         } catch {
           if (change.kind === "rename") {
             const tree = await window.oscode.refreshProject().catch(() => null);
@@ -1320,13 +1370,29 @@ export function App() {
           }
           return;
         }
+        if (opened.kind === "media") {
+          setTabs((current) =>
+            current.map((tab) =>
+              tab.path === change.path
+                ? {
+                    ...tab,
+                    content: "",
+                    saved: "",
+                    media: opened.media,
+                  }
+                : tab,
+            ),
+          );
+          return;
+        }
+        const disk = opened.content;
         let conflict = false;
         setTabs((current) =>
           current.map((tab) => {
             if (tab.path !== change.path || tab.saved === disk) return tab;
             if (tab.content === tab.saved || tab.content === disk) {
               externalConflictPaths.current.delete(tab.path);
-              return { ...tab, content: disk, saved: disk };
+              return { ...tab, content: disk, saved: disk, media: undefined };
             }
             conflict = true;
             return tab;
@@ -1509,6 +1575,14 @@ export function App() {
       setNotice(errorMessage(e, "Python could not start"));
     }
   };
+  const stopPythonProcess = () => {
+    setRunning(false);
+    void window.oscode
+      .stopPython()
+      .catch((error) =>
+        setNotice(errorMessage(error, "Python process could not stop")),
+      );
+  };
   const debug = async () => {
     if (!active || !active.name.endsWith(".py")) {
       setNotice("Open a Python script to debug it.");
@@ -1635,7 +1709,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 11,
+      version: 12,
       theme,
       locale,
       sidebarSide,
@@ -1827,6 +1901,15 @@ export function App() {
     if (!pythonManagerOpen) return;
     void refreshPythonPackages();
   }, [pythonManagerOpen, project?.root, runtime]);
+  useEffect(
+    () =>
+      window.oscode.onPythonEnvironmentChanged(() => {
+        void refreshRuntimes(true).then(() => {
+          if (pythonManagerOpen) void refreshPythonPackages();
+        });
+      }),
+    [project?.root, pythonManagerOpen, runtime],
+  );
   const selectRuntime = async (value: string) => {
     setRuntime(value);
     setPythonPackages([]);
@@ -1906,6 +1989,15 @@ export function App() {
     if (!selected) return "selected Python";
     return runtimeLabel(selected);
   }, [runtime, runtimes]);
+  const filteredPythonPackages = useMemo(
+    () =>
+      pythonPackages.filter((item) =>
+        `${item.name} ${item.version}`
+          .toLowerCase()
+          .includes(pythonPackageSearch.toLowerCase()),
+      ),
+    [pythonPackageSearch, pythonPackages],
+  );
   const beginHorizontalResize = (event: ReactPointerEvent) => {
     event.preventDefault();
     const start = event.clientX;
@@ -2000,9 +2092,22 @@ export function App() {
     const updated = await Promise.all(
       tabs.map(async (tab) => {
         const relative = tab.path.replace(/\\/g, "/").slice(root.length + 1);
-        if (!changed.has(relative) || tab.content !== tab.saved) return tab;
-        const content = await window.oscode.readFile(tab.path);
-        return { ...tab, content, saved: content };
+        if (!changed.has(relative) || (!tab.media && tab.content !== tab.saved))
+          return tab;
+        const opened = await window.oscode.openProjectFile(tab.path);
+        return opened.kind === "media"
+          ? {
+              ...tab,
+              content: "",
+              saved: "",
+              media: opened.media,
+            }
+          : {
+              ...tab,
+              content: opened.content,
+              saved: opened.content,
+              media: undefined,
+            };
       }),
     );
     setTabs(updated);
@@ -2025,6 +2130,7 @@ export function App() {
     setNotifications((current) =>
       current.filter((item) => item.kind !== "auto-update-prompt"),
     );
+    setNotificationsOpen(false);
     try {
       const status = await window.oscode.setAppAutoUpdate(enabled);
       setUpdateStatus(status);
@@ -2084,6 +2190,39 @@ export function App() {
     ["available", "downloading", "ready", "installing"].includes(
       updateStatus.state,
     );
+  const handleAiAttentionChange = (
+    next: AiAttention | null,
+    completePermission: (() => Promise<void>) | null = null,
+  ) => {
+    permissionCompletionRef.current = completePermission;
+    setPermissionCompletionReady(Boolean(completePermission));
+    setAiAttention(next);
+    setNotifications((current) => {
+      const remaining = current.filter((item) => item.kind !== "ai-attention");
+      if (!next) return remaining;
+      return [
+        ...remaining.slice(-39),
+        {
+          id: "ai-attention",
+          kind: "ai-attention",
+          message: `${next.title}${next.detail ? ` · ${next.detail}` : ""}`,
+          createdAt: Date.now(),
+        },
+      ];
+    });
+  };
+  const completeComputerPermission = async () => {
+    if (!permissionCompletionRef.current || permissionCompleting) return;
+    setPermissionCompleting(true);
+    try {
+      await permissionCompletionRef.current();
+    } finally {
+      setPermissionCompleting(false);
+    }
+  };
+  const computerPermissionPending =
+    activity?.kind === "computer" && activity.phase === "permission";
+  const activityIsDownload = activity?.kind === "download" && activity.active;
   return (
     <div
       className={`app ${theme}`}
@@ -2091,6 +2230,73 @@ export function App() {
       dir={locale === "ar" ? "rtl" : "ltr"}
     >
       <div className="mac-titlebar-safe-area" aria-hidden="true" />
+      {activity?.kind === "computer" && activity.active && (
+        <aside
+          className="computer-control-banner"
+          role="status"
+          aria-live="assertive"
+        >
+          <span className="computer-control-banner-icon" aria-hidden="true">
+            <FeatherIcon
+              icon={computerPermissionPending ? "shield" : "mouse-pointer"}
+              size="18"
+            />
+          </span>
+          <span>
+            <strong>
+              {computerPermissionPending
+                ? "Computer Control needs permission"
+                : "Computer Control active"}
+            </strong>
+            <small>
+              {computerPermissionPending
+                ? activity.detail ||
+                  "Approve access in your operating-system settings, then return here."
+                : `${activity.target || "Visible application"} · You always keep control of the pointer`}
+            </small>
+          </span>
+          <span className="computer-control-shortcut">
+            {computerPermissionPending ? (
+              <>Approve it in settings, then click Completed</>
+            ) : (
+              <>
+                Press <kbd>Esc</kbd> anywhere to stop
+              </>
+            )}
+          </span>
+          <span
+            className="computer-control-actions horizontal-menu-scroll"
+            data-horizontal-menu
+          >
+            {computerPermissionPending && permissionCompletionReady && (
+              <button
+                type="button"
+                className="computer-permission-complete"
+                aria-label="Computer permission completed"
+                disabled={permissionCompleting}
+                onClick={() => void completeComputerPermission()}
+              >
+                <FeatherIcon icon="check" size="15" />
+                {permissionCompleting ? "Checking…" : "Completed"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="computer-control-stop"
+              aria-label="Stop Computer Control"
+              aria-keyshortcuts="Escape"
+              onClick={async () => {
+                await window.oscode.stopAgentControl();
+                setActivity(null);
+                handleAiAttentionChange(null);
+              }}
+            >
+              <FeatherIcon icon="square" size="15" />
+              Stop control
+            </button>
+          </span>
+        </aside>
+      )}
       <header className="topbar">
         <div className="brand" aria-label="osCode">
           <img src={osCodeIcon} alt="" aria-hidden="true" />
@@ -2103,142 +2309,158 @@ export function App() {
           className={`global-activity ${activity || notice ? "has-status" : ""}`}
           aria-live="polite"
         >
-          <button
-            type="button"
-            className={`global-search-toggle ${globalSearchOpen ? "active" : ""}`}
-            aria-label={globalSearchOpen ? "Close search" : "Open search"}
-            aria-expanded={globalSearchOpen}
-            disabled={!project}
-            onClick={() => {
-              setGlobalSearchOpen((open) => !open);
-              if (globalSearchOpen) setGlobalSearch("");
-            }}
+          <div
+            className="global-activity-strip horizontal-menu-scroll"
+            data-horizontal-menu
           >
-            <FeatherIcon icon={globalSearchOpen ? "x" : "search"} size="17" />
-          </button>
-          {globalSearchOpen && (
-            <label className="global-search expanded">
-              <FeatherIcon icon="search" size="17" />
-              <input
-                autoFocus
-                type="search"
-                value={globalSearch}
-                aria-label="Search project and AI chats"
-                placeholder="Search code and chats"
-                onChange={(event) => setGlobalSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    setGlobalSearch("");
-                    setGlobalSearchOpen(false);
-                  }
-                }}
-              />
-            </label>
-          )}
-          {(browserActivity?.active || browserViewOpen || browserSnapshot) && (
-            <div className="browser-view-control">
-              <span className="divider" />
-              <button
-                className={browserViewOpen ? "active" : ""}
-                aria-pressed={browserViewOpen}
-                title="Watch the agent's isolated browser in an editor tab"
-                onClick={() => void openAgentBrowserView()}
-              >
-                <FeatherIcon icon="compass" size="16" />
-                Agent Browser
-              </button>
-            </div>
-          )}
-          {(activity || notice) && (
-            <div
-              className={`top-status ${activity?.network ? "network" : ""} ${activity?.kind === "security" ? "security" : ""}`}
-              role="button"
-              tabIndex={0}
-              title="Open activity details"
+            <button
+              type="button"
+              className={`global-search-toggle ${globalSearchOpen ? "active" : ""}`}
+              aria-label={globalSearchOpen ? "Close search" : "Open search"}
+              aria-expanded={globalSearchOpen}
+              disabled={!project}
               onClick={() => {
-                const message = activity
-                  ? [activity.label, activity.url, activity.target]
-                      .filter(Boolean)
-                      .join(" · ")
-                  : notice;
-                if (message)
-                  setNotifications((current) =>
-                    current.some(
-                      (item) =>
-                        item.message === message &&
-                        Date.now() - item.createdAt < 2_000,
-                    )
-                      ? current
-                      : [
-                          ...current.slice(-39),
-                          {
-                            id: crypto.randomUUID(),
-                            message,
-                            createdAt: Date.now(),
-                          },
-                        ],
-                  );
-                setNotificationsOpen(true);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  setNotificationsOpen(true);
-                }
+                setGlobalSearchOpen((open) => !open);
+                if (globalSearchOpen) setGlobalSearch("");
               }}
             >
-              {activity?.network && <FeatherIcon icon="wifi" size="17" />}
-              {activity?.kind === "computer" && (
-                <FeatherIcon icon="mouse-pointer" size="17" />
-              )}
-              {activity?.kind === "download" && (
-                <FeatherIcon icon="download" size="17" />
-              )}
-              {activity?.kind === "platformio" && (
-                <FeatherIcon icon="cpu" size="17" />
-              )}
-              {activity?.kind === "queue" && (
-                <FeatherIcon icon="clock" size="17" />
-              )}
-              {activity?.kind === "security" && (
-                <FeatherIcon icon="shield" size="17" />
-              )}
-              <span>{activity?.label || notice}</span>
-              {activity && (
-                <i
-                  className={
-                    typeof activity.progress === "number" ? "determinate" : ""
-                  }
-                  role="progressbar"
-                  aria-label={activity.label}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={activity.progress}
+              <FeatherIcon icon={globalSearchOpen ? "x" : "search"} size="17" />
+            </button>
+            {globalSearchOpen && (
+              <label className="global-search expanded">
+                <FeatherIcon icon="search" size="17" />
+                <input
+                  autoFocus
+                  type="search"
+                  value={globalSearch}
+                  aria-label="Search project and AI chats"
+                  placeholder="Search code and chats"
+                  onChange={(event) => setGlobalSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setGlobalSearch("");
+                      setGlobalSearchOpen(false);
+                    }
+                  }}
+                />
+              </label>
+            )}
+            {(browserActivity?.active ||
+              browserViewOpen ||
+              browserSnapshot) && (
+              <div className="browser-view-control">
+                <span className="divider" />
+                <button
+                  className={browserViewOpen ? "active" : ""}
+                  aria-pressed={browserViewOpen}
+                  title="Watch the agent's isolated browser in an editor tab"
+                  onClick={() => void openAgentBrowserView()}
                 >
-                  {typeof activity.progress === "number" && (
-                    <span
-                      style={{
-                        width: `${Math.max(0, Math.min(100, activity.progress))}%`,
-                      }}
-                    />
-                  )}
-                </i>
-              )}
-              <button
-                aria-label={
-                  activity ? "Stop current activity" : "Dismiss message"
-                }
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (activity) void window.oscode.stopCurrentActivity();
-                  setActivity(null);
-                  setNotice("");
+                  <FeatherIcon icon="compass" size="16" />
+                  Agent Browser
+                </button>
+              </div>
+            )}
+            {(activity || notice) && (
+              <div
+                className={`top-status ${activity?.network ? "network" : ""} ${activity?.kind === "security" ? "security" : ""}`}
+                role="button"
+                tabIndex={0}
+                title="Open activity details"
+                onClick={() => {
+                  const message = activity
+                    ? [activity.label, activity.url, activity.target]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : notice;
+                  if (message)
+                    setNotifications((current) =>
+                      current.some(
+                        (item) =>
+                          item.message === message &&
+                          Date.now() - item.createdAt < 2_000,
+                      )
+                        ? current
+                        : [
+                            ...current.slice(-39),
+                            {
+                              id: crypto.randomUUID(),
+                              message,
+                              createdAt: Date.now(),
+                            },
+                          ],
+                    );
+                  setNotificationsOpen(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setNotificationsOpen(true);
+                  }
                 }}
               >
-                <FeatherIcon icon="x" size="16" />
-              </button>
-            </div>
-          )}
+                {activity?.network && <FeatherIcon icon="wifi" size="17" />}
+                {activity?.kind === "computer" && (
+                  <FeatherIcon icon="mouse-pointer" size="17" />
+                )}
+                {activity?.kind === "download" && (
+                  <FeatherIcon icon="download" size="17" />
+                )}
+                {activity?.kind === "platformio" && (
+                  <FeatherIcon icon="cpu" size="17" />
+                )}
+                {activity?.kind === "queue" && (
+                  <FeatherIcon icon="clock" size="17" />
+                )}
+                {activity?.kind === "security" && (
+                  <FeatherIcon icon="shield" size="17" />
+                )}
+                <span>{activity?.label || notice}</span>
+                {activityIsDownload &&
+                  typeof activity.progress === "number" && (
+                    <em className="activity-percent">
+                      {Math.round(
+                        Math.max(0, Math.min(100, activity.progress)),
+                      )}
+                      %
+                    </em>
+                  )}
+                {activityIsDownload && (
+                  <i
+                    className={
+                      typeof activity.progress === "number" ? "determinate" : ""
+                    }
+                    role="progressbar"
+                    aria-label={activity.label}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={activity.progress}
+                  >
+                    {typeof activity.progress === "number" && (
+                      <span
+                        style={{
+                          width: `${Math.max(0, Math.min(100, activity.progress))}%`,
+                        }}
+                      />
+                    )}
+                  </i>
+                )}
+                <button
+                  aria-label={
+                    activity ? "Stop current activity" : "Dismiss message"
+                  }
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (activity) void window.oscode.stopCurrentActivity();
+                    setActivity(null);
+                    setNotice("");
+                  }}
+                >
+                  <FeatherIcon icon="x" size="16" />
+                </button>
+              </div>
+            )}
+          </div>
           {!!globalSearch.trim() && (
             <div
               className="global-search-results"
@@ -2299,7 +2521,10 @@ export function App() {
             </div>
           )}
         </div>
-        <div className="top-actions">
+        <div
+          className="top-actions horizontal-menu-scroll"
+          data-horizontal-menu
+        >
           {pythonContext && (
             <>
               <select
@@ -2320,10 +2545,8 @@ export function App() {
               <IconButton
                 icon="square"
                 label="Stop"
-                onClick={() => {
-                  window.oscode.stopPython();
-                  setRunning(false);
-                }}
+                className="top-run-stop"
+                onClick={stopPythonProcess}
                 disabled={!running}
               />
               <span className="divider" />
@@ -2350,8 +2573,14 @@ export function App() {
           <IconButton
             icon="bell"
             label="Notifications"
+            badge={aiAttention ? 1 : undefined}
             active={notificationsOpen}
-            onClick={() => setNotificationsOpen((open) => !open)}
+            onClick={() => {
+              setNotificationsOpen((open) => !open);
+              setAdvanced(false);
+              setSettingsOpen(false);
+              setPlatformioOpen(false);
+            }}
           />
           <IconButton
             icon="cpu"
@@ -2362,6 +2591,7 @@ export function App() {
               setPlatformioOpen((open) => !open);
               setAdvanced(false);
               setSettingsOpen(false);
+              setNotificationsOpen(false);
             }}
           />
           <span className="divider" />
@@ -2374,8 +2604,15 @@ export function App() {
           <IconButton
             icon="message-square"
             label={tr("Chat", "المحادثة")}
+            badge={aiAttention ? 1 : undefined}
             active={aiVisible}
-            onClick={() => setAiVisible((visible) => !visible)}
+            onClick={() => {
+              const opening = !aiVisible;
+              setAiVisible(opening);
+              if (opening) setNotificationsOpen(false);
+              if (opening && aiAttention?.kind !== "permission")
+                handleAiAttentionChange(null);
+            }}
           />
           <span className="divider" />
           <IconButton
@@ -2386,6 +2623,7 @@ export function App() {
               setAdvanced(!advanced);
               setSettingsOpen(false);
               setPlatformioOpen(false);
+              setNotificationsOpen(false);
             }}
           />
           <IconButton
@@ -2396,6 +2634,7 @@ export function App() {
               setSettingsOpen(!settingsOpen);
               setAdvanced(false);
               setPlatformioOpen(false);
+              setNotificationsOpen(false);
             }}
           />
         </div>
@@ -2404,12 +2643,17 @@ export function App() {
         <div className="notifications-popover" aria-label="Notifications">
           <div>
             <h2>Notifications</h2>
-            <span className="notification-actions">
+            <span
+              className="notification-actions horizontal-menu-scroll"
+              data-horizontal-menu
+            >
               <button
                 onClick={() =>
                   setNotifications((current) =>
                     current.filter(
-                      (item) => item.kind === "auto-update-prompt",
+                      (item) =>
+                        item.kind === "auto-update-prompt" ||
+                        item.kind === "ai-attention",
                     ),
                   )
                 }
@@ -2454,7 +2698,10 @@ export function App() {
                       </button>
                     </div>
                   ) : item.kind === "app-update" ? (
-                    <div className="notification-choice update-actions">
+                    <div
+                      className="notification-choice update-actions horizontal-menu-scroll"
+                      data-horizontal-menu
+                    >
                       <button
                         onClick={() =>
                           setNotifications((current) =>
@@ -2478,6 +2725,29 @@ export function App() {
                       >
                         {updateActionLabel}
                       </button>
+                    </div>
+                  ) : item.kind === "ai-attention" ? (
+                    <div className="notification-choice">
+                      <button
+                        onClick={() => {
+                          setAiVisible(true);
+                          setNotificationsOpen(false);
+                          if (aiAttention?.kind !== "permission")
+                            handleAiAttentionChange(null);
+                        }}
+                      >
+                        Open chat
+                      </button>
+                      {aiAttention?.kind === "permission" &&
+                        permissionCompletionReady && (
+                          <button
+                            className="primary"
+                            disabled={permissionCompleting}
+                            onClick={() => void completeComputerPermission()}
+                          >
+                            {permissionCompleting ? "Checking…" : "Completed"}
+                          </button>
+                        )}
                     </div>
                   ) : (
                     <button
@@ -2527,7 +2797,10 @@ export function App() {
               {selectedCommit.author} ·{" "}
               {new Date(selectedCommit.date).toLocaleString()}
             </p>
-            <div className="git-commit-quick-actions">
+            <div
+              className="git-commit-quick-actions horizontal-menu-scroll"
+              data-horizontal-menu
+            >
               <button
                 onClick={async () => {
                   if (
@@ -2709,12 +2982,16 @@ export function App() {
                   <IconButton
                     icon="folder"
                     label={tr("Browse", "تصفح")}
+                    className="project-browse-action"
                     onClick={openProject}
                   />
                 </div>
                 {project && (
                   <>
-                    <div className="explorer-toolbar">
+                    <div
+                      className="explorer-toolbar horizontal-menu-scroll"
+                      data-horizontal-menu
+                    >
                       <IconButton
                         icon="file-plus"
                         label="New file"
@@ -3126,7 +3403,10 @@ export function App() {
                             </span>
                             <small>{git.branches.length}</small>
                           </summary>
-                          <div className="git-branch-controls">
+                          <div
+                            className="git-branch-controls horizontal-menu-scroll"
+                            data-horizontal-menu
+                          >
                             <select
                               aria-label="Local branch"
                               value={branchTarget}
@@ -3242,7 +3522,10 @@ export function App() {
                               setGitUtilityName(event.target.value)
                             }
                           />
-                          <div className="git-utility-actions">
+                          <div
+                            className="git-utility-actions horizontal-menu-scroll"
+                            data-horizontal-menu
+                          >
                             <button
                               disabled={!gitUtilityName.trim()}
                               onClick={() =>
@@ -3484,7 +3767,10 @@ export function App() {
                             value={remote}
                             onChange={(e) => setRemote(e.target.value)}
                           />
-                          <div className="git-remote-actions">
+                          <div
+                            className="git-remote-actions horizontal-menu-scroll"
+                            data-horizontal-menu
+                          >
                             <button
                               disabled={!remote.trim() || remote === git.remote}
                               onClick={() => void gitAction("remote", remote)}
@@ -3535,7 +3821,8 @@ export function App() {
         )}
         <main className="editor-area">
           <div
-            className="tabs"
+            className="tabs horizontal-menu-scroll"
+            data-horizontal-menu
             ref={editorTabsRef}
             onWheel={(event) => {
               const strip = event.currentTarget;
@@ -3544,40 +3831,54 @@ export function App() {
             }}
           >
             {browserViewOpen && (
-              <button
+              <div
                 className={`tab browser-tab ${activePath === agentBrowserTabPath ? "active" : ""}`}
-                onClick={() => setActivePath(agentBrowserTabPath)}
               >
-                <FeatherIcon icon="compass" size="14" />
-                <span>Agent browser</span>
+                <button
+                  type="button"
+                  className="tab-select"
+                  onClick={() => setActivePath(agentBrowserTabPath)}
+                  aria-label="Open Agent browser tab"
+                >
+                  <FeatherIcon icon="compass" size="14" />
+                  <span>Agent browser</span>
+                </button>
                 {browserSnapshot?.loading && <i />}
-                <FeatherIcon
-                  icon="x"
-                  size="13"
-                  onClick={(event) => {
-                    event.stopPropagation();
+                <button
+                  type="button"
+                  className="tab-close"
+                  aria-label="Close Agent browser tab"
+                  onClick={() => {
                     setBrowserViewOpen(false);
                   }}
-                />
-              </button>
+                >
+                  <FeatherIcon icon="x" size="13" />
+                </button>
+              </div>
             )}
             {tabs.map((t) => (
-              <button
+              <div
                 className={`tab ${t.path === activePath ? "active" : ""}`}
-                onClick={() => setActivePath(t.path)}
                 key={t.path}
               >
-                <span>{t.name}</span>
-                {t.content !== t.saved && <i />}
-                <FeatherIcon
-                  icon="x"
-                  size="13"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void closeTab(t.path);
-                  }}
-                />
-              </button>
+                <button
+                  type="button"
+                  className="tab-select"
+                  onClick={() => setActivePath(t.path)}
+                  aria-label={`Open ${t.name}`}
+                >
+                  <span>{t.name}</span>
+                </button>
+                {!t.media && t.content !== t.saved && <i />}
+                <button
+                  type="button"
+                  className="tab-close"
+                  aria-label={`Close ${t.name}`}
+                  onClick={() => void closeTab(t.path)}
+                >
+                  <FeatherIcon icon="x" size="13" />
+                </button>
+              </div>
             ))}
           </div>
           {activePath === agentBrowserTabPath && browserViewOpen ? (
@@ -3600,7 +3901,10 @@ export function App() {
                 <output title={browserSnapshot?.url || ""}>
                   {browserSnapshot?.url || "Waiting for a page…"}
                 </output>
-                <div className="agent-browser-actions">
+                <div
+                  className="agent-browser-actions horizontal-menu-scroll"
+                  data-horizontal-menu
+                >
                   <button
                     title="Show the live browser window"
                     onClick={() => void showAgentBrowserWindow()}
@@ -3624,10 +3928,13 @@ export function App() {
                 )}
               </div>
             </section>
+          ) : active?.media ? (
+            <MediaPreview file={active.media} name={active.name} />
           ) : active ? (
             <>
               <div
-                className="editor-command-bar"
+                className="editor-command-bar horizontal-menu-scroll"
+                data-horizontal-menu
                 role="toolbar"
                 aria-label="Editor commands"
               >
@@ -3721,7 +4028,8 @@ export function App() {
               </div>
               {isMarkdownFile(active.name) && (
                 <div
-                  className="markdown-toolbar"
+                  className="markdown-toolbar horizontal-menu-scroll"
+                  data-horizontal-menu
                   role="group"
                   aria-label="Markdown view"
                 >
@@ -3786,10 +4094,10 @@ export function App() {
                               },
                             ],
                             colors: {
-                              "editor.background": "#111719",
-                              "editorLineNumber.foreground": "#60727A",
+                              "editor.background": "#171819",
+                              "editorLineNumber.foreground": "#687174",
                               "editorCursor.foreground": "#89cff0",
-                              "editor.selectionBackground": "#294855",
+                              "editor.selectionBackground": "#34484f",
                             },
                           });
                           m.editor.defineTheme("oscode-light", {
@@ -3893,7 +4201,7 @@ export function App() {
                     }
                   >
                     <SplitEditor
-                      tabs={tabs}
+                      tabs={textTabs}
                       leftPath={splitLeftTab?.path || active.path}
                       rightPath={splitRightTab?.path || active.path}
                       theme={
@@ -4124,7 +4432,7 @@ export function App() {
                     onClick={() => setTheme("dark")}
                   >
                     <FeatherIcon icon="droplet" size="14" />
-                    {tr("Grey + blue", "رمادي وأزرق")}
+                    {tr("Gunmetal + blue", "رمادي معدني وأزرق")}
                   </button>
                   <button
                     className={theme === "blue-dark" ? "active" : ""}
@@ -4345,15 +4653,23 @@ export function App() {
             >
               <div className="advanced-title">
                 {advancedSection !== "menu" && (
-                  <button onClick={() => setAdvancedSection("menu")}>
-                    <FeatherIcon icon="arrow-left" size="14" />
-                  </button>
+                  <IconButton
+                    icon="arrow-left"
+                    label="Back to Advanced"
+                    onClick={() => setAdvancedSection("menu")}
+                  />
                 )}
-                <span className="eyebrow">
+                <h3>
                   {advancedSection === "menu"
-                    ? tr("ADVANCED", "متقدم")
-                    : advancedSection.toUpperCase()}
-                </span>
+                    ? tr("Advanced", "متقدم")
+                    : advancedSection === "intelligence"
+                      ? tr("Code help", "مساعدة الكود")
+                      : advancedSection === "runtimes"
+                        ? tr("Python", "Python")
+                        : advancedSection === "mcp"
+                          ? "MCP"
+                          : tr("Debug", "التصحيح")}
+                </h3>
                 <IconButton
                   icon="x"
                   label="Close Advanced"
@@ -4363,24 +4679,27 @@ export function App() {
                   }}
                 />
               </div>
-              {advancedSection === "menu" &&
-                [
-                  ["activity", "debug", tr("Debug", "التصحيح")],
-                  ["zap", "intelligence", tr("Code help", "مساعدة الكود")],
-                  ["cpu", "runtimes", tr("Python", "Python")],
-                  ["share-2", "mcp", "MCP"],
-                ].map(([i, key, x]) => (
-                  <button
-                    key={x}
-                    onClick={() =>
-                      setAdvancedSection(key as typeof advancedSection)
-                    }
-                  >
-                    <FeatherIcon icon={i as never} size="15" />
-                    {x}
-                    <FeatherIcon icon="chevron-right" size="13" />
-                  </button>
-                ))}
+              {advancedSection === "menu" && (
+                <div className="advanced-menu">
+                  {[
+                    ["activity", "debug", tr("Debug", "التصحيح")],
+                    ["zap", "intelligence", tr("Code help", "مساعدة الكود")],
+                    ["cpu", "runtimes", tr("Python", "Python")],
+                    ["share-2", "mcp", "MCP"],
+                  ].map(([i, key, x]) => (
+                    <button
+                      key={x}
+                      onClick={() =>
+                        setAdvancedSection(key as typeof advancedSection)
+                      }
+                    >
+                      <FeatherIcon icon={i as never} size="18" />
+                      <span>{x}</span>
+                      <FeatherIcon icon="chevron-right" size="16" />
+                    </button>
+                  ))}
+                </div>
+              )}
               {advancedSection === "debug" && (
                 <div className="advanced-content">
                   <p>
@@ -4586,13 +4905,9 @@ export function App() {
             <span>
               <FeatherIcon icon="terminal" size="15" />
               {tr("Terminal", "الطرفية")}
-              {projectEnvironment && (
-                <i className="env-badge">
-                  {selectedRuntime?.scope === "app-project"
-                    ? "App env"
-                    : selectedRuntime?.version
-                        .replace(/ · .*/, "")
-                        .replace("Project ", "")}
+              {pythonContext && runtime && (
+                <i className="env-badge" title={activeRuntimeLabel}>
+                  {activeRuntimeLabel}
                 </i>
               )}
             </span>
@@ -4604,7 +4919,8 @@ export function App() {
           {terminalOpen && (
             <div className="terminal-panel">
               <div
-                className="terminal-tabs"
+                className="terminal-tabs horizontal-menu-scroll"
+                data-horizontal-menu
                 role="tablist"
                 aria-label="Terminal views"
               >
@@ -4663,6 +4979,7 @@ export function App() {
                       <IconButton
                         icon="plus"
                         label="New terminal"
+                        className="terminal-session-control"
                         onClick={() => {
                           const next = {
                             id: `shell-${globalThis.crypto.randomUUID()}`,
@@ -4676,6 +4993,7 @@ export function App() {
                       <IconButton
                         icon="refresh-cw"
                         label="Restart terminal"
+                        className="terminal-session-control"
                         disabled={!activeTerminalId}
                         onClick={() => {
                           if (
@@ -4697,14 +5015,33 @@ export function App() {
                   </div>
                 )}
                 {terminalView === "run" && (
-                  <button
-                    type="button"
-                    className="terminal-clear"
-                    disabled={!runOutput}
-                    onClick={() => setRunOutput("")}
-                  >
-                    Clear
-                  </button>
+                  <div className="terminal-run-actions">
+                    <button
+                      type="button"
+                      onClick={() => void run()}
+                      disabled={
+                        running || !runtime || !active?.name.endsWith(".py")
+                      }
+                    >
+                      <FeatherIcon icon="play" size="14" /> Run script
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-run-stop"
+                      disabled={!running}
+                      onClick={stopPythonProcess}
+                    >
+                      <FeatherIcon icon="square" size="14" /> Stop
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-clear"
+                      disabled={!runOutput}
+                      onClick={() => setRunOutput("")}
+                    >
+                      Clear
+                    </button>
+                  </div>
                 )}
                 {pythonContext && (
                   <div className="terminal-python-tools">
@@ -4810,10 +5147,14 @@ export function App() {
                         <small>
                           {pythonPackageLocation === "project"
                             ? "Project .venv · inside project"
-                            : "App environment · outside project"}
+                            : "App environment · outside project"}{" "}
+                          · {pythonPackages.length} installed
                         </small>
                       </span>
-                      <div className="python-drawer-actions">
+                      <div
+                        className="python-drawer-actions horizontal-menu-scroll"
+                        data-horizontal-menu
+                      >
                         <button
                           aria-label="Refresh installed Python packages"
                           disabled={Boolean(packageOperation)}
@@ -4848,9 +5189,10 @@ export function App() {
                             : "Using osCode application data"}
                         </b>
                         <small>
+                          {activeRuntimeLabel}
                           {pythonPackageLocation === "project"
-                            ? "Packages are stored in this project's .venv folder."
-                            : `${activeRuntimeLabel}. Packages stay outside the project folder.`}
+                            ? " · Packages are stored in this project's .venv folder."
+                            : " · Packages stay outside the project folder."}
                         </small>
                       </span>
                       {pythonPackageLocation === "project" ? (
@@ -4891,37 +5233,53 @@ export function App() {
                         <small>{packageOperation}…</small>
                       </div>
                     )}
-                    <form
-                      className="python-package-form"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void installProjectPackage();
-                      }}
-                    >
-                      <input
-                        aria-label="Package to install"
-                        placeholder="Package name, e.g. ultralytics"
-                        value={pythonPackage}
-                        disabled={
-                          !project || !runtime || Boolean(packageOperation)
-                        }
-                        onChange={(event) =>
-                          setPythonPackage(event.target.value)
-                        }
-                      />
-                      <button
-                        type="submit"
-                        disabled={
-                          !project ||
-                          !runtime ||
-                          !pythonPackage.trim() ||
-                          Boolean(packageOperation)
-                        }
+                    <div className="python-package-controls">
+                      <form
+                        className="python-package-form"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void installProjectPackage();
+                        }}
                       >
-                        <FeatherIcon icon="plus" size="15" />
-                        Add
-                      </button>
-                    </form>
+                        <input
+                          aria-label="Package to install"
+                          placeholder="Package name, e.g. ultralytics"
+                          value={pythonPackage}
+                          disabled={
+                            !project || !runtime || Boolean(packageOperation)
+                          }
+                          onChange={(event) =>
+                            setPythonPackage(event.target.value)
+                          }
+                        />
+                        <button
+                          type="submit"
+                          disabled={
+                            !project ||
+                            !runtime ||
+                            !pythonPackage.trim() ||
+                            Boolean(packageOperation)
+                          }
+                        >
+                          <FeatherIcon icon="plus" size="15" />
+                          Add
+                        </button>
+                      </form>
+                      {!!pythonPackages.length && (
+                        <label className="python-package-search">
+                          <FeatherIcon icon="search" size="15" />
+                          <input
+                            type="search"
+                            aria-label="Filter installed Python packages"
+                            placeholder="Filter installed libraries"
+                            value={pythonPackageSearch}
+                            onChange={(event) =>
+                              setPythonPackageSearch(event.target.value)
+                            }
+                          />
+                        </label>
+                      )}
+                    </div>
                     {!pythonPackageEnvironment && !packageOperation && (
                       <p className="python-package-hint">
                         Add creates an app-managed environment for this project.
@@ -4929,51 +5287,34 @@ export function App() {
                         directory.
                       </p>
                     )}
-                    {!!pythonPackages.length && (
-                      <label className="python-package-search">
-                        <FeatherIcon icon="search" size="15" />
-                        <input
-                          type="search"
-                          aria-label="Filter installed Python packages"
-                          placeholder="Filter installed libraries"
-                          value={pythonPackageSearch}
-                          onChange={(event) =>
-                            setPythonPackageSearch(event.target.value)
-                          }
-                        />
-                      </label>
-                    )}
-                    <div className="python-package-list">
-                      {pythonPackages
-                        .filter((item) =>
-                          `${item.name} ${item.version}`
-                            .toLowerCase()
-                            .includes(pythonPackageSearch.toLowerCase()),
-                        )
-                        .map((item) => (
-                          <article key={item.name}>
-                            <span>
-                              <b>{item.name}</b>
-                              <small>
-                                {item.version}
-                                {item.editableProjectLocation
-                                  ? " · editable"
-                                  : ""}
-                              </small>
-                            </span>
-                            <button
-                              aria-label={`Remove ${item.name}`}
-                              title={`Remove ${item.name}`}
-                              disabled={Boolean(packageOperation)}
-                              onClick={() =>
-                                void uninstallProjectPackage(item.name)
-                              }
-                            >
-                              <FeatherIcon icon="trash-2" size="14" />
-                              Remove
-                            </button>
-                          </article>
-                        ))}
+                    <div
+                      className="python-package-list"
+                      aria-label="Installed Python packages"
+                    >
+                      {filteredPythonPackages.map((item) => (
+                        <article key={item.name}>
+                          <span>
+                            <b>{item.name}</b>
+                            <small>
+                              {item.version}
+                              {item.editableProjectLocation
+                                ? " · editable"
+                                : ""}
+                            </small>
+                          </span>
+                          <button
+                            aria-label={`Remove ${item.name}`}
+                            title={`Remove ${item.name}`}
+                            disabled={Boolean(packageOperation)}
+                            onClick={() =>
+                              void uninstallProjectPackage(item.name)
+                            }
+                          >
+                            <FeatherIcon icon="trash-2" size="14" />
+                            Remove
+                          </button>
+                        </article>
+                      ))}
                       {!packageOperation && !pythonPackages.length && (
                         <p>
                           No libraries installed yet. Add a package here, or
@@ -4983,11 +5324,9 @@ export function App() {
                       )}
                       {!packageOperation &&
                         Boolean(pythonPackages.length) &&
-                        !pythonPackages.some((item) =>
-                          `${item.name} ${item.version}`
-                            .toLowerCase()
-                            .includes(pythonPackageSearch.toLowerCase()),
-                        ) && <p>No installed libraries match this search.</p>}
+                        !filteredPythonPackages.length && (
+                          <p>No installed libraries match this search.</p>
+                        )}
                     </div>
                   </aside>
                 )}
@@ -5071,7 +5410,12 @@ export function App() {
               onHardwarePreference={setAiHardware}
               onChanged={refreshAfterAiChanges}
               onNotice={setNotice}
-              onChatOpened={() => setRequestedAiChat("")}
+              onChatOpened={() => {
+                setRequestedAiChat("");
+                if (aiAttention?.kind !== "permission")
+                  handleAiAttentionChange(null);
+              }}
+              onAttentionChange={handleAiAttentionChange}
             />
           </>
         )}

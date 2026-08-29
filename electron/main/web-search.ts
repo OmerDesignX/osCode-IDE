@@ -3,6 +3,7 @@ import net from "node:net";
 import {
   assertReceiveOnlyPublicUrl,
   assertSafeOutboundText,
+  guardedUntrustedContent,
 } from "./outbound-guard.js";
 
 function privateAddress(address: string) {
@@ -251,7 +252,12 @@ export async function searchWeb(query: string) {
       target = redirect.searchParams.get("uddg") || redirect.toString();
       const checked = await safeUrl(target);
       results.push({
-        title: plainText(match[2]).slice(0, 180),
+        title: plainText(match[2])
+          .replace(
+            /\b(?:ignore|override|disregard)\b.{0,80}\b(?:instructions?|prompt|rules?)\b/gi,
+            "[blocked untrusted instruction]",
+          )
+          .slice(0, 180),
         url: checked.toString(),
       });
     } catch {
@@ -263,5 +269,8 @@ export async function searchWeb(query: string) {
 
 export async function fetchWebPage(url: string) {
   const page = await boundedFetch(url.slice(0, 2000));
-  return `${page.url}\n\n${plainText(page.text).slice(0, 24_000)}`;
+  return guardedUntrustedContent(
+    plainText(page.text).slice(0, 24_000),
+    page.url,
+  );
 }

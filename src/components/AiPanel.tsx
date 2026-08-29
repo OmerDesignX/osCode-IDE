@@ -6,6 +6,7 @@ import { AiMessageContent } from "./AiMessageContent";
 import type {
   AiActionEntry,
   AiAgentState,
+  AiAttention,
   AiChatAttachment,
   AiChatMessage,
   AiChatThread,
@@ -55,6 +56,10 @@ type Props = {
   onChanged: (files: string[]) => Promise<void>;
   onNotice: (message: string) => void;
   onChatOpened?: () => void;
+  onAttentionChange?: (
+    attention: AiAttention | null,
+    completePermission?: (() => Promise<void>) | null,
+  ) => void;
 };
 
 const labels: Record<AiEngine, string> = {
@@ -71,18 +76,22 @@ const permissionLabels: Record<AiPermissionKind, string> = {
   "packages.install": "Install packages",
   "debug.run": "Run and debug code",
   "web.search": "Search the web",
+  "attachments.external": "Share private attachment context",
   "network.request": "Send this web request",
   "browser.control": "Control the agent browser",
   "computer.control": "Control a visible application",
   "computer.external": "Use another desktop application",
+  "computer.system": "Finish operating-system permission setup",
   "mcp.call": "Call an MCP tool",
   "platformio.install": "Install PlatformIO Core",
   "platformio.run": "Control PlatformIO",
 };
 const oneShotPermissionKinds = new Set<AiPermissionKind>([
   "project.delete",
+  "attachments.external",
   "network.request",
   "computer.external",
+  "computer.system",
   "mcp.call",
   "platformio.install",
 ]);
@@ -97,6 +106,107 @@ const emptyAgentState: AiAgentState = {
   permissions: [],
 };
 const contextChoices = [8_192, 16_384, 32_768, 65_536, 131_072, 262_144];
+const attachmentAccept = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "audio/*",
+  "video/*",
+  ".pdf",
+  ".docx",
+  ".rtf",
+  ".txt",
+  ".md",
+  ".csv",
+  ".json",
+  ".xml",
+  ".html",
+  ".c",
+  ".cpp",
+  ".h",
+  ".hpp",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".py",
+  ".java",
+  ".go",
+  ".rs",
+  ".swift",
+  ".sh",
+  ".yaml",
+  ".yml",
+  ".toml",
+].join(",");
+
+function attachmentKind(file: File): AiChatAttachment["kind"] | "" {
+  const mime = file.type.toLowerCase();
+  const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] || "";
+  if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mime))
+    return "image";
+  if (
+    mime.startsWith("audio/") ||
+    [".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"].includes(extension)
+  )
+    return "audio";
+  if (
+    mime.startsWith("video/") ||
+    [".m4v", ".mov", ".mp4", ".ogv", ".webm"].includes(extension)
+  )
+    return "video";
+  if (
+    mime.startsWith("text/") ||
+    [
+      ".c",
+      ".cc",
+      ".conf",
+      ".cpp",
+      ".cs",
+      ".css",
+      ".csv",
+      ".docx",
+      ".go",
+      ".h",
+      ".hpp",
+      ".html",
+      ".ini",
+      ".java",
+      ".js",
+      ".json",
+      ".jsx",
+      ".kt",
+      ".log",
+      ".md",
+      ".mjs",
+      ".pdf",
+      ".py",
+      ".rb",
+      ".rs",
+      ".rtf",
+      ".sh",
+      ".sql",
+      ".swift",
+      ".toml",
+      ".ts",
+      ".tsx",
+      ".txt",
+      ".xml",
+      ".yaml",
+      ".yml",
+    ].includes(extension)
+  )
+    return "document";
+  return "";
+}
+
+function attachmentIcon(kind: AiChatAttachment["kind"]) {
+  if (kind === "audio") return "volume-2";
+  if (kind === "video") return "video";
+  if (kind === "image") return "image";
+  return "file-text";
+}
 
 function cleanStoredAiContent(content: string) {
   return content
@@ -280,6 +390,7 @@ export function AiPanel({
   onChanged,
   onNotice,
   onChatOpened,
+  onAttentionChange,
 }: Props) {
   const [models, setModels] = useState<AiModel[]>([]);
   const [hardware, setHardware] = useState<AiHardwareProfile | null>(null);
@@ -347,11 +458,12 @@ export function AiPanel({
   const endRef = useRef<HTMLDivElement>(null);
   const followConversationRef = useRef(true);
   const previousBusyRef = useRef(false);
-  const imageInputRef = useRef<HTMLInputElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const queueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const steeringRef = useRef(false);
   const stoppingRef = useRef(false);
+  const requestEpochRef = useRef(0);
   const tierPickerInitialized = useRef(false);
 
   type AiPopup =
@@ -879,31 +991,60 @@ export function AiPanel({
     }
   };
 
-  const addImages = async (files: FileList | File[]) => {
-    const accepted = Array.from(files).filter((file) =>
-      ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-        file.type,
-      ),
-    );
+  const addAttachments = async (files: FileList | File[]) => {
+    const accepted = Array.from(files).flatMap((file) => {
+      const kind = attachmentKind(file);
+      if (!kind) {
+        onNotice(
+          `${file.name || "This file"} is not a supported local attachment`,
+        );
+        return [];
+      }
+      return [{ file, kind }];
+    });
     const remaining = Math.max(0, 6 - attachments.length);
+    const currentBytes = attachments.reduce(
+      (total, attachment) => total + (attachment.size || 0),
+      0,
+    );
+    let pendingBytes = 0;
     const next = await Promise.all(
       accepted.slice(0, remaining).map(
-        (file) =>
+        ({ file, kind }) =>
           new Promise<AiChatAttachment | null>((resolve) => {
-            if (file.size > 5 * 1024 * 1024) {
-              onNotice(`${file.name} is larger than 5 MB`);
+            if (file.size > 12 * 1024 * 1024) {
+              onNotice(`${file.name} is larger than the 12 MB local limit`);
               resolve(null);
               return;
             }
+            if (currentBytes + pendingBytes + file.size > 24 * 1024 * 1024) {
+              onNotice("Attachments are limited to 24 MB per message");
+              resolve(null);
+              return;
+            }
+            pendingBytes += file.size;
             const reader = new FileReader();
-            reader.onload = () =>
+            reader.onload = () => {
+              const dataUrl = String(reader.result || "");
+              const mimeType =
+                dataUrl.match(/^data:([^;]+);base64,/)?.[1] ||
+                file.type ||
+                "application/octet-stream";
               resolve({
                 id: globalThis.crypto.randomUUID(),
-                name: file.name || "Pasted image",
-                mimeType: file.type as AiChatAttachment["mimeType"],
-                dataUrl: String(reader.result || ""),
+                name: file.name || `Pasted ${kind}`,
+                kind,
+                mimeType,
+                dataUrl,
+                size: file.size,
               });
-            reader.onerror = () => resolve(null);
+            };
+            reader.onerror = () => {
+              onNotice(
+                `${file.name || "Attachment"} could not be read locally`,
+              );
+              resolve(null);
+            };
             reader.readAsDataURL(file);
           }),
       ),
@@ -1103,7 +1244,11 @@ export function AiPanel({
     const currentChatId = chatIdRef.current;
     if ((!text.trim() && !continuation) || busyRef.current || !currentChatId)
       return;
-    if (!continuation) permissionContinuation.current = null;
+    const requestEpoch = ++requestEpochRef.current;
+    if (!continuation) {
+      permissionContinuation.current = null;
+      onAttentionChange?.(null, null);
+    }
     const next = continuation
       ? continuation.messages
       : [
@@ -1150,6 +1295,10 @@ export function AiPanel({
         contextSummary: requestSummary,
         goal: activeGoal?.text || "",
       });
+      if (requestEpoch !== requestEpochRef.current) {
+        failed = true;
+        return;
+      }
       const responseActions = mergeActionEntries(
         liveActionsRef.current,
         response.actions,
@@ -1202,6 +1351,26 @@ export function AiPanel({
               ? `${response.toolSteps.length} local step${response.toolSteps.length === 1 ? "" : "s"}`
               : "Ready · local only",
       );
+      if (!response.permissionRequest) {
+        const responseText = response.content.trim();
+        const needsInput =
+          /\?\s*$/.test(responseText) ||
+          /(?:please (?:choose|confirm|tell me)|which (?:option|file|approach)|waiting for your (?:input|answer)|what would you like)/i.test(
+            responseText.slice(-500),
+          );
+        onAttentionChange?.(
+          {
+            kind: needsInput ? "input" : "response",
+            title: needsInput
+              ? "osCode needs your input"
+              : "osCode finished responding",
+            detail:
+              responseText.replace(/\s+/g, " ").slice(0, 180) ||
+              "The local agent completed its response.",
+          },
+          null,
+        );
+      }
     } catch (error) {
       failed = true;
       if (steeringRef.current) {
@@ -1255,6 +1424,14 @@ export function AiPanel({
           () => undefined,
         );
         onNotice(message);
+        onAttentionChange?.(
+          {
+            kind: "response",
+            title: "osCode request stopped",
+            detail: message,
+          },
+          null,
+        );
         setStatus("Stopped");
       }
     } finally {
@@ -1329,6 +1506,15 @@ export function AiPanel({
       if (response.changedFiles.length) await onChanged(response.changedFiles);
       if (response.permissionRequest) {
         failed = true;
+        onAttentionChange?.(
+          {
+            kind: "permission",
+            title: response.permissionRequest.title,
+            detail: response.permissionRequest.detail,
+            permissionKind: response.permissionRequest.kind,
+          },
+          null,
+        );
         onNotice(
           `${chat.title} needs permission before scheduled work can continue`,
         );
@@ -1381,6 +1567,7 @@ export function AiPanel({
     if (!(await window.oscode.prioritizeAiQueue(item.id))) return;
     if (busyRef.current) {
       steeringRef.current = true;
+      requestEpochRef.current += 1;
       await window.oscode.stopAi();
     }
     setStatus("Steering…");
@@ -1474,7 +1661,8 @@ export function AiPanel({
   const send = async (event: FormEvent) => {
     event.preventDefault();
     const text =
-      input.trim() || (attachments.length ? "Review the attached image." : "");
+      input.trim() ||
+      (attachments.length ? "Review the attached files locally." : "");
     if (!text) return;
     if (await handleCommand(text)) return;
     if (busy) {
@@ -1499,6 +1687,7 @@ export function AiPanel({
     const item = await window.oscode.addAiQueue(chatId, text);
     await window.oscode.prioritizeAiQueue(item.id);
     steeringRef.current = true;
+    requestEpochRef.current += 1;
     await window.oscode.stopAi();
     setInput("");
     setAttachments([]);
@@ -1509,6 +1698,20 @@ export function AiPanel({
 
   const grantPermission = async (scope: AiPermissionScope) => {
     if (!permissionRequest || !chatId) return;
+    if (permissionRequest.kind === "computer.system") {
+      await resolveLatestPermissionAction(
+        "completed",
+        `${permissionRequest.title} completed by the user; checking access now`,
+      );
+      const continuation = permissionContinuation.current;
+      setPermissionRequest(null);
+      onAttentionChange?.(null, null);
+      setStatus("Checking operating-system permission…");
+      await refreshAgentState();
+      if (continuation)
+        await runPrompt("", undefined, [], continuation, capabilityRef.current);
+      return;
+    }
     if (oneShotPermissionKinds.has(permissionRequest.kind)) scope = "once";
     const grant = await window.oscode.grantAiPermission(
       permissionRequest.kind,
@@ -1554,10 +1757,26 @@ export function AiPanel({
       onComputerAccess(nextCapabilities.computerAccess);
     }
     setPermissionRequest(null);
+    onAttentionChange?.(null, null);
     await refreshAgentState();
     if (continuation)
       await runPrompt("", undefined, [], continuation, nextCapabilities);
   };
+
+  useEffect(() => {
+    if (!permissionRequest) return;
+    onAttentionChange?.(
+      {
+        kind: "permission",
+        title: permissionRequest.title,
+        detail: permissionRequest.detail,
+        permissionKind: permissionRequest.kind,
+      },
+      permissionRequest.kind === "computer.system"
+        ? () => grantPermission("once")
+        : null,
+    );
+  }, [permissionRequest?.id]);
 
   const selectBundledTier = async (tier: Exclude<AiModelTier, "custom">) => {
     const selected =
@@ -1609,7 +1828,10 @@ export function AiPanel({
     >
       <div className="ai-head">
         <h2>AI Coder</h2>
-        <div className="ai-head-actions">
+        <div
+          className="ai-head-actions horizontal-menu-scroll"
+          data-horizontal-menu
+        >
           <IconButton
             icon="message-square"
             label="Chats and tasks"
@@ -2033,7 +2255,10 @@ export function AiPanel({
                       <span>THIS CHAT</span>
                       <h3>{activeChat.title}</h3>
                     </header>
-                    <div className="ai-agent-tabs">
+                    <div
+                      className="ai-agent-tabs horizontal-menu-scroll"
+                      data-horizontal-menu
+                    >
                       {(["goal", "queue", "schedules"] as const).map((tab) => (
                         <button
                           className={workspaceTab === tab ? "active" : ""}
@@ -2101,7 +2326,10 @@ export function AiPanel({
                                       : "set by you"}
                                   </span>
                                 </div>
-                                <div className="ai-row-actions">
+                                <div
+                                  className="ai-row-actions horizontal-menu-scroll"
+                                  data-horizontal-menu
+                                >
                                   {goal.status === "active" && (
                                     <IconButton
                                       icon="check"
@@ -2183,7 +2411,10 @@ export function AiPanel({
                                       : "added by you"}
                                   </span>
                                 </div>
-                                <div className="ai-row-actions">
+                                <div
+                                  className="ai-row-actions horizontal-menu-scroll"
+                                  data-horizontal-menu
+                                >
                                   {item.status === "queued" && (
                                     <IconButton
                                       icon="edit-2"
@@ -2463,7 +2694,10 @@ export function AiPanel({
               title="Permissions"
               close={() => setPermissionOpen(false)}
             />
-            <div className="ai-permission-tools">
+            <div
+              className="ai-permission-tools horizontal-menu-scroll"
+              data-horizontal-menu
+            >
               <label>
                 <FeatherIcon icon="search" size="17" />
                 <input
@@ -2609,6 +2843,13 @@ export function AiPanel({
                     {hardware?.gpuAvailable && hardware.gpuName
                       ? ` · ${hardware.gpuName}`
                       : " · not detected"}
+                    {(hardware?.gpuCount || 0) > 1
+                      ? ["cuda", "vulkan"].includes(
+                          hardware?.accelerator || "none",
+                        )
+                        ? ` · ${hardware?.gpuCount} GPUs · automatic split`
+                        : ` · ${hardware?.gpuCount} GPUs detected`
+                      : ""}
                   </option>
                   <option value="cpu">CPU</option>
                 </select>
@@ -2685,7 +2926,10 @@ export function AiPanel({
                     ))}
                 </select>
               </label>
-              <div className="ai-manager-actions">
+              <div
+                className="ai-manager-actions horizontal-menu-scroll"
+                data-horizontal-menu
+              >
                 <button
                   onClick={() => {
                     closeAiPopups();
@@ -2863,15 +3107,32 @@ export function AiPanel({
               <p>{message.content}</p>
             )}
             {!!message.attachments?.length && (
-              <div className="ai-message-images">
-                {message.attachments.map((attachment) => (
-                  <img
-                    key={attachment.id}
-                    src={attachment.dataUrl}
-                    alt={attachment.name}
-                    title={attachment.name}
-                  />
-                ))}
+              <div
+                className="ai-message-images"
+                aria-label="Message attachments"
+              >
+                {message.attachments.map((attachment) =>
+                  attachment.kind === "image" ? (
+                    <img
+                      key={attachment.id}
+                      src={attachment.dataUrl}
+                      alt={attachment.name}
+                      title={attachment.name}
+                    />
+                  ) : (
+                    <span
+                      className="ai-message-file"
+                      key={attachment.id}
+                      title={attachment.name}
+                    >
+                      <FeatherIcon
+                        icon={attachmentIcon(attachment.kind)}
+                        size="15"
+                      />
+                      <span>{attachment.name}</span>
+                    </span>
+                  ),
+                )}
               </div>
             )}
           </article>
@@ -2897,7 +3158,12 @@ export function AiPanel({
               className="ai-stop-button"
               onClick={() => {
                 stoppingRef.current = true;
-                setStatus("Stopping local inference…");
+                requestEpochRef.current += 1;
+                liveActionsRef.current = [];
+                setLiveActions([]);
+                busyRef.current = false;
+                setBusy(false);
+                setStatus("Stopped");
                 void window.oscode.stopAi();
               }}
             >
@@ -2931,6 +3197,7 @@ export function AiPanel({
                     `${permissionRequest.title} denied by the user`,
                   );
                   setPermissionRequest(null);
+                  onAttentionChange?.(null, null);
                   permissionContinuation.current = null;
                   await Promise.all(
                     temporaryPermissionIds.current.map((id) =>
@@ -2945,23 +3212,34 @@ export function AiPanel({
             >
               Deny
             </button>
-            <button onClick={() => void grantPermission("once")}>Once</button>
-            {permissionRequest.kind !== "packages.install" &&
+            {permissionRequest.kind === "computer.system" ? (
+              <button
+                className="primary"
+                onClick={() => void grantPermission("once")}
+              >
+                Completed — retry
+              </button>
+            ) : (
+              <button onClick={() => void grantPermission("once")}>Once</button>
+            )}
+            {permissionRequest.kind !== "computer.system" &&
+              permissionRequest.kind !== "packages.install" &&
               !oneShotPermissionKinds.has(permissionRequest.kind) && (
                 <button onClick={() => void grantPermission("conversation")}>
                   This chat
                 </button>
               )}
-            {!oneShotPermissionKinds.has(permissionRequest.kind) && (
-              <button
-                className="primary"
-                onClick={() => void grantPermission("always")}
-              >
-                {permissionRequest.kind === "packages.install"
-                  ? "Always allow"
-                  : "Always"}
-              </button>
-            )}
+            {permissionRequest.kind !== "computer.system" &&
+              !oneShotPermissionKinds.has(permissionRequest.kind) && (
+                <button
+                  className="primary"
+                  onClick={() => void grantPermission("always")}
+                >
+                  {permissionRequest.kind === "packages.install"
+                    ? "Always allow"
+                    : "Always"}
+                </button>
+              )}
           </div>
         </div>
       )}
@@ -3086,7 +3364,8 @@ export function AiPanel({
         {permissionsDrawerOpen && (
           <div
             id="ai-capability-controls"
-            className="ai-capability-bar"
+            className="ai-capability-bar horizontal-menu-scroll"
+            data-horizontal-menu
             aria-label="Agent permissions"
           >
             <button
@@ -3218,10 +3497,20 @@ export function AiPanel({
         )}
       </section>
       {!!attachments.length && (
-        <div className="ai-attachments" aria-label="Attached images">
+        <div className="ai-attachments" aria-label="Attached local files">
           {attachments.map((attachment) => (
             <figure key={attachment.id}>
-              <img src={attachment.dataUrl} alt={attachment.name} />
+              {attachment.kind === "image" ? (
+                <img src={attachment.dataUrl} alt={attachment.name} />
+              ) : (
+                <span className="ai-attachment-file" title={attachment.name}>
+                  <FeatherIcon
+                    icon={attachmentIcon(attachment.kind)}
+                    size="18"
+                  />
+                  <small>{attachment.name}</small>
+                </span>
+              )}
               <button
                 type="button"
                 aria-label={`Remove ${attachment.name}`}
@@ -3239,23 +3528,23 @@ export function AiPanel({
       )}
       <form className="ai-composer" onSubmit={send}>
         <input
-          ref={imageInputRef}
+          ref={attachmentInputRef}
           className="sr-only"
           type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
+          accept={attachmentAccept}
           multiple
           onChange={(event) => {
-            if (event.target.files) void addImages(event.target.files);
+            if (event.target.files) void addAttachments(event.target.files);
             event.target.value = "";
           }}
         />
         <button
           type="button"
           className="ai-attach-button"
-          aria-label="Attach images"
-          title="Attach images"
+          aria-label="Attach local media or documents"
+          title="Attach local media or documents"
           disabled={!projectName || attachments.length >= 6}
-          onClick={() => imageInputRef.current?.click()}
+          onClick={() => attachmentInputRef.current?.click()}
         >
           <FeatherIcon icon="paperclip" size="17" />
         </button>
@@ -3276,7 +3565,7 @@ export function AiPanel({
             const images = Array.from(event.clipboardData.files).filter(
               (file) => file.type.startsWith("image/"),
             );
-            if (images.length) void addImages(images);
+            if (images.length) void addAttachments(images);
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
@@ -3406,6 +3695,7 @@ function PopoverTitle({ title, close }: { title: string; close: () => void }) {
     <div className="ai-history-title">
       <h3>{title}</h3>
       <button
+        type="button"
         className="ai-history-close"
         aria-label={`Close ${title}`}
         onClick={close}

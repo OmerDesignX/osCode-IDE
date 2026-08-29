@@ -42,7 +42,7 @@ test("accepts versioned local editor preferences", () => {
       telemetry: true,
     }),
     {
-      version: 11,
+      version: 12,
       theme: "blue-dark",
       locale: "ar",
       sidebarSide: "right",
@@ -95,6 +95,23 @@ test("keeps application updates off until the one-time choice is answered", () =
     validPreferences({ autoUpdateDismissedVersion: "not-a-version" })
       .autoUpdateDismissedVersion,
     "",
+  );
+});
+
+test("new projects use the wider file tree and migrate the old default width", () => {
+  assert.equal(defaultPreferences.sidebarWidth, 480);
+  assert.equal(validPreferences({}).sidebarWidth, 480);
+  assert.equal(
+    validPreferences({ version: 11, sidebarWidth: 300 }).sidebarWidth,
+    480,
+  );
+  assert.equal(
+    validPreferences({ version: 12, sidebarWidth: 300 }).sidebarWidth,
+    300,
+  );
+  assert.equal(
+    validPreferences({ version: 11, sidebarWidth: 360 }).sidebarWidth,
+    360,
   );
 });
 

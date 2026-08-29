@@ -8,6 +8,13 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+
+const requireNativeModule = createRequire(import.meta.url);
+const packagedPythonEnvironment = {
+  ...process.env,
+  PYTHONDONTWRITEBYTECODE: "1",
+};
 
 const [platform, ...flags] = process.argv.slice(2);
 if (!["windows", "macos", "linux"].includes(platform))
@@ -226,8 +233,17 @@ if (platform === "windows") {
     "Bundled llama.cpp command",
     8_000,
   );
+  const bundledLlamaCli = requireLargeFile(
+    path.join(resourcesRoot, "llama", "llama-mtmd-cli.exe"),
+    "Bundled llama.cpp multimodal command",
+    8_000,
+  );
   if (!hasMagic(bundledLlama, [0x4d, 0x5a]))
     throw new Error("Bundled llama.cpp command is not a Windows binary");
+  if (!hasMagic(bundledLlamaCli, [0x4d, 0x5a]))
+    throw new Error(
+      "Bundled llama.cpp multimodal command is not a Windows binary",
+    );
   for (const dependency of [
     "llama-completion-impl.dll",
     "llama-common.dll",
@@ -256,6 +272,11 @@ if (platform === "windows") {
   const vulkanLlama = requireLargeFile(
     path.join(vulkanRoot, "llama-completion.exe"),
     "Bundled llama.cpp Vulkan command",
+    8_000,
+  );
+  requireLargeFile(
+    path.join(vulkanRoot, "llama-mtmd-cli.exe"),
+    "Bundled llama.cpp Vulkan multimodal command",
     8_000,
   );
   for (const dependency of [
@@ -291,6 +312,11 @@ if (platform === "windows") {
     const cudaLlama = requireLargeFile(
       path.join(cudaRoot, "llama-completion.exe"),
       `Bundled llama.cpp CUDA ${cuda.version} command`,
+      8_000,
+    );
+    requireLargeFile(
+      path.join(cudaRoot, "llama-mtmd-cli.exe"),
+      `Bundled llama.cpp CUDA ${cuda.version} multimodal command`,
       8_000,
     );
     for (const dependency of [
@@ -348,6 +374,7 @@ if (platform === "windows") {
         {
           encoding: "utf8",
           timeout: 10_000,
+          env: packagedPythonEnvironment,
         },
       );
       return check.status === 0 && check.stdout.trim() === version;
@@ -367,8 +394,17 @@ if (platform === "windows") {
     "Bundled Linux llama.cpp command",
     8_000,
   );
+  const linuxLlamaCli = requireLargeFile(
+    path.join(linuxLlamaRoot, "llama-mtmd-cli"),
+    "Bundled Linux llama.cpp multimodal command",
+    8_000,
+  );
   if (!hasMagic(linuxLlama, [0x7f, 0x45, 0x4c, 0x46]))
     throw new Error("Bundled Linux llama.cpp command is not an ELF binary");
+  if (!hasMagic(linuxLlamaCli, [0x7f, 0x45, 0x4c, 0x46]))
+    throw new Error(
+      "Bundled Linux llama.cpp multimodal command is not an ELF binary",
+    );
   const linuxLlamaCheck = spawnSync(linuxLlama, ["--version"], {
     cwd: linuxLlamaRoot,
     encoding: "utf8",
@@ -410,7 +446,11 @@ if (platform === "windows") {
           "-c",
           "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
         ],
-        { encoding: "utf8", timeout: 10_000 },
+        {
+          encoding: "utf8",
+          timeout: 10_000,
+          env: packagedPythonEnvironment,
+        },
       );
       return check.status === 0 && check.stdout.trim() === version;
     });
@@ -472,9 +512,9 @@ if (platform === "windows") {
       resourcesRoot,
       "computer-control",
       "darwin-universal",
-      "oscode-computer-control",
+      "oscode-computer-control.node",
     ),
-    "Bundled macOS Computer Control helper",
+    "Bundled macOS Computer Control addon",
     10_000,
   );
   const helperArchitectures = spawnSync(
@@ -490,26 +530,28 @@ if (platform === "windows") {
     !/\bx86_64\b/.test(helperArchitectures.stdout) ||
     !/\barm64\b/.test(helperArchitectures.stdout)
   )
-    throw new Error("macOS Computer Control helper is not universal");
-  requireMacOs12Compatible(macComputerControl, "macOS Computer Control helper");
-  let helperListReady = false;
-  for (let attempt = 0; attempt < 3 && !helperListReady; attempt += 1) {
-    const helperList = spawnSync(macComputerControl, ["list"], {
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-    try {
-      helperListReady =
-        helperList.status === 0 && Array.isArray(JSON.parse(helperList.stdout));
-    } catch {
-      helperListReady = false;
-    }
-  }
-  if (!helperListReady) {
+    throw new Error("macOS Computer Control addon is not universal");
+  requireMacOs12Compatible(macComputerControl, "macOS Computer Control addon");
+  const computerControlAddon = requireNativeModule(macComputerControl);
+  if (
+    typeof computerControlAddon.list !== "function" ||
+    typeof computerControlAddon.isTrusted !== "function" ||
+    typeof computerControlAddon.isScreenCaptureTrusted !== "function" ||
+    typeof computerControlAddon.requestScreenCaptureAccess !== "function"
+  )
+    throw new Error("macOS Computer Control addon API is incomplete");
+  let computerApplications;
+  try {
+    computerApplications = JSON.parse(computerControlAddon.list());
+  } catch {
     throw new Error(
-      "macOS Computer Control helper failed its local list check",
+      "macOS Computer Control addon failed its local application-list check",
     );
   }
+  if (!Array.isArray(computerApplications))
+    throw new Error(
+      "macOS Computer Control addon returned an invalid application list",
+    );
   const packagedRuntimeArchitecture = `darwin-${expectedMacArch}`;
   const excludedRuntimeArchitecture =
     expectedMacArch === "arm64" ? "darwin-x64" : "darwin-arm64";
@@ -561,6 +603,11 @@ if (platform === "windows") {
       `Bundled ${architecture} llama.cpp command`,
       8_000,
     );
+    const llamaCli = requireLargeFile(
+      path.join(llamaRoot, "llama-mtmd-cli"),
+      `Bundled ${architecture} llama.cpp multimodal command`,
+      8_000,
+    );
     if (
       !hasMagic(llama, [0xcf, 0xfa, 0xed, 0xfe]) ||
       !hasBytesAt(llama, 4, cpuType)
@@ -569,6 +616,17 @@ if (platform === "windows") {
         `${architecture} llama.cpp command is not a Mach-O binary`,
       );
     requireMacOs12Compatible(llama, `${architecture} llama.cpp command`);
+    if (
+      !hasMagic(llamaCli, [0xcf, 0xfa, 0xed, 0xfe]) ||
+      !hasBytesAt(llamaCli, 4, cpuType)
+    )
+      throw new Error(
+        `${architecture} llama.cpp multimodal command is not a Mach-O binary`,
+      );
+    requireMacOs12Compatible(
+      llamaCli,
+      `${architecture} llama.cpp multimodal command`,
+    );
     if (existsSync(path.join(llamaRoot, "llama-server")))
       throw new Error(
         `The ${architecture} llama.cpp server executable must not be packaged`,
@@ -609,6 +667,7 @@ if (platform === "windows") {
   const nativeRuntimeTimeout =
     expectedMacArch === "x64" && process.arch === "arm64" ? 60_000 : 15_000;
   const nativeLlama = path.join(nativeLlamaRoot, "llama-completion");
+  const nativeLlamaCli = path.join(nativeLlamaRoot, "llama-mtmd-cli");
   const nativeLlamaCheck = spawnSync(nativeLlama, ["--version"], {
     cwd: nativeLlamaRoot,
     encoding: "utf8",
@@ -621,6 +680,20 @@ if (platform === "windows") {
     )
   )
     throw new Error("Native macOS llama.cpp command failed its version check");
+  const nativeLlamaCliCheck = spawnSync(nativeLlamaCli, ["--version"], {
+    cwd: nativeLlamaRoot,
+    encoding: "utf8",
+    timeout: Math.max(30_000, nativeRuntimeTimeout),
+  });
+  if (
+    nativeLlamaCliCheck.status !== 0 ||
+    !/build\s+\d+/i.test(
+      `${nativeLlamaCliCheck.stdout || ""}\n${nativeLlamaCliCheck.stderr || ""}`,
+    )
+  )
+    throw new Error(
+      "Native macOS llama.cpp multimodal command failed its version check",
+    );
   const nativeUv = path.join(
     resourcesRoot,
     "uv",
@@ -644,7 +717,11 @@ if (platform === "windows") {
           "-c",
           "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
         ],
-        { encoding: "utf8", timeout: nativeRuntimeTimeout },
+        {
+          encoding: "utf8",
+          timeout: nativeRuntimeTimeout,
+          env: packagedPythonEnvironment,
+        },
       );
       return check.status === 0 && check.stdout.trim() === version;
     });
@@ -692,6 +769,18 @@ if (flags.includes("--run-smoke")) {
   if (smoke.error) throw smoke.error;
   if (smoke.status !== 0)
     throw new Error(`Packaged ${platform} smoke test exited ${smoke.status}`);
+
+  if (platform === "macos") {
+    const signatureAfterSmoke = spawnSync(
+      "codesign",
+      ["--verify", "--deep", "--strict", appRoot],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (signatureAfterSmoke.status !== 0)
+      throw new Error(
+        `Packaged macOS smoke test mutated the signed app bundle: ${signatureAfterSmoke.stderr || signatureAfterSmoke.stdout}`,
+      );
+  }
 }
 
 console.log(

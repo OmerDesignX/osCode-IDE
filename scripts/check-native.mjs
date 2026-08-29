@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
+
+const requireNativeModule = createRequire(import.meta.url);
 
 const nodePty = await import("node-pty");
 
@@ -60,10 +63,8 @@ function run(executable, args, env = {}) {
   });
 }
 
-let computerHelper = "";
-let computerArgs = [];
 if (process.platform === "win32") {
-  computerHelper = path.resolve(
+  const computerHelper = path.resolve(
     "node_modules",
     "@microsoft",
     "winappcli",
@@ -71,25 +72,40 @@ if (process.platform === "win32") {
     "win-x64",
     "winapp.exe",
   );
-  computerArgs = ["ui", "list-windows", "--json"];
-} else if (process.platform === "darwin") {
-  computerHelper = path.resolve(
-    "vendor",
-    "computer-control",
-    "darwin-universal",
-    "oscode-computer-control",
-  );
-  computerArgs = ["list"];
-}
-
-if (computerHelper) {
   await access(computerHelper);
-  const output = await run(computerHelper, computerArgs, {
+  const output = await run(computerHelper, ["ui", "list-windows", "--json"], {
     WINAPP_CLI_TELEMETRY_OPTOUT: "1",
     DOTNET_CLI_TELEMETRY_OPTOUT: "1",
   });
   if (!Array.isArray(JSON.parse(output)))
     throw new Error("Computer Control helper did not return a window list");
+} else if (process.platform === "darwin") {
+  const computerAddon = path.resolve(
+    "vendor",
+    "computer-control",
+    "darwin-universal",
+    "oscode-computer-control.node",
+  );
+  await access(computerAddon);
+  const addon = requireNativeModule(computerAddon);
+  if (
+    typeof addon.list !== "function" ||
+    typeof addon.isTrusted !== "function" ||
+    typeof addon.isScreenCaptureTrusted !== "function" ||
+    typeof addon.requestScreenCaptureAccess !== "function" ||
+    typeof addon.inspect !== "function" ||
+    typeof addon.invoke !== "function" ||
+    typeof addon.setValue !== "function"
+  )
+    throw new Error("Computer Control addon did not expose its local API");
+  const output = addon.list();
+  if (!Array.isArray(JSON.parse(output)))
+    throw new Error(
+      "Computer Control addon did not return an application list",
+    );
+}
+
+if (["win32", "darwin"].includes(process.platform)) {
   console.log(
     `Computer Control is available for ${process.platform}-${process.arch}`,
   );

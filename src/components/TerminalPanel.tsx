@@ -23,11 +23,11 @@ const terminalPalette = (theme: EditorPreferences["theme"]) =>
         brightWhite: "#ffffff",
       }
     : {
-        background: theme === "blue-dark" ? "#07111f" : "#0b1113",
-        foreground: "#e5f5fc",
+        background: theme === "blue-dark" ? "#07111f" : "#111314",
+        foreground: theme === "blue-dark" ? "#e5f5fc" : "#e7ecee",
         cursor: theme === "blue-dark" ? "#75b8ff" : "#89cff0",
-        cursorAccent: "#07111f",
-        selectionBackground: theme === "blue-dark" ? "#173a64" : "#23404a",
+        cursorAccent: theme === "blue-dark" ? "#07111f" : "#111314",
+        selectionBackground: theme === "blue-dark" ? "#173a64" : "#34484f",
       };
 
 export function TerminalPanel({

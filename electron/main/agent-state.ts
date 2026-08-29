@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { SecureDataStore } from "./secure-store.js";
+import { aiAttachmentKind } from "./attachments.js";
 import type {
   AiAgentState,
   AiActionEntry,
@@ -23,6 +24,7 @@ const permissionKinds = new Set<AiPermissionKind>([
   "packages.install",
   "debug.run",
   "web.search",
+  "attachments.external",
   "network.request",
   "browser.control",
   "computer.control",
@@ -63,33 +65,34 @@ function attachments(
   value: unknown,
 ): NonNullable<AiChatMessage["attachments"]> {
   if (!Array.isArray(value)) return [];
-  const allowed = new Set([
-    "image/png",
-    "image/jpeg",
-    "image/webp",
-    "image/gif",
-  ]);
   let total = 0;
   return value.slice(0, 6).flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const input = item as Record<string, unknown>;
-    const mimeType = text(input.mimeType, 40);
-    const dataUrl = text(input.dataUrl, 7_000_000);
+    const name = text(input.name, 240) || "Attachment";
+    const mimeType = text(input.mimeType, 120).toLowerCase();
+    const kind = aiAttachmentKind(mimeType, name);
+    const dataUrl = text(input.dataUrl, 16_800_000);
     if (
-      !allowed.has(mimeType) ||
+      !kind ||
       !dataUrl.startsWith(`data:${mimeType};base64,`) ||
-      dataUrl.length > 7_000_000 ||
-      total + dataUrl.length > 18_000_000
+      dataUrl.length > 16_800_000 ||
+      total + dataUrl.length > 34_000_000
     )
       return [];
     total += dataUrl.length;
     return [
       {
         id: text(input.id, 100) || crypto.randomUUID(),
-        name: text(input.name, 240) || "Image",
-        mimeType: mimeType as
-          "image/png" | "image/jpeg" | "image/webp" | "image/gif",
+        name,
+        kind,
+        mimeType,
         dataUrl,
+        size: Number.isFinite(Number(input.size))
+          ? Math.max(0, Number(input.size))
+          : undefined,
+        extractedText: text(input.extractedText, 160_000) || undefined,
+        processingError: text(input.processingError, 500) || undefined,
       },
     ];
   });

@@ -139,6 +139,30 @@ export function preferredPlatformioSerialDevice(devices: PlatformioDevice[]) {
     .sort((left, right) => left.score - right.score)[0]?.device;
 }
 
+export function platformioProgressFromOutput(data: string, previous = 0) {
+  const text = data.replace(/\x1b\[[0-9;]*m/g, " ");
+  const percentages = [...text.matchAll(/\b(\d{1,3})(?:\.\d+)?\s*%/g)].map(
+    (match) => Math.max(0, Math.min(100, Number(match[1]))),
+  );
+  const explicit = percentages.at(-1);
+  const stage = /PlatformIO is ready|\bSUCCESS\b/i.test(text)
+    ? 100
+    : /Uploading|Writing at 0x|Connecting\.\.\./i.test(text)
+      ? 82
+      : /Linking|Building \.pio|Creating firmware|Checking size/i.test(text)
+        ? 72
+        : /Compiling|Archiving/i.test(text)
+          ? 38
+          : /Downloading|Installing|Collecting|Package Manager|Tool Manager/i.test(
+                text,
+              )
+            ? 18
+            : /Processing|Resolving|Creating PlatformIO/i.test(text)
+              ? 7
+              : previous;
+  return Math.max(previous, explicit ?? stage);
+}
+
 const validEnvironment = (value: string) =>
   !value || /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(value);
 const validBoard = (value: string) =>
@@ -148,6 +172,7 @@ const validFramework = (value: string) =>
 
 export class PlatformioService {
   private child: ChildProcessWithoutNullStreams | null = null;
+  private progress = 0;
   private readonly secure: SecureDataStore;
 
   constructor(
@@ -155,8 +180,31 @@ export class PlatformioService {
     private readonly getPython: () => Promise<string>,
     private readonly output: (data: string) => void,
     secureStore?: SecureDataStore,
+    private readonly activity?: (activity: {
+      kind: "platformio";
+      label: string;
+      active: boolean;
+      network: boolean;
+      progress?: number;
+      cancellable: boolean;
+    }) => void,
   ) {
     this.secure = secureStore || new SecureDataStore(dataRoot);
+  }
+
+  private reportProgress(data: string, active = true) {
+    this.progress = platformioProgressFromOutput(data, this.progress);
+    const network = /download|install|collect|package|fetch|update/i.test(data);
+    this.activity?.({
+      kind: "platformio",
+      label: network
+        ? "PlatformIO is receiving packages"
+        : "PlatformIO is working locally",
+      active,
+      network,
+      progress: this.progress,
+      cancellable: active,
+    });
   }
 
   private get penvRoot() {
@@ -285,6 +333,8 @@ export class PlatformioService {
     if (this.child) throw new Error("A PlatformIO task is already running");
     await fs.mkdir(this.dataRoot, { recursive: true });
     const basePython = await this.getPython();
+    this.progress = 0;
+    this.reportProgress("Creating PlatformIO environment");
     const penvPython =
       process.platform === "win32"
         ? path.join(this.penvRoot, "Scripts", "python.exe")
@@ -298,6 +348,9 @@ export class PlatformioService {
       });
     }
     this.output(`${update ? "Updating" : "Installing"} PlatformIO Core…\n`);
+    this.reportProgress(
+      `${update ? "Updating" : "Installing"} PlatformIO Core`,
+    );
     const args = [
       "-m",
       "pip",
@@ -323,6 +376,7 @@ export class PlatformioService {
       this.output(`Board catalogue will refresh later: ${String(error)}\n`),
     );
     this.output("PlatformIO is ready. Telemetry is disabled.\n");
+    this.reportProgress("PlatformIO is ready", false);
     return true;
   }
 
@@ -571,9 +625,29 @@ with serial.Serial(port,baud,timeout=0.2) as device:
 
   stop() {
     if (!this.child) return false;
-    this.child.kill();
+    const child = this.child;
+    if (process.platform === "win32" && child.pid)
+      spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      }).once("error", () => child.kill());
+    else if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        child.kill("SIGTERM");
+      }
+    } else child.kill();
     this.child = null;
     this.output("\nPlatformIO task stopped.\n");
+    this.activity?.({
+      kind: "platformio",
+      label: "PlatformIO task stopped",
+      active: false,
+      network: false,
+      progress: this.progress,
+      cancellable: false,
+    });
     return true;
   }
 
@@ -594,6 +668,8 @@ with serial.Serial(port,baud,timeout=0.2) as device:
     if (!(await this.exists(this.pioExecutable)))
       throw new Error("Install PlatformIO Core first");
     this.output(`\n> pio ${args.join(" ")}\n`);
+    this.progress = 0;
+    this.reportProgress(`Processing PlatformIO ${args.join(" ")}`);
     return this.stream(this.pioExecutable, args, cwd);
   }
 
@@ -603,6 +679,7 @@ with serial.Serial(port,baud,timeout=0.2) as device:
       const child = spawn(command, args, {
         cwd,
         env: this.environment(),
+        detached: process.platform !== "win32",
         windowsHide: true,
         stdio: "pipe",
       });
@@ -612,6 +689,7 @@ with serial.Serial(port,baud,timeout=0.2) as device:
         const text = String(data);
         captured = `${captured}${text}`.slice(-120_000);
         this.output(text);
+        this.reportProgress(text);
       };
       child.stdout.on("data", append);
       child.stderr.on("data", append);
@@ -627,8 +705,13 @@ with serial.Serial(port,baud,timeout=0.2) as device:
       child.once("exit", (code, signal) => {
         if (this.child === child) this.child = null;
         const diagnostic = captured.trim();
-        if (code === 0 || signal) resolve(diagnostic);
-        else
+        if (code === 0 || signal) {
+          if (code === 0) {
+            this.progress = 100;
+            this.reportProgress("SUCCESS", false);
+          }
+          resolve(diagnostic);
+        } else
           reject(
             new Error(
               [`PlatformIO exited with code ${code ?? "unknown"}.`, diagnostic]

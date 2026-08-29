@@ -1,4 +1,4 @@
-import { chmod, mkdir } from "node:fs/promises";
+import { access, chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import process from "node:process";
@@ -27,8 +27,8 @@ if (process.platform === "darwin") {
     root,
     "native",
     "computer-control",
-    "macos",
-    "main.swift",
+    "macos-addon",
+    "addon.mm",
   );
   const outputRoot = path.join(
     root,
@@ -36,29 +36,53 @@ if (process.platform === "darwin") {
     "computer-control",
     "darwin-universal",
   );
-  const arm = path.join(outputRoot, "oscode-computer-control-arm64");
-  const intel = path.join(outputRoot, "oscode-computer-control-x64");
-  const universal = path.join(outputRoot, "oscode-computer-control");
+  const universal = path.join(outputRoot, "oscode-computer-control.node");
+  const nodePrefix = String(process.config.variables.node_prefix || "");
+  const includeCandidates = [
+    path.join(nodePrefix, "include", "node"),
+    "/opt/homebrew/include/node",
+    "/usr/local/include/node",
+  ];
+  let nodeInclude = "";
+  for (const candidate of includeCandidates) {
+    if (!candidate) continue;
+    try {
+      await access(path.join(candidate, "node_api.h"));
+      nodeInclude = candidate;
+      break;
+    } catch {}
+  }
+  if (!nodeInclude)
+    throw new Error(
+      "Node API headers are missing. Install Node.js before preparing Computer Control.",
+    );
   await mkdir(outputRoot, { recursive: true });
   await run("xcrun", [
-    "swiftc",
+    "clang++",
     source,
-    "-O",
-    "-target",
-    "arm64-apple-macos12",
+    "-std=c++17",
+    "-O2",
+    "-fobjc-arc",
+    "-fblocks",
+    "-bundle",
+    "-undefined",
+    "dynamic_lookup",
+    "-mmacosx-version-min=12.0",
+    "-arch",
+    "arm64",
+    "-arch",
+    "x86_64",
+    "-I",
+    nodeInclude,
+    "-framework",
+    "AppKit",
+    "-framework",
+    "ApplicationServices",
+    "-framework",
+    "CoreGraphics",
     "-o",
-    arm,
+    universal,
   ]);
-  await run("xcrun", [
-    "swiftc",
-    source,
-    "-O",
-    "-target",
-    "x86_64-apple-macos12",
-    "-o",
-    intel,
-  ]);
-  await run("xcrun", ["lipo", "-create", arm, intel, "-output", universal]);
   await chmod(universal, 0o755);
   process.stdout.write(`Prepared ${universal}\n`);
 } else {

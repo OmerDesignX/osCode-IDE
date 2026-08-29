@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 contextBridge.exposeInMainWorld("oscode", {
   platform: process.platform,
   setDirtyState: (dirty: boolean) => ipcRenderer.send("app:set-dirty", dirty),
+  setAppAttentionBadge: (count: number, kind: string) =>
+    ipcRenderer.invoke("app:set-attention-badge", count, kind),
   confirmDiscardChanges: (detail: string) =>
     ipcRenderer.invoke("dialog:confirm-discard", detail),
   openProject: () => ipcRenderer.invoke("project:open"),
@@ -169,6 +171,7 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("diagram:export", action, format, data),
   readMarkdownImage: (markdownPath: string, source: string) =>
     ipcRenderer.invoke("markdown:read-image", markdownPath, source),
+  openProjectFile: (path: string) => ipcRenderer.invoke("file:open", path),
   readFile: (path: string) => ipcRenderer.invoke("file:read", path),
   writeFile: (path: string, content: string, source = "manual") =>
     ipcRenderer.invoke("file:write", path, content, source),
@@ -228,6 +231,12 @@ contextBridge.exposeInMainWorld("oscode", {
     const listener = () => callback();
     ipcRenderer.on("run:stopped", listener);
     return () => ipcRenderer.removeListener("run:stopped", listener);
+  },
+  onPythonEnvironmentChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("python:environment-changed", listener);
+    return () =>
+      ipcRenderer.removeListener("python:environment-changed", listener);
   },
   onMenuAction: (callback: (action: string) => void) => {
     const listener = (_event: unknown, action: string) => callback(action);

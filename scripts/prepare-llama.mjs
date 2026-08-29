@@ -124,7 +124,11 @@ const runtimeReady = async (target, runtimeAssets, requiredDlls) => {
         ),
       );
     if (!expected || metadata.version !== version) return false;
-    for (const name of ["llama-completion.exe", ...requiredDlls])
+    for (const name of [
+      "llama-completion.exe",
+      "llama-mtmd-cli.exe",
+      ...requiredDlls,
+    ])
       if (!(await stat(path.join(target, name))).isFile()) return false;
     if (
       await stat(path.join(target, "llama-server-impl.dll"))
@@ -215,7 +219,7 @@ const prepareWindowsRuntime = async (
       entry.isFile() &&
       (entry.name === "LICENSE" ||
         entry.name === "llama-completion.exe" ||
-        entry.name === "llama-cli.exe" ||
+        entry.name === "llama-mtmd-cli.exe" ||
         runtimeDll);
     if (!keep)
       await rm(path.join(target, entry.name), {
@@ -306,7 +310,9 @@ if (process.platform === "darwin") {
   };
   const macRuntimeReady = async (targetName) => {
     const target = path.join(root, "vendor", "llama", targetName);
-    const completion = path.join(target, "llama-completion");
+    const binaries = ["llama-completion", "llama-mtmd-cli"].map((name) =>
+      path.join(target, name),
+    );
     try {
       const metadata = JSON.parse(
         await readFile(path.join(target, "OSCODE_RUNTIME.json"), "utf8"),
@@ -316,51 +322,57 @@ if (process.platform === "darwin") {
         metadata.source !== sourceAsset.name ||
         metadata.sha256 !== sourceAsset.sha256 ||
         metadata.deploymentTarget !== deploymentTarget ||
-        metadata.commit !== "dc72703fc"
+        metadata.commit !== "dc72703fc" ||
+        metadata.metal !== true ||
+        metadata.multimodalCli !== true
       )
         return false;
-      if (!(await stat(completion)).isFile()) return false;
       const expectedArchitecture = targetName.endsWith("arm64")
         ? "arm64"
         : "x86_64";
-      const architectures = spawnSync("xcrun", ["lipo", "-archs", completion], {
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      if (
-        architectures.status !== 0 ||
-        architectures.stdout.trim() !== expectedArchitecture
-      )
-        return false;
-      const dependencies = spawnSync("xcrun", ["otool", "-L", completion], {
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      if (
-        dependencies.status !== 0 ||
-        dependencies.stdout
-          .split(/\r?\n/)
-          .slice(1)
-          .some((line) => {
-            const dependency = line.trim().split(/\s+/, 1)[0] || "";
-            return (
-              dependency &&
-              !dependency.startsWith("/System/Library/") &&
-              !dependency.startsWith("/usr/lib/")
-            );
-          })
-      )
-        return false;
-      const build = spawnSync("xcrun", ["vtool", "-show-build", completion], {
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      return (
-        build.status === 0 &&
-        new RegExp(`\\bminos ${deploymentTarget.replace(".", "\\.")}\\b`).test(
-          build.stdout,
+      for (const binary of binaries) {
+        if (!(await stat(binary)).isFile()) return false;
+        const architectures = spawnSync("xcrun", ["lipo", "-archs", binary], {
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+        if (
+          architectures.status !== 0 ||
+          architectures.stdout.trim() !== expectedArchitecture
         )
-      );
+          return false;
+        const dependencies = spawnSync("xcrun", ["otool", "-L", binary], {
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+        if (
+          dependencies.status !== 0 ||
+          dependencies.stdout
+            .split(/\r?\n/)
+            .slice(1)
+            .some((line) => {
+              const dependency = line.trim().split(/\s+/, 1)[0] || "";
+              return (
+                dependency &&
+                !dependency.startsWith("/System/Library/") &&
+                !dependency.startsWith("/usr/lib/")
+              );
+            })
+        )
+          return false;
+        const build = spawnSync("xcrun", ["vtool", "-show-build", binary], {
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+        if (
+          build.status !== 0 ||
+          !new RegExp(
+            `\\bminos ${deploymentTarget.replace(".", "\\.")}\\b`,
+          ).test(build.stdout)
+        )
+          return false;
+      }
+      return true;
     } catch {
       return false;
     }
@@ -404,9 +416,9 @@ if (process.platform === "darwin") {
       "-DBUILD_SHARED_LIBS=OFF",
       "-DGGML_NATIVE=OFF",
       "-DGGML_BLAS=OFF",
-      "-DGGML_ACCELERATE=OFF",
-      `-DGGML_METAL=${architecture === "arm64" ? "ON" : "OFF"}`,
-      `-DGGML_METAL_EMBED_LIBRARY=${architecture === "arm64" ? "ON" : "OFF"}`,
+      "-DGGML_ACCELERATE=ON",
+      "-DGGML_METAL=ON",
+      "-DGGML_METAL_EMBED_LIBRARY=ON",
       "-DLLAMA_BUILD_NUMBER=10517",
       "-DLLAMA_BUILD_COMMIT=dc72703fc",
       "-DLLAMA_BUILD_TESTS=OFF",
@@ -425,19 +437,25 @@ if (process.platform === "darwin") {
         "Release",
         "--target",
         "llama-completion",
+        "llama-mtmd-cli",
         "--parallel",
         "4",
       ],
       900_000,
     );
-    const built = await findFile(buildRoot, "llama-completion");
-    if (!built) throw new Error(`${targetName} llama-completion was not built`);
+    const builtCompletion = await findFile(buildRoot, "llama-completion");
+    const builtCli = await findFile(buildRoot, "llama-mtmd-cli");
+    if (!builtCompletion || !builtCli)
+      throw new Error(`${targetName} llama.cpp commands were not built`);
     await rm(target, { recursive: true, force: true });
     await mkdir(target, { recursive: true });
     const completion = path.join(target, "llama-completion");
-    await cp(built, completion);
+    const cli = path.join(target, "llama-mtmd-cli");
+    await cp(builtCompletion, completion);
+    await cp(builtCli, cli);
     await cp(path.join(sourceRoot, "LICENSE"), path.join(target, "LICENSE"));
     await chmod(completion, 0o755);
+    await chmod(cli, 0o755);
     await writeFile(
       path.join(target, "OSCODE_RUNTIME.json"),
       `${JSON.stringify(
@@ -448,6 +466,9 @@ if (process.platform === "darwin") {
           deploymentTarget,
           commit: "dc72703fc",
           architecture,
+          metal: true,
+          cpuFallback: "Accelerate",
+          multimodalCli: true,
         },
         null,
         2,
@@ -458,16 +479,18 @@ if (process.platform === "darwin") {
         `${targetName} llama.cpp runtime is not compatible with macOS ${deploymentTarget}`,
       );
     if (architecture === process.arch) {
-      const check = spawnSync(completion, ["--version"], {
-        cwd: target,
-        encoding: "utf8",
-        timeout: 30_000,
-      });
-      if (
-        check.status !== 0 ||
-        !/build\s+10517/i.test(`${check.stdout || ""}\n${check.stderr || ""}`)
-      )
-        throw new Error(`${targetName} llama.cpp runtime failed to start`);
+      for (const binary of [completion, cli]) {
+        const check = spawnSync(binary, ["--version"], {
+          cwd: target,
+          encoding: "utf8",
+          timeout: 30_000,
+        });
+        if (
+          check.status !== 0 ||
+          !/build\s+10517/i.test(`${check.stdout || ""}\n${check.stderr || ""}`)
+        )
+          throw new Error(`${targetName} llama.cpp runtime failed to start`);
+      }
     }
     console.log(
       `Prepared ${targetName} llama.cpp ${version} for macOS ${deploymentTarget}+`,
@@ -506,6 +529,7 @@ for (const targetName of targets) {
     const keep =
       name === "LICENSE" ||
       name === "llama-completion" ||
+      name === "llama-mtmd-cli" ||
       /^lib.+\.(?:dylib|so(?:\..+)?)$/.test(name);
     if (!keep) {
       const candidate = path.join(target, name);
@@ -515,7 +539,9 @@ for (const targetName of targets) {
   }
 
   const completion = path.join(target, "llama-completion");
+  const cli = path.join(target, "llama-mtmd-cli");
   await chmod(completion, 0o755);
+  await chmod(cli, 0o755);
   const check = spawnSync(completion, ["--version"], {
     cwd: target,
     encoding: "utf8",

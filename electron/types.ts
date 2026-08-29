@@ -5,7 +5,7 @@ export type TreeEntry = {
   children?: TreeEntry[];
 };
 export type EditorPreferences = {
-  version: 11;
+  version: 12;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
@@ -100,10 +100,12 @@ export type AiPermissionKind =
   | "packages.install"
   | "debug.run"
   | "web.search"
+  | "attachments.external"
   | "network.request"
   | "browser.control"
   | "computer.control"
   | "computer.external"
+  | "computer.system"
   | "mcp.call"
   | "platformio.install"
   | "platformio.run";
@@ -126,8 +128,12 @@ export type AiPermissionRequest = {
 export type AiChatAttachment = {
   id: string;
   name: string;
-  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  kind: "image" | "document" | "audio" | "video";
+  mimeType: string;
   dataUrl: string;
+  size?: number;
+  extractedText?: string;
+  processingError?: string;
 };
 export type AiActionKind =
   | "plan"
@@ -217,6 +223,8 @@ export type AiHardwareProfile = {
   recommendedTier: Exclude<AiModelTier, "custom">;
   gpuAvailable: boolean;
   gpuName: string;
+  gpuNames?: string[];
+  gpuCount?: number;
   accelerator: "metal" | "vulkan" | "cuda" | "none";
   acceleratorVersion?: string;
   nvidiaDetected?: boolean;

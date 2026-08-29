@@ -5,7 +5,7 @@ export type TreeEntry = {
   children?: TreeEntry[];
 };
 export type EditorPreferences = {
-  version: 11;
+  version: 12;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
@@ -100,14 +100,23 @@ export type AiPermissionKind =
   | "packages.install"
   | "debug.run"
   | "web.search"
+  | "attachments.external"
   | "network.request"
   | "browser.control"
   | "computer.control"
   | "computer.external"
+  | "computer.system"
   | "mcp.call"
   | "platformio.install"
   | "platformio.run";
 export type AiPermissionScope = "once" | "conversation" | "always";
+export type AiAttentionKind = "response" | "permission" | "input";
+export type AiAttention = {
+  kind: AiAttentionKind;
+  title: string;
+  detail: string;
+  permissionKind?: AiPermissionKind;
+};
 export type AiPermissionGrant = {
   id: string;
   kind: AiPermissionKind;
@@ -126,8 +135,12 @@ export type AiPermissionRequest = {
 export type AiChatAttachment = {
   id: string;
   name: string;
-  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  kind: "image" | "document" | "audio" | "video";
+  mimeType: string;
   dataUrl: string;
+  size?: number;
+  extractedText?: string;
+  processingError?: string;
 };
 export type AiActionKind =
   | "plan"
@@ -217,6 +230,8 @@ export type AiHardwareProfile = {
   recommendedTier: Exclude<AiModelTier, "custom">;
   gpuAvailable: boolean;
   gpuName: string;
+  gpuNames?: string[];
+  gpuCount?: number;
   accelerator: "metal" | "vulkan" | "cuda" | "none";
   acceleratorVersion?: string;
   nvidiaDetected?: boolean;
@@ -340,12 +355,26 @@ export type Tab = {
   name: string;
   content: string;
   saved: string;
+  media?: ProjectMediaFile;
 };
+export type ProjectMediaFile = {
+  kind: "image" | "video" | "audio";
+  mimeType: string;
+  bytes: number;
+  url: string;
+};
+export type OpenedProjectFile =
+  | { kind: "text"; content: string }
+  | { kind: "media"; media: ProjectMediaFile };
 declare global {
   interface Window {
     oscode: {
       platform: string;
       setDirtyState(dirty: boolean): void;
+      setAppAttentionBadge(
+        count: number,
+        kind: AiAttentionKind,
+      ): Promise<boolean>;
       confirmDiscardChanges(detail: string): Promise<boolean>;
       openProject(): Promise<{
         root: string;
@@ -506,6 +535,7 @@ declare global {
         data: string,
       ): Promise<boolean>;
       readMarkdownImage(markdownPath: string, source: string): Promise<string>;
+      openProjectFile(path: string): Promise<OpenedProjectFile>;
       readFile(path: string): Promise<string>;
       writeFile(
         path: string,
@@ -556,6 +586,7 @@ declare global {
       writePython(data: string): Promise<boolean>;
       onRunData(cb: (data: string) => void): () => void;
       onRunStopped(cb: () => void): () => void;
+      onPythonEnvironmentChanged(cb: () => void): () => void;
       onMenuAction(cb: (action: string) => void): () => void;
     };
   }
@@ -578,6 +609,10 @@ export type AgentActivity = {
   mode?: "oscode" | "background" | "foreground";
   progress?: number;
   cancellable?: boolean;
+  phase?: "active" | "permission";
+  permissionKind?: "accessibility" | "screen-capture";
+  detail?: string;
+  restartRequired?: boolean;
 };
 
 export type AgentBrowserSnapshot = {

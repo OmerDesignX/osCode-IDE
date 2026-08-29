@@ -303,7 +303,10 @@ export function PlatformioPanel({
                   )}
                 </select>
               </label>
-              <div className="platformio-actions">
+              <div
+                className="platformio-actions horizontal-menu-scroll"
+                data-horizontal-menu
+              >
                 <button
                   disabled={Boolean(busy)}
                   onClick={() => run("build", "Build")}

@@ -16,6 +16,7 @@ export function FeatherIcon({
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
+      data-icon={icon}
       width={size}
       height={size}
       viewBox="0 0 24 24"
@@ -26,6 +27,7 @@ export function FeatherIcon({
       strokeLinejoin="round"
       aria-hidden="true"
       focusable="false"
+      pointerEvents={onClick ? "auto" : "none"}
       onClick={onClick}
       dangerouslySetInnerHTML={{ __html: definition.contents }}
     />

@@ -6,8 +6,8 @@ const ARM64_ARCH = 3;
 
 /**
  * Add only the runtime tree matching this macOS package. The Computer Control
- * helper stays universal because it is small and uses the same stable resource
- * path on both architectures.
+ * native addon stays universal because it is small and must execute inside the
+ * osCode process so macOS applies the app's Accessibility permission to it.
  */
 module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") return;
@@ -35,8 +35,8 @@ module.exports = async function afterPack(context) {
     [`vendor/llama/${target}`, `llama/${target}`],
     ["vendor/llama/LICENSE", "llama/LICENSE"],
     [
-      "vendor/computer-control/darwin-universal",
-      "computer-control/darwin-universal",
+      "vendor/computer-control/darwin-universal/oscode-computer-control.node",
+      "computer-control/darwin-universal/oscode-computer-control.node",
     ],
   ];
 

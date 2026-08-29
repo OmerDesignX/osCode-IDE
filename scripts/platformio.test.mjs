@@ -5,10 +5,26 @@ import os from "node:os";
 import path from "node:path";
 import {
   PlatformioService,
+  platformioProgressFromOutput,
   platformioValidation,
   preferredPlatformioSerialDevice,
   rankPlatformioBoards,
 } from "../dist-electron/main/platformio.js";
+
+test("PlatformIO progress follows real output and never moves backwards", () => {
+  assert.equal(platformioProgressFromOutput("Processing esp32dev", 0), 7);
+  assert.equal(platformioProgressFromOutput("Downloading toolchain", 7), 18);
+  assert.equal(
+    platformioProgressFromOutput("Compiling .pio/src/main.o", 18),
+    38,
+  );
+  assert.equal(
+    platformioProgressFromOutput("Writing at 0x00001000... (64.2 %)", 38),
+    64,
+  );
+  assert.equal(platformioProgressFromOutput("earlier stage", 64), 64);
+  assert.equal(platformioProgressFromOutput("SUCCESS", 64), 100);
+});
 
 test("PlatformIO board search tolerates the common eps32 transposition", () => {
   const boards = [

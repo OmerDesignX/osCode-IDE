@@ -18,6 +18,41 @@ type Variant = {
   shards: number;
 };
 
+type PublishedVariant = {
+  runtime?: unknown;
+  tier?: unknown;
+  path?: unknown;
+  bytes?: unknown;
+  files?: unknown;
+  modalities?: unknown;
+};
+
+function publishedFiles(variant: Variant, published: PublishedVariant) {
+  if (!Array.isArray(published.files)) return filesForVariant(variant);
+  const files = published.files
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.replace(/\\/g, "/").replace(/^\.\//, ""));
+  if (!files.length || files.length > 1_000)
+    throw new Error("The published model file list is invalid");
+  const allowedPrefix =
+    variant.runtime === "mlx"
+      ? `${variant.repositoryPath}/`
+      : `${path.posix.dirname(variant.repositoryPath)}/`;
+  if (
+    files.some(
+      (file) =>
+        !file.startsWith(allowedPrefix) ||
+        file.includes("../") ||
+        file.endsWith("/"),
+    )
+  )
+    throw new Error("The published model file list leaves its model folder");
+  const required = filesForVariant(variant);
+  if (required.some((file) => !files.includes(file)))
+    throw new Error("The published model file list is incomplete");
+  return [...new Set(files)];
+}
+
 const repository = "https://github.com/OmerDesignX/osCode-Models";
 const rawRepository = `${repository}/raw/refs/heads/main`;
 const rawTextRepository =
@@ -196,12 +231,7 @@ export async function downloadModelVariant(options: {
     ]);
     const release = JSON.parse(releaseText) as {
       release?: unknown;
-      variants?: Array<{
-        runtime?: unknown;
-        tier?: unknown;
-        path?: unknown;
-        bytes?: unknown;
-      }>;
+      variants?: PublishedVariant[];
     };
     const published = release.variants?.find(
       (item) =>
@@ -209,16 +239,19 @@ export async function downloadModelVariant(options: {
           (variant.runtime === "llamacpp" ? "llama.cpp" : "mlx") &&
         item.tier === variant.tier,
     );
+    const publishedBytes = Number(published?.bytes);
     if (
-      release.release !== "1.0" ||
+      !/^\d+(?:\.\d+)?$/.test(String(release.release || "")) ||
       published?.path !== variant.repositoryPath ||
-      Number(published.bytes) !== variant.bytes
+      !Number.isSafeInteger(publishedBytes) ||
+      publishedBytes < 1_000_000 ||
+      publishedBytes > 100 * 1024 ** 3
     )
       throw new Error(
         "The published model catalogue does not match this osCode release",
       );
     const expected = checksums(checksumText);
-    const files = filesForVariant(variant);
+    const files = publishedFiles(variant, published!);
     let received = 0;
     for (const repositoryPath of files) {
       if (options.signal.aborted)
@@ -229,7 +262,7 @@ export async function downloadModelVariant(options: {
           : repositoryPath.slice(variant.repositoryPath.length + 1);
       const destination = path.join(staging, relative);
       options.onProgress(
-        Math.min(99, Math.floor((received / variant.bytes) * 100)),
+        Math.min(99, Math.floor((received / publishedBytes) * 100)),
         path.basename(repositoryPath),
       );
       await downloadFile(
@@ -239,7 +272,7 @@ export async function downloadModelVariant(options: {
         (bytes) => {
           received += bytes;
           options.onProgress(
-            Math.min(99, Math.floor((received / variant.bytes) * 100)),
+            Math.min(99, Math.floor((received / publishedBytes) * 100)),
             path.basename(repositoryPath),
           );
         },
@@ -257,6 +290,26 @@ export async function downloadModelVariant(options: {
     );
     await fs.mkdir(path.dirname(finalDirectory), { recursive: true });
     await fs.rm(finalDirectory, { recursive: true, force: true });
+    await fs.writeFile(
+      path.join(staging, "OSCODE_MODEL.json"),
+      `${JSON.stringify(
+        {
+          release: String(release.release),
+          runtime: variant.runtime,
+          tier: variant.tier,
+          bytes: publishedBytes,
+          files: files.map((file) =>
+            variant.runtime === "llamacpp"
+              ? path.basename(file)
+              : file.slice(variant.repositoryPath.length + 1),
+          ),
+          modalities: published.modalities,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
     await fs.rename(staging, finalDirectory);
     activated = true;
     options.onProgress(100, "Ready");

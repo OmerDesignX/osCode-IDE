@@ -27,6 +27,28 @@ function run(command, args, env = {}) {
   });
 }
 
+async function makeDirectoriesWritable(directory) {
+  const details = await fs.lstat(directory).catch(() => null);
+  if (!details) return;
+  if (!details.isDirectory() || details.isSymbolicLink())
+    throw new Error(`Refusing to clean unexpected release path: ${directory}`);
+  await fs.chmod(directory, 0o700);
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory() && !entry.isSymbolicLink())
+      await makeDirectoriesWritable(path.join(directory, entry.name));
+  }
+}
+
+async function removeGeneratedRelease(target) {
+  const releaseRoot = path.join(root, "release");
+  const relative = path.relative(releaseRoot, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative))
+    throw new Error(`Refusing to clean outside ${releaseRoot}`);
+  if (!(await fs.lstat(target).catch(() => null))) return;
+  await makeDirectoriesWritable(target);
+  await fs.rm(target, { recursive: true, force: true });
+}
+
 await run("pnpm", ["run", "release:check-disk"]);
 await run("bash", ["releaseScripts/macos/prepare-icon.sh"]);
 await run("pnpm", ["run", "format:check"]);
@@ -43,6 +65,7 @@ await run("pnpm", ["exec", "vite", "build"], {
 await run("pnpm", ["run", "smoke:run"]);
 for (const architecture of ["arm64", "x64"]) {
   const packageDirectory = path.join(root, "release", `macos-${architecture}`);
+  await removeGeneratedRelease(packageDirectory);
   const localIntegritySeal = requireSigned
     ? []
     : ["--config.mac.identity=-", "--config.mac.hardenedRuntime=false"];
@@ -76,7 +99,7 @@ for (const architecture of ["arm64", "x64"]) {
   );
 }
 await run("pnpm", ["run", "release:stage:macos"]);
-await fs.rm(path.join(root, "release"), { recursive: true, force: true });
+await removeGeneratedRelease(path.join(root, "release"));
 
 process.stdout.write(
   "\nApple-silicon and Intel macOS releases verified and staged in release-assets/macos; intermediate release folder removed\n",

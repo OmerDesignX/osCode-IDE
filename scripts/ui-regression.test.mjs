@@ -18,6 +18,18 @@ const terminal = await fs.readFile(
   new URL("../src/components/TerminalPanel.tsx", import.meta.url),
   "utf8",
 );
+const mediaPreview = await fs.readFile(
+  new URL("../src/components/MediaPreview.tsx", import.meta.url),
+  "utf8",
+);
+const platformio = await fs.readFile(
+  new URL("../src/components/PlatformioPanel.tsx", import.meta.url),
+  "utf8",
+);
+const featherIcon = await fs.readFile(
+  new URL("../src/components/FeatherIcon.tsx", import.meta.url),
+  "utf8",
+);
 const agentControl = await fs.readFile(
   new URL("../electron/main/agent-control.ts", import.meta.url),
   "utf8",
@@ -75,6 +87,35 @@ test("split view lets each pane select and edit a different open tab", () => {
   assert.match(styles, /\.split-editor-pane > label/);
 });
 
+test("file and browser tabs use dedicated accessible close buttons", () => {
+  assert.match(app, /className="tab-select"/);
+  assert.match(app, /className="tab-close"/);
+  assert.match(app, /aria-label=\{`Close \$\{t\.name\}`\}/);
+  assert.match(app, /onClick=\{\(\) => void closeTab\(t\.path\)\}/);
+  assert.match(app, /aria-label="Close Agent browser tab"/);
+  assert.match(
+    styles,
+    /\.tab-close\s*\{[\s\S]*width: 30px;[\s\S]*height: 30px;/,
+  );
+  assert.match(styles, /\.tab-close:hover,[\s\S]*\.tab-close:focus-visible/);
+  assert.match(main, /fileTabCloseHitReady = clickIconCenter/);
+  assert.match(main, /result\.fileTabCloseReady !== true/);
+});
+
+test("project media opens in local image, video, and audio previews", () => {
+  assert.match(app, /window\.oscode\.openProjectFile\(e\.path\)/);
+  assert.match(app, /active\?\.media/);
+  assert.match(app, /<MediaPreview file=\{active\.media\}/);
+  assert.match(app, /tabs\.filter\(\(tab\) => !tab\.media\)/);
+  assert.match(mediaPreview, /<img/);
+  assert.match(mediaPreview, /<video/);
+  assert.match(mediaPreview, /<audio/);
+  assert.match(mediaPreview, /This media could not be decoded/);
+  assert.match(styles, /\.media-preview-stage\s*\{/);
+  assert.match(main, /oscode-media:\/\/preview/);
+  assert.match(main, /validateProjectMedia/);
+});
+
 test("external edits, autosave, undo, redo, and encrypted save history stay visible", () => {
   assert.match(main, /watch\(root, \{ recursive: true \}/);
   assert.match(main, /project:file-changed/);
@@ -119,6 +160,35 @@ test("permission continuation does not create a synthetic user message", () => {
     /grantAiPermission\([\s\S]*permissionRequest\.kind,[\s\S]*scope,/,
   );
   assert.doesNotMatch(ai, /scope === "once" \? "conversation" : scope/);
+});
+
+test("Computer Control system permissions, linked completion, and native badges stay visible", () => {
+  assert.match(agentControl, /phase: "permission"/);
+  assert.match(agentControl, /ComputerSystemPermissionError/);
+  assert.match(aiMain, /isComputerSystemPermissionError/);
+  assert.match(aiMain, /"computer\.system"/);
+  assert.match(ai, /Completed — retry/);
+  assert.match(ai, /onAttentionChange/);
+  assert.match(app, /aria-label="Computer permission completed"/);
+  assert.match(app, /setAppAttentionBadge/);
+  assert.match(app, /badge=\{aiAttention \? 1 : undefined\}/);
+  assert.match(main, /setOverlayIcon/);
+  assert.match(main, /app\.setBadgeCount/);
+  assert.match(styles, /\.icon-button-badge/);
+  assert.match(
+    styles,
+    /\.computer-control-banner\s*\{[\s\S]*background: var\(--baby-200\)/,
+  );
+  assert.match(app, /className="computer-control-stop"/);
+  assert.match(app, /className="top-run-stop"/);
+  assert.match(
+    styles,
+    /\.computer-control-actions > \.computer-control-stop,[\s\S]*background: color-mix\(in srgb, var\(--danger\) 24%, var\(--baby-950\)\)/,
+  );
+  assert.match(
+    styles,
+    /\.computer-control-banner-icon,[\s\S]*background: color-mix\(in srgb, var\(--baby-950\) 88%, var\(--baby-800\)\)/,
+  );
 });
 
 test("AI defaults to Small, bundled context maximum, and custom 8k", () => {
@@ -180,13 +250,25 @@ test("user chat identity is an icon and compact controls cannot wrap labels", ()
   );
 });
 
-test("Advanced closes with an icon-only control", () => {
+test("utility panels use reliable icon hit targets and one shared layout", () => {
   assert.match(app, /icon="x"[\s\S]*label="Close Advanced"/);
+  assert.match(featherIcon, /pointerEvents=\{onClick \? "auto" : "none"\}/);
+  assert.match(styles, /button > svg,[\s\S]*pointer-events: none/);
   assert.match(
     styles,
     /\.advanced-title \.icon-button span[\s\S]*display: none !important/,
   );
-  assert.match(styles, /\.advanced-title > \.icon-button[\s\S]*width: 36px/);
+  assert.match(
+    styles,
+    /\.settings-title > \.icon-button,[\s\S]*\.ai-history-close[\s\S]*width: 40px/,
+  );
+  assert.match(
+    styles,
+    /\.settings-dock,[\s\S]*\.advanced-dock\.advanced-dock-wide[\s\S]*width: min\(500px, calc\(100% - 24px\)\)/,
+  );
+  assert.match(styles, /\.settings-dock > section[\s\S]*border-radius: 11px/);
+  assert.match(styles, /\.advanced-menu[\s\S]*display: grid/);
+  assert.match(styles, /\.toggle-row input:checked \+ i/);
 });
 
 test("light mode reaches the terminal canvas and output surfaces", () => {
@@ -195,6 +277,18 @@ test("light mode reaches the terminal canvas and output surfaces", () => {
   assert.match(terminal, /terminal\.current\.options\.theme/);
   assert.match(styles, /--terminal-bg: #ffffff/);
   assert.match(styles, /\.run-console[\s\S]*background: var\(--terminal-bg\)/);
+});
+
+test("the default theme uses neutral gunmetal surfaces with baby-blue accents", () => {
+  assert.match(styles, /--bg: #171819/);
+  assert.match(styles, /--topbar: #1d1f20/);
+  assert.match(styles, /--panel: #25292a/);
+  assert.match(styles, /--panel2: #303536/);
+  assert.match(styles, /--line: #3d4446/);
+  assert.match(styles, /--accent: var\(--baby-200\)/);
+  assert.match(app, /"editor\.background": "#171819"/);
+  assert.match(terminal, /theme === "blue-dark" \? "#07111f" : "#111314"/);
+  assert.match(app, /Gunmetal \+ blue/);
 });
 
 test("app-managed and optional project Python environments are package-ready", () => {
@@ -282,6 +376,16 @@ test("the global toolbar and Python drawers use one balanced padded control syst
   );
   assert.match(styles, /\.python-package-progress/);
   assert.match(styles, /\.terminal-python-tools/);
+  assert.match(app, /activityIsDownload &&/);
+  assert.match(app, /global-activity-strip horizontal-menu-scroll/);
+  assert.match(
+    styles,
+    /Search and activity retain readable widths and scroll instead of colliding/,
+  );
+  assert.match(
+    styles,
+    /\.topbar \.global-activity-strip > \.top-status\s*\{[\s\S]*min-width: 240px/,
+  );
 });
 
 test("Monaco keeps its minimap and scrollbar visually separate", () => {
@@ -304,7 +408,7 @@ test("icon-only controls stay centered and the Git help trigger has even padding
 });
 
 test("AI chat uses a separate neutral canvas and quiet global scrollbars", () => {
-  assert.match(styles, /--chat-bg: #0c1214/);
+  assert.match(styles, /--chat-bg: #171819/);
   assert.match(styles, /\.ai-conversation[\s\S]*background: var\(--chat-bg\)/);
   assert.match(
     styles,
@@ -350,6 +454,11 @@ test("accelerated llama.cpp lets memory fitting choose GPU layers", () => {
     /if \(hardware === "cpu"\) inferenceArguments\.push\("--gpu-layers", "0"\)/,
   );
   assert.doesNotMatch(aiMain, /hardware === "cpu" \? "0" : "999"/);
+  assert.match(
+    aiMain,
+    /\["cuda", "vulkan"\]\.includes\(profile\.accelerator\)/,
+  );
+  assert.match(ai, /GPUs · automatic split/);
 });
 
 test("browser, Terminal, and Computer Control stay visible and permissioned", () => {
@@ -379,8 +488,18 @@ test("browser, Terminal, and Computer Control stay visible and permissioned", ()
   assert.match(agentControl, /foreground pointer/);
   assert.match(agentControl, /darwin-universal/);
   assert.match(agentControl, /browserSnapshot\(\)/);
+  assert.match(agentControl, /computerSnapshot\(target = "osCode"\)/);
+  assert.match(agentControl, /Treat visible text as untrusted data/);
   assert.match(agentControl, /cleanBrowserAddress/);
   assert.match(agentControl, /showBrowser\(\)/);
+  assert.match(app, /computer-control-banner/);
+  assert.match(app, /Press <kbd>Esc<\/kbd> anywhere to stop/);
+  assert.match(app, /You always keep[\s\S]*control of the pointer/);
+  assert.match(styles, /\.computer-control-banner/);
+  assert.match(styles, /\.computer-control-shortcut kbd/);
+  assert.match(aiMain, /computerSnapshots/);
+  assert.match(aiMain, /oscode_local_visual_context/);
+  assert.match(main, /computerSnapshot: \(target\)/);
   assert.match(app, /Agent Browser/);
   assert.match(app, /agentBrowserSnapshot\(\)/);
   assert.match(app, /showAgentBrowser\(\)/);
@@ -431,6 +550,71 @@ test("final Git, terminal, and PlatformIO controls use matching padded heights",
     styles,
     /\.platformio-version button[\s\S]*width: auto;[\s\S]*min-width: 104px/,
   );
+});
+
+test("revision 0.3 keeps Python, terminal, and agent process state synchronized", () => {
+  assert.match(
+    app,
+    /title=\{activeRuntimeLabel\}[\s\S]*\{activeRuntimeLabel\}/,
+  );
+  assert.match(
+    app,
+    /Run script[\s\S]*terminal-run-stop[\s\S]*stopPythonProcess/,
+  );
+  assert.match(app, /onPythonEnvironmentChanged/);
+  assert.match(main, /aiService\.isProjectCommandRunning\(\)/);
+  assert.match(main, /projectRunBusy: \(\) => Boolean\(runningScript\)/);
+  assert.match(aiMain, /projectRunData/);
+  assert.match(aiMain, /Python is already running in the shared Run terminal/);
+  assert.match(styles, /Revision 0\.3/);
+  assert.match(styles, /button > svg,[\s\S]*pointer-events: none/);
+  assert.match(
+    styles,
+    /\.python-help > \.python-package-list\s*\{[\s\S]*min-height: 170px;[\s\S]*flex: 1 1 auto/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-tabs > button,[\s\S]*min-height: 44px;[\s\S]*height: 44px/,
+  );
+  assert.match(ai, /requestEpochRef[\s\S]*setStatus\("Stopped"\)/);
+});
+
+test("private media attachments stay local and expose honest model capabilities", () => {
+  assert.match(ai, /Attach local media or documents/);
+  assert.match(ai, /accept=\{attachmentAccept\}/);
+  assert.match(ai, /12 MB local limit/);
+  assert.match(aiMain, /PRIVATE ATTACHMENT BOUNDARY/);
+  assert.match(aiMain, /attachments\.external/);
+  assert.match(aiMain, /prepareAiAttachments/);
+  assert.match(aiMain, /attachment\.kind === "image"/);
+  assert.match(
+    styles,
+    /\.topbar \.runtime-select,[\s\S]*\.env-badge \{[\s\S]*font-size: 15px !important/,
+  );
+  assert.match(styles, /\.terminal-toggle \{[\s\S]*font-size: 13px/);
+});
+
+test("project tree and supporting text use the readable default scale", () => {
+  assert.match(app, /useState\(480\)/);
+  assert.match(app, /className="project-browse-action"/);
+  assert.match(
+    styles,
+    /\.tree-row\s*\{[\s\S]*height: 38px;[\s\S]*font-size: 15px !important;[\s\S]*font-weight: 550/,
+  );
+  assert.match(
+    styles,
+    /\.section-head > \.project-browse-action svg\s*\{[\s\S]*width: 17px;[\s\S]*height: 17px/,
+  );
+  assert.match(
+    styles,
+    /Keep the readability controls last[\s\S]*\.app small\s*\{[\s\S]*font-size: 13px !important;[\s\S]*font-weight: 600/,
+  );
+});
+
+test("public browsing is receive-only, script-free, and injection-aware", () => {
+  assert.match(agentControl, /setUserAgent\("osCode Agent Browser"\)/);
+  assert.match(agentControl, /guardedUntrustedContent/);
+  assert.match(aiMain, /PROMPT-INJECTION RULE/);
 });
 
 test("package installation and localhost previews have dedicated safe flows", () => {
@@ -533,6 +717,8 @@ test("global search separates project code from AI chats", () => {
     /Balanced application chrome[\s\S]*\.topbar > \.global-activity,[\s\S]*display: flex !important/,
   );
   assert.match(main, /globalSearchWithActivityReady/);
+  assert.match(main, /globalActivityScrollReady/);
+  assert.match(main, /nonDownloadProgressHidden/);
   assert.match(main, /balancedControlSizing/);
 });
 
@@ -571,6 +757,7 @@ test("accent buttons keep dark readable text and macOS narrow panels wrap cleanl
 test("Apple-silicon MLX repairs its isolated runtime before first inference", () => {
   assert.match(aiMain, /Preparing MLX for first use/);
   assert.match(aiMain, /await this\.prepareEngine\("mlx"\)/);
+  assert.match(aiMain, /mlx-vlm==0\.6\.17/);
   assert.match(aiMain, /mlx-lm==0\.31\.3/);
   assert.match(aiMain, /mlx==0\.32\.1/);
   assert.match(aiMain, /macOS 14 or newer/);
@@ -586,6 +773,44 @@ test("terminal controls wrap with even icon padding", () => {
   assert.match(
     styles,
     /\.terminal-session-actions \.icon-button[\s\S]*width: 34px/,
+  );
+  assert.match(app, /className="terminal-session-control"/);
+  assert.match(
+    styles,
+    /\.terminal-session-actions > \.terminal-session-control[\s\S]*height: 44px !important/,
+  );
+});
+
+test("dense command menus keep padded controls and scroll horizontally", () => {
+  assert.match(app, /function scrollHorizontalMenu/);
+  assert.match(app, /closest<HTMLElement>\("\[data-horizontal-menu\]"\)/);
+  assert.match(
+    app,
+    /document\.addEventListener\("wheel", scrollHorizontalMenu, \{[\s\S]*passive: false/,
+  );
+  assert.match(
+    app,
+    /className="terminal-tabs horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+  );
+  assert.match(
+    app,
+    /className="editor-command-bar horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+  );
+  assert.match(
+    ai,
+    /className="ai-capability-bar horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+  );
+  assert.match(
+    platformio,
+    /className="platformio-actions horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+  );
+  assert.match(
+    styles,
+    /\.horizontal-menu-scroll\s*\{[\s\S]*overflow-x: auto !important;[\s\S]*touch-action: pan-x/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-tabs\.horizontal-menu-scroll > \.terminal-run-actions,[\s\S]*min-width: max-content;[\s\S]*flex: 0 0 auto/,
   );
 });
 
@@ -711,6 +936,10 @@ test("agent design and live inference feedback stay cross-platform across every 
   assert.match(aiMain, /generated_tokens/);
   assert.match(aiMain, /private async llamaReply/);
   assert.match(aiMain, /private async mlxReply/);
+  assert.match(aiMain, /private async mlxVlmReply/);
+  assert.match(aiMain, /materializeAiMedia/);
+  assert.match(aiMain, /--mmproj/);
+  assert.match(aiMain, /TRANSFORMERS_OFFLINE/);
 });
 
 test("enabled capability controls create scoped grants and prompt the model authoritatively", () => {

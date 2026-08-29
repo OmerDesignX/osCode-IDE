@@ -6,15 +6,376 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  attachmentContextForModel,
+  hasPrivateAttachmentContext,
   isTrustedOllamaDownloadUrl,
   isPackageInstallCommand,
+  llamaMediaArguments,
+  localMediaMessages,
   LocalAiService,
   ollamaCliAssetName,
   pythonPackageInstallSpecs,
   requiredProjectImageDownloadCount,
   requiresProjectMutation,
+  privateAttachmentExternalDetail,
   toolResultForModel,
 } from "../dist-electron/main/ai.js";
+import {
+  materializeAiMedia,
+  prepareAiAttachments,
+} from "../dist-electron/main/attachments.js";
+import { localModelCapabilities } from "../dist-electron/main/model-capabilities.js";
+import { ComputerSystemPermissionError } from "../dist-electron/main/computer-permissions.js";
+
+test("attachments are decoded locally and represented honestly for each engine", async () => {
+  const [document] = await prepareAiAttachments([
+    {
+      id: "notes",
+      name: "notes.md",
+      kind: "document",
+      mimeType: "text/markdown",
+      dataUrl: `data:text/markdown;base64,${Buffer.from("# Private notes\nKeep this local.").toString("base64")}`,
+    },
+  ]);
+  assert.equal(document.kind, "document");
+  assert.match(document.extractedText, /Keep this local/);
+  assert.match(
+    attachmentContextForModel([document], "mlx")[0],
+    /untrusted reference data/,
+  );
+
+  const docx = await fs.readFile(
+    new URL(
+      "../node_modules/mammoth/test/test-data/single-paragraph.docx",
+      import.meta.url,
+    ),
+  );
+  const [wordDocument] = await prepareAiAttachments([
+    {
+      id: "word",
+      name: "notes.docx",
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      dataUrl: `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${docx.toString("base64")}`,
+    },
+  ]);
+  assert.match(wordDocument.extractedText, /Walking on imported air/);
+
+  const stream = "BT /F1 18 Tf 72 720 Td (Private PDF text) Tj ET";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+    .slice(1)
+    .map((offset) => `${String(offset).padStart(10, "0")} 00000 n `)
+    .join(
+      "\n",
+    )}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const [pdfDocument] = await prepareAiAttachments([
+    {
+      id: "pdf",
+      name: "notes.pdf",
+      mimeType: "application/pdf",
+      dataUrl: `data:application/pdf;base64,${Buffer.from(pdf).toString("base64")}`,
+    },
+  ]);
+  assert.match(pdfDocument.extractedText, /Private PDF text/);
+
+  const image = {
+    id: "image",
+    name: "private.png",
+    kind: "image",
+    mimeType: "image/png",
+    dataUrl: "data:image/png;base64,AA==",
+  };
+  assert.match(
+    attachmentContextForModel([image], "mlx")[0],
+    /pixels are supplied directly to the selected local model/,
+  );
+  assert.match(
+    attachmentContextForModel([image], "mlx", {
+      text: true,
+      documents: true,
+      images: true,
+      video: true,
+      audio: false,
+      mediaInput: true,
+    })[0],
+    /pixels are supplied directly to the selected local model/,
+  );
+  assert.match(
+    attachmentContextForModel([image], "ollama")[0],
+    /pixels are supplied directly to the selected local model/,
+  );
+  assert.equal(
+    hasPrivateAttachmentContext([
+      { role: "user", content: "Review it", attachments: [image] },
+    ]),
+    true,
+  );
+});
+
+test("private multimodal files are short-lived and local runtimes receive media without sidecar gating", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-media-test-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+
+  const media = await materializeAiMedia(
+    [
+      {
+        attachments: [
+          {
+            id: "private-image",
+            name: "private.png",
+            kind: "image",
+            mimeType: "image/png",
+            dataUrl: "data:image/png;base64,AA==",
+          },
+        ],
+      },
+    ],
+    base,
+  );
+  assert.equal(media.files.length, 1);
+  assert.equal(await fs.readFile(media.files[0].path, "hex"), "00");
+  assert.deepEqual(await llamaMediaArguments(media), [
+    "--image",
+    media.files[0].path,
+  ]);
+  const mediaRouting = localMediaMessages([
+    {
+      role: "user",
+      content: "Review everything locally",
+      attachments: [
+        {
+          id: "image",
+          name: "image.png",
+          kind: "image",
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,AA==",
+        },
+        {
+          id: "audio",
+          name: "audio.wav",
+          kind: "audio",
+          mimeType: "audio/wav",
+          dataUrl: "data:audio/wav;base64,AA==",
+        },
+        {
+          id: "video",
+          name: "video.mp4",
+          kind: "video",
+          mimeType: "video/mp4",
+          dataUrl: "data:video/mp4;base64,AA==",
+        },
+        {
+          id: "document",
+          name: "notes.md",
+          kind: "document",
+          mimeType: "text/markdown",
+          dataUrl: "data:text/markdown;base64,AA==",
+          extractedText: "decoded locally",
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    mediaRouting[0].attachments.map((attachment) => attachment.kind),
+    ["image", "audio", "video"],
+  );
+  const textOnlyRouting = localMediaMessages(
+    [
+      {
+        role: "user",
+        content: "Inspect locally",
+        attachments: mediaRouting[0].attachments,
+      },
+    ],
+    {
+      text: true,
+      documents: true,
+      images: false,
+      video: false,
+      audio: false,
+      mediaInput: false,
+    },
+  );
+  assert.deepEqual(textOnlyRouting[0].attachments, []);
+  await media.cleanup();
+  await assert.rejects(fs.stat(media.root), { code: "ENOENT" });
+
+  const textOnly = path.join(base, "text-only");
+  await fs.mkdir(textOnly);
+  await fs.writeFile(
+    path.join(textOnly, "config.json"),
+    JSON.stringify({ text_config: {} }),
+  );
+  await fs.writeFile(
+    path.join(textOnly, "model.safetensors.index.json"),
+    JSON.stringify({
+      weight_map: { "language_model.layers.0": "model.safetensors" },
+    }),
+  );
+  const routedMlxCapabilities = await localModelCapabilities("mlx", textOnly);
+  assert.equal(routedMlxCapabilities.images, false);
+  assert.equal(routedMlxCapabilities.video, false);
+  assert.equal(routedMlxCapabilities.audio, false);
+  assert.equal(routedMlxCapabilities.mediaInput, false);
+
+  await fs.writeFile(
+    path.join(textOnly, "config.json"),
+    JSON.stringify({
+      architectures: ["Qwen3_5ForConditionalGeneration"],
+      text_config: { model_type: "qwen3_5_text" },
+      image_token_id: 248056,
+      video_token_id: 248057,
+    }),
+  );
+  const reservedMediaTokens = await localModelCapabilities("mlx", textOnly);
+  assert.equal(reservedMediaTokens.images, false);
+  assert.equal(reservedMediaTokens.video, false);
+  assert.equal(reservedMediaTokens.mediaInput, false);
+
+  const vision = path.join(base, "vision");
+  await fs.mkdir(vision);
+  await fs.writeFile(
+    path.join(vision, "config.json"),
+    JSON.stringify({ text_config: {}, vision_config: {} }),
+  );
+  await fs.writeFile(
+    path.join(vision, "preprocessor_config.json"),
+    JSON.stringify({ do_resize: true }),
+  );
+  await fs.writeFile(
+    path.join(vision, "model.safetensors.index.json"),
+    JSON.stringify({
+      weight_map: { "vision_model.layers.0": "model.safetensors" },
+    }),
+  );
+  const visionCapabilities = await localModelCapabilities("mlx", vision);
+  assert.equal(visionCapabilities.images, true);
+  assert.equal(visionCapabilities.video, true);
+  assert.equal(visionCapabilities.audio, false);
+  assert.equal(visionCapabilities.mediaInput, true);
+
+  const unified = path.join(base, "unified");
+  await fs.mkdir(unified);
+  await fs.writeFile(
+    path.join(unified, "config.json"),
+    JSON.stringify({
+      architectures: ["Qwen3_5ForConditionalGeneration"],
+      image_token_id: 100,
+      video_token_id: 101,
+      text_config: {},
+    }),
+  );
+  const unifiedCapabilities = await localModelCapabilities("mlx", unified);
+  assert.equal(unifiedCapabilities.images, false);
+  assert.equal(unifiedCapabilities.video, false);
+  assert.equal(unifiedCapabilities.mediaInput, false);
+
+  const gguf = path.join(base, "model.gguf");
+  const projector = path.join(base, "mmproj-model.gguf");
+  await fs.writeFile(gguf, "gguf");
+  await fs.writeFile(projector, "projector");
+  const ggufCapabilities = await localModelCapabilities("llamacpp", gguf);
+  assert.equal(ggufCapabilities.images, true);
+  assert.equal(ggufCapabilities.projector, projector);
+
+  await fs.rm(projector);
+  const unifiedGgufCapabilities = await localModelCapabilities(
+    "llamacpp",
+    gguf,
+  );
+  assert.equal(unifiedGgufCapabilities.images, true);
+  assert.equal(unifiedGgufCapabilities.video, true);
+  assert.equal(unifiedGgufCapabilities.audio, true);
+  assert.equal(unifiedGgufCapabilities.mediaInput, true);
+  assert.equal(unifiedGgufCapabilities.projector, undefined);
+});
+
+test("attachment egress permission is exact and cannot be replaced by Web access", async (t) => {
+  const { base, service, chat } = await fixture({
+    serviceOptions: {
+      mcpCall: async (serverId, name) => `called ${serverId}:${name}`,
+    },
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await service.grantPermission("web.search", "conversation", chat.id, "web");
+  const call = {
+    name: "web_search",
+    arguments: { query: "generic public documentation" },
+  };
+  await assert.rejects(
+    service.runTool(
+      call,
+      "auto",
+      new Set(),
+      [],
+      true,
+      true,
+      chat.id,
+      true,
+      true,
+      "auto",
+      false,
+      true,
+      new Set(),
+    ),
+    (error) => {
+      assert.equal(error.kind, "attachments.external");
+      assert.match(error.detail, /generic public documentation/);
+      return true;
+    },
+  );
+  const exact = privateAttachmentExternalDetail({
+    name: "mcp_call_tool",
+    arguments: {
+      server_id: "docs",
+      name: "lookup",
+      arguments: { topic: "generic API" },
+    },
+  });
+  await service.grantPermission("attachments.external", "once", chat.id, exact);
+  await service.grantPermission("mcp.call", "once", chat.id, "docs: lookup");
+  const approvals = new Set([exact]);
+  assert.equal(
+    await service.runTool(
+      {
+        name: "mcp_call_tool",
+        arguments: {
+          server_id: "docs",
+          name: "lookup",
+          arguments: { topic: "generic API" },
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      true,
+      chat.id,
+      true,
+      true,
+      "auto",
+      true,
+      true,
+      approvals,
+    ),
+    "called docs:lookup",
+  );
+  assert.equal(approvals.size, 0);
+});
 
 test("project image delivery obligations are narrow and count requested assets", () => {
   assert.equal(
@@ -161,6 +522,60 @@ test("web, external desktop, and MCP actions request their scoped permission", a
       ...baseArgs,
     ),
     /blocked to protect project and personal data/,
+  );
+});
+
+test("computer inspection gives the local model a private transient screenshot", async (t) => {
+  let capturedTarget = "";
+  const { base, service, chat } = await fixture({
+    serviceOptions: {
+      computerInspect: async (target) => `inspected ${target}`,
+      computerSnapshot: async (target) => {
+        capturedTarget = target;
+        return {
+          id: "screen-1",
+          name: "Preview screenshot.png",
+          kind: "image",
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,AA==",
+          size: 1,
+          target,
+          scope: "window",
+          capturedAt: Date.now(),
+        };
+      },
+    },
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await service.grantPermission(
+    "computer.external",
+    "conversation",
+    chat.id,
+    "Preview",
+  );
+  await service.grantPermission(
+    "computer.control",
+    "conversation",
+    chat.id,
+    "Preview",
+  );
+  const result = await service.runTool(
+    { name: "computer_inspect", arguments: { target: "Preview" } },
+    "auto",
+    new Set(),
+    [],
+    true,
+    false,
+    chat.id,
+    false,
+    true,
+  );
+  assert.equal(capturedTarget, "Preview");
+  assert.match(result, /current window screenshot/i);
+  assert.match(result, /private, transient/);
+  assert.equal(
+    service.computerSnapshots.get(chat.id)?.dataUrl,
+    "data:image/png;base64,AA==",
   );
 });
 
@@ -572,7 +987,10 @@ test("successful tool results tell small models to stop repeating actions", () =
   );
   assert.match(platformioFailure, /COMPILER RECOVERY/);
   assert.match(platformioFailure, /oscode_compiler_diagnostics/);
-  assert.match(platformioFailure, /src\/main\.cpp:42: error: invalid conversion/);
+  assert.match(
+    platformioFailure,
+    /src\/main\.cpp:42: error: invalid conversion/,
+  );
   assert.match(platformioFailure, /src\/main\.cpp:51: error: cannot convert/);
   assert.match(platformioFailure, /every listed compiler error/);
   assert.match(platformioFailure, /next write must differ/);
@@ -845,7 +1263,8 @@ test("repeated missing-path command failures expose current project paths and fo
     messages: [
       {
         role: "user",
-        content: "Create a script that processes the existing project image and verify it.",
+        content:
+          "Create a script that processes the existing project image and verify it.",
       },
     ],
   });
@@ -916,7 +1335,10 @@ test("identical write content is not counted as progress and prompts a real repa
           },
         ],
       };
-    return { content: "Repaired and verified the existing file.", toolCalls: [] };
+    return {
+      content: "Repaired and verified the existing file.",
+      toolCalls: [],
+    };
   };
   const response = await service.chat({
     chatId: chat.id,
@@ -940,7 +1362,10 @@ test("identical write content is not counted as progress and prompts a real repa
     ],
   });
   assert.match(response.content, /Repaired and verified/);
-  assert.equal(await fs.readFile(path.join(root, "app.mjs"), "utf8"), 'console.log("fixed")\n');
+  assert.equal(
+    await fs.readFile(path.join(root, "app.mjs"), "utf8"),
+    'console.log("fixed")\n',
+  );
   assert.equal(
     response.actions.filter(
       (action) => action.tool === "write_file" && action.status === "completed",
@@ -1007,16 +1432,14 @@ test("an unchanged firmware write is forced into compiler-guided PlatformIO reco
       };
     if (turn === 2) {
       assert.ok(
-        messages.some(
-          (message) => {
-            const content = String(message.content || "");
-            return (
-              message.role === "tool" &&
-              /src\/main\.cpp:8: error/.test(content) &&
-              /COMPILER RECOVERY:/.test(content)
-            );
-          },
-        ),
+        messages.some((message) => {
+          const content = String(message.content || "");
+          return (
+            message.role === "tool" &&
+            /src\/main\.cpp:8: error/.test(content) &&
+            /COMPILER RECOVERY:/.test(content)
+          );
+        }),
       );
       return {
         content: "",
@@ -2095,6 +2518,82 @@ test("permission approval resumes the pending tool without asking the model agai
         ),
     ),
     "permission continuation must preserve a Qwen-native tool call in history",
+  );
+});
+
+test("operating-system permission completion retries the exact pending Computer Control call", async (t) => {
+  let permissionReady = false;
+  let turns = 0;
+  const { base, service, chat } = await fixture({
+    serviceOptions: {
+      computerInspect: async (target) => {
+        if (!permissionReady)
+          throw new ComputerSystemPermissionError(
+            "accessibility",
+            "Enable Accessibility in system settings, then return to osCode",
+          );
+        return `inspected ${target}`;
+      },
+    },
+  });
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await service.grantPermission(
+    "computer.external",
+    "conversation",
+    chat.id,
+    "Dictionary",
+  );
+  await service.grantPermission(
+    "computer.control",
+    "conversation",
+    chat.id,
+    "Dictionary",
+  );
+  service.remoteReply = async () => {
+    turns += 1;
+    if (turns === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "inspect-dictionary",
+            name: "computer_inspect",
+            arguments: { target: "Dictionary" },
+          },
+        ],
+      };
+    return { content: "Dictionary is visible.", toolCalls: [] };
+  };
+  const request = {
+    chatId: chat.id,
+    engine: "llamacpp",
+    model: "fixture.gguf",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "ask",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: true,
+    messages: [
+      { role: "user", content: "Inspect Dictionary using Computer Control" },
+    ],
+  };
+  const waiting = await service.chat({ ...request, resumePermission: false });
+  assert.equal(waiting.permissionRequest.kind, "computer.system");
+  assert.match(waiting.permissionRequest.detail, /Accessibility/);
+  permissionReady = true;
+  const resumed = await service.chat({ ...request, resumePermission: true });
+  assert.equal(turns, 2);
+  assert.match(resumed.content, /Dictionary is visible/);
+  assert.ok(
+    resumed.actions.some(
+      (action) =>
+        action.tool === "computer_inspect" && action.status === "completed",
+    ),
   );
 });
 

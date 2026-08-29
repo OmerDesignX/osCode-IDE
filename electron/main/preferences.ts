@@ -2,13 +2,13 @@ import path from "node:path";
 import type { EditorPreferences } from "../types.js";
 
 export const defaultPreferences: EditorPreferences = {
-  version: 11,
+  version: 12,
   theme: "dark",
   locale: "en",
   sidebarSide: "left",
   uiScale: 1,
   editorFontSize: 14,
-  sidebarWidth: 300,
+  sidebarWidth: 480,
   gitHeight: 390,
   aiPanelWidth: 330,
   sidebarVisible: true,
@@ -41,7 +41,7 @@ export function validPreferences(value: unknown): EditorPreferences {
   const input = value as Partial<EditorPreferences>;
   const legacy = value as { aiAllowEdits?: unknown; theme?: unknown };
   return {
-    version: 11,
+    version: 12,
     theme:
       input.theme === "blue-dark" || input.theme === "blue-light"
         ? input.theme
@@ -62,11 +62,13 @@ export function validPreferences(value: unknown): EditorPreferences {
         ? Number(input.editorFontSize)
         : 14,
     sidebarWidth:
-      Number.isFinite(input.sidebarWidth) &&
-      Number(input.sidebarWidth) >= 240 &&
-      Number(input.sidebarWidth) <= 520
-        ? Math.round(Number(input.sidebarWidth))
-        : 300,
+      Number(input.version) < 12 && Number(input.sidebarWidth) === 300
+        ? 480
+        : Number.isFinite(input.sidebarWidth) &&
+            Number(input.sidebarWidth) >= 240 &&
+            Number(input.sidebarWidth) <= 520
+          ? Math.round(Number(input.sidebarWidth))
+          : 480,
     gitHeight:
       Number.isFinite(input.gitHeight) &&
       Number(input.gitHeight) >= 180 &&
