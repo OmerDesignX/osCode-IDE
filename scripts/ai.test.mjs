@@ -603,7 +603,7 @@ test("every agent project deletion requires a fresh one-time Trash approval", as
   assert.equal(grant.scope, "once");
   assert.match(
     await service.runTool(call, ...args, "auto", true),
-    /Moved remove-me\.txt to Trash/,
+    /Moved remove-me\.txt to (?:Trash|the Recycle Bin)/,
   );
   await assert.rejects(fs.stat(path.join(root, "remove-me.txt")));
   assert.equal(
