@@ -44,7 +44,7 @@ test("accepts versioned local editor preferences", () => {
       telemetry: true,
     }),
     {
-      version: 14,
+      version: 16,
       theme: "blue-dark",
       locale: "ar",
       sidebarSide: "right",
@@ -128,11 +128,11 @@ test("keeps application updates off until the one-time choice is answered", () =
 });
 
 test("new projects use the wider file tree and migrate the old default width", () => {
-  assert.equal(defaultPreferences.sidebarWidth, 480);
-  assert.equal(validPreferences({}).sidebarWidth, 480);
+  assert.equal(defaultPreferences.sidebarWidth, 520);
+  assert.equal(validPreferences({}).sidebarWidth, 520);
   assert.equal(
     validPreferences({ version: 11, sidebarWidth: 300 }).sidebarWidth,
-    480,
+    520,
   );
   assert.equal(
     validPreferences({ version: 12, sidebarWidth: 300 }).sidebarWidth,
@@ -141,6 +141,36 @@ test("new projects use the wider file tree and migrate the old default width", (
   assert.equal(
     validPreferences({ version: 11, sidebarWidth: 360 }).sidebarWidth,
     360,
+  );
+  assert.equal(
+    validPreferences({ version: 15, sidebarWidth: 480 }).sidebarWidth,
+    520,
+  );
+  assert.equal(
+    validPreferences({ version: 16, sidebarWidth: 480 }).sidebarWidth,
+    480,
+  );
+});
+
+test("new chats show every control and preserve user-sized Files and Chat panels", () => {
+  assert.equal(defaultPreferences.aiPanelWidth, 560);
+  assert.equal(validPreferences({}).aiPanelWidth, 560);
+  assert.equal(
+    validPreferences({ version: 14, aiPanelWidth: 330 }).aiPanelWidth,
+    560,
+  );
+  assert.equal(
+    validPreferences({ version: 15, aiPanelWidth: 330 }).aiPanelWidth,
+    330,
+  );
+  assert.equal(
+    validPreferences({ version: 14, aiPanelWidth: 410 }).aiPanelWidth,
+    410,
+  );
+  assert.equal(validPreferences({ aiVisible: true }).aiVisible, true);
+  assert.equal(
+    validPreferences({ sidebarVisible: false }).sidebarVisible,
+    false,
   );
 });
 

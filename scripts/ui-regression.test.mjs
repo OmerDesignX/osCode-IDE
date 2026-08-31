@@ -378,6 +378,19 @@ test("AI defaults to Small, bundled context maximum, and custom 8k", () => {
   assert.match(ai, /osCodeGgufTier\(model\)[\s\S]*262_144/);
   assert.match(ai, /model\.preferredContext \|\| 8_192/);
   assert.match(app, /aiVisible && preferencesReady/);
+  assert.match(app, /\[aiPanelWidth, setAiPanelWidth\] = useState\(560\)/);
+  assert.match(
+    app,
+    /setSidebarWidth\(preferences\.sidebarWidth\);[\s\S]*setAiPanelWidth\(preferences\.aiPanelWidth\);[\s\S]*setSidebarVisible\(preferences\.sidebarVisible\);[\s\S]*setAiVisible\(preferences\.aiVisible\);/,
+  );
+  assert.match(
+    app,
+    /sidebarWidth,[\s\S]*aiPanelWidth,[\s\S]*sidebarVisible,[\s\S]*aiVisible,[\s\S]*savePreferences\(preferences\)/,
+  );
+  assert.match(
+    main,
+    /aiPanelWidth: aiPanel\.getBoundingClientRect\(\)\.width[\s\S]*aiPanel\.getBoundingClientRect\(\)\.width >= 550[\s\S]*aiPanel\.getBoundingClientRect\(\)\.width <= 570/,
+  );
 });
 
 test("model downloads, inference hardware, visible capabilities, and spellcheck stay discoverable", () => {
@@ -802,7 +815,7 @@ test("private media attachments stay local and expose honest model capabilities"
 });
 
 test("project tree and supporting text use the readable default scale", () => {
-  assert.match(app, /useState\(480\)/);
+  assert.match(app, /useState\(520\)/);
   assert.match(app, /className="project-browse-action"/);
   assert.match(
     styles,
@@ -1176,11 +1189,11 @@ test("model and permission controls share a comfortable footer above the chat co
   );
   assert.match(
     styles,
-    /Model and permission selectors are one matched control family[\s\S]*\.ai-panel \.ai-footer-controls \.ai-tier-picker,[\s\S]*width: min\(400px, calc\(200% \+ 10px\)\);[\s\S]*padding: 20px;[\s\S]*border-radius: var\(--radius-pill\);/,
+    /Model and permission selectors are one matched control family[\s\S]*\.ai-panel \.ai-footer-controls \.ai-tier-picker,[\s\S]*bottom: calc\(100% \+ 14px\);[\s\S]*width: min\(400px, calc\(200% \+ 10px\)\);[\s\S]*padding: 20px;[\s\S]*border-radius: 28px;/,
   );
   assert.match(
     styles,
-    /Model and permission selectors are one matched control family[\s\S]*\.ai-panel \.ai-footer-controls \.ai-capability-bar,[\s\S]*width: min\(583px, calc\(300% - 2px\)\);[\s\S]*max-width: calc\(100vw - 32px\);[\s\S]*padding: 20px;[\s\S]*border-radius: var\(--radius-pill\);/,
+    /Model and permission selectors are one matched control family[\s\S]*\.ai-panel \.ai-footer-controls \.ai-capability-bar,[\s\S]*bottom: calc\(100% \+ 14px\);[\s\S]*width: min\(583px, calc\(300% - 2px\)\);[\s\S]*max-width: calc\(100vw - 32px\);[\s\S]*padding: 20px;[\s\S]*border-radius: 28px;/,
   );
   assert.match(
     styles,
@@ -1319,6 +1332,14 @@ test("panel cohesion keeps Python, chats, permissions, and the top rail responsi
     cohesion,
     /\.ai-context > div,[\s\S]*width: clamp\(180px, 58%, 480px\);/,
   );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-context\s*\{[\s\S]*margin-top: 12px;[\s\S]*background: transparent;/,
+  );
+  assert.match(
+    main,
+    /expandedContextRect\.top - expandedComposerRect\.bottom >= 8[\s\S]*expandedContextStyle\.backgroundColor === 'rgba\(0, 0, 0, 0\)'/,
+  );
 });
 
 test("project navigation and footer selectors use blue fill without outlines", () => {
@@ -1449,6 +1470,29 @@ test("responsive workspace controls reflow instead of clipping", () => {
   );
   assert.match(styles, /container-name: git-panel/);
   assert.match(styles, /@container git-panel \(max-width: 360px\)/);
+  assert.match(styles, /container-name: editor-area/);
+  assert.match(styles, /container-name: project-sidebar/);
+  assert.match(app, /<div className="explorer-toolbar">/);
+  assert.doesNotMatch(
+    app,
+    /className="explorer-toolbar horizontal-menu-scroll"/,
+  );
+  assert.match(
+    styles,
+    /@container project-sidebar \(max-width: 280px\)[\s\S]*\.explorer-toolbar \.icon-button[\s\S]*width: 28px;/,
+  );
+  assert.match(
+    main,
+    /explorerToolbarReady:[\s\S]*buttons\.length !== 7[\s\S]*toolbar\.scrollWidth <= toolbar\.clientWidth \+ 1/,
+  );
+  assert.match(
+    styles,
+    /@container editor-area \(max-width: 560px\)[\s\S]*\.agent-browser-toolbar[\s\S]*grid-template-columns: minmax\(0, 1fr\)[\s\S]*\.agent-browser-actions[\s\S]*overflow-x: auto/,
+  );
+  assert.match(
+    main,
+    /expectedUvWidth = Math\.min\([\s\S]*terminalBounds\.width - 20[\s\S]*uvBounds\.width >= expectedUvWidth - 2/,
+  );
   assert.match(
     styles,
     /\.notification-row:not\(\.update-prompt\)[\s\S]*border-radius: 18px !important/,

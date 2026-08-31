@@ -9,15 +9,15 @@ export function defaultAiHardware(
 }
 
 export const defaultPreferences: EditorPreferences = {
-  version: 14,
+  version: 16,
   theme: "dark",
   locale: "en",
   sidebarSide: "left",
   uiScale: 1,
   editorFontSize: 14,
-  sidebarWidth: 480,
+  sidebarWidth: 520,
   gitHeight: 390,
-  aiPanelWidth: 330,
+  aiPanelWidth: 560,
   sidebarVisible: true,
   aiVisible: false,
   aiEngine:
@@ -65,7 +65,7 @@ export function validPreferences(
       ? "cpu"
       : savedHardware || defaultAiHardware(platform, arch);
   return {
-    version: 14,
+    version: 16,
     theme:
       input.theme === "blue-dark" || input.theme === "blue-light"
         ? input.theme
@@ -86,13 +86,15 @@ export function validPreferences(
         ? Number(input.editorFontSize)
         : 14,
     sidebarWidth:
-      Number(input.version) < 12 && Number(input.sidebarWidth) === 300
-        ? 480
-        : Number.isFinite(input.sidebarWidth) &&
-            Number(input.sidebarWidth) >= 240 &&
-            Number(input.sidebarWidth) <= 520
-          ? Math.round(Number(input.sidebarWidth))
-          : 480,
+      Number(input.version) < 16 && Number(input.sidebarWidth) === 480
+        ? 520
+        : Number(input.version) < 12 && Number(input.sidebarWidth) === 300
+          ? 520
+          : Number.isFinite(input.sidebarWidth) &&
+              Number(input.sidebarWidth) >= 240 &&
+              Number(input.sidebarWidth) <= 520
+            ? Math.round(Number(input.sidebarWidth))
+            : 520,
     gitHeight:
       Number.isFinite(input.gitHeight) &&
       Number(input.gitHeight) >= 180 &&
@@ -100,11 +102,13 @@ export function validPreferences(
         ? Math.round(Number(input.gitHeight))
         : 390,
     aiPanelWidth:
-      Number.isFinite(input.aiPanelWidth) &&
-      Number(input.aiPanelWidth) >= 280 &&
-      Number(input.aiPanelWidth) <= 560
-        ? Math.round(Number(input.aiPanelWidth))
-        : 330,
+      Number(input.version) < 15 && Number(input.aiPanelWidth) === 330
+        ? 560
+        : Number.isFinite(input.aiPanelWidth) &&
+            Number(input.aiPanelWidth) >= 280 &&
+            Number(input.aiPanelWidth) <= 560
+          ? Math.round(Number(input.aiPanelWidth))
+          : 560,
     sidebarVisible:
       typeof input.sidebarVisible === "boolean" ? input.sidebarVisible : true,
     aiVisible: typeof input.aiVisible === "boolean" ? input.aiVisible : false,

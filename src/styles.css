@@ -231,6 +231,8 @@ select {
   min-height: 0;
   background: var(--panel);
   flex: none;
+  container-name: project-sidebar;
+  container-type: inline-size;
 }
 .panel {
   min-height: 0;
@@ -266,6 +268,7 @@ select {
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
+  overflow: visible;
 }
 .explorer-toolbar .icon-button {
   width: 34px;
@@ -278,6 +281,15 @@ select {
 }
 .explorer-toolbar .icon-button:last-child {
   margin-left: auto;
+}
+
+@container project-sidebar (max-width: 280px) {
+  .explorer-toolbar .icon-button {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    min-height: 28px;
+  }
 }
 .project-composer {
   margin: 0 10px 6px;
@@ -9468,7 +9480,9 @@ textarea,
 }
 
 .ai-panel.expanded .ai-context {
-  padding: 4px 0 18px;
+  margin-top: 12px;
+  padding: 0 0 18px;
+  background: transparent;
 }
 
 @media (max-width: 760px) {
@@ -13201,7 +13215,7 @@ button > svg * {
 
 /* Model and permission selectors are one matched control family. Their footer
    triggers occupy the same pill box, while both expanded menus use equally
-   sized option pills inside a softer, padded outer capsule. */
+   sized option pills inside a padded rounded-rectangle panel. */
 .ai-footer-controls {
   align-items: stretch;
 }
@@ -13222,19 +13236,21 @@ button > svg * {
 
 .ai-panel .ai-footer-controls .ai-tier-picker,
 .ai-panel.expanded .ai-footer-controls .ai-tier-picker {
+  bottom: calc(100% + 14px);
   width: min(400px, calc(200% + 10px));
   gap: 8px;
   padding: 20px;
-  border-radius: var(--radius-pill);
+  border-radius: 28px;
 }
 
 .ai-panel .ai-footer-controls .ai-capability-bar,
 .ai-panel.expanded .ai-footer-controls .ai-capability-bar {
+  bottom: calc(100% + 14px);
   width: min(583px, calc(300% - 2px));
   max-width: calc(100vw - 32px);
   gap: 8px;
   padding: 20px;
-  border-radius: var(--radius-pill);
+  border-radius: 28px;
 }
 
 .ai-panel .ai-footer-controls .ai-tier-picker > button,
@@ -13252,12 +13268,41 @@ button > svg * {
   .ai-panel.expanded .ai-footer-controls .ai-capability-bar {
     width: min(520px, calc(100vw - 24px));
     padding: 20px;
-    border-radius: var(--radius-pill);
+    border-radius: 24px;
   }
 
   .ai-panel .ai-footer-controls .ai-capability-bar,
   .ai-panel.expanded .ai-footer-controls .ai-capability-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Files and Chat keep their saved widths, so the editor must respond to the
+   space between them rather than the window width. Browser actions reflow
+   inside that remaining column and stay fully reachable. */
+.editor-area {
+  container-name: editor-area;
+  container-type: inline-size;
+}
+
+@container editor-area (max-width: 560px) {
+  .agent-browser-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .agent-browser-status {
+    display: none;
+  }
+
+  .agent-browser-actions {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 }
 

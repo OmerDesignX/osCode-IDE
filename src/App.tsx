@@ -494,9 +494,9 @@ export function App() {
     [sidebarSide, setSidebarSide] = useState<"left" | "right">("left"),
     [uiScale, setUiScale] = useState<1 | 1.15 | 1.3 | 1.5 | 1.7>(1),
     [editorFontSize, setEditorFontSize] = useState(14),
-    [sidebarWidth, setSidebarWidth] = useState(480),
+    [sidebarWidth, setSidebarWidth] = useState(520),
     [gitHeight, setGitHeight] = useState(390),
-    [aiPanelWidth, setAiPanelWidth] = useState(330),
+    [aiPanelWidth, setAiPanelWidth] = useState(560),
     [sidebarVisible, setSidebarVisible] = useState(true),
     [aiVisible, setAiVisible] = useState(false),
     [markdownView, setMarkdownView] = useState<"edit" | "split" | "preview">(
@@ -1651,7 +1651,7 @@ export function App() {
         setGitHeight(preferences.gitHeight);
         setAiPanelWidth(preferences.aiPanelWidth);
         setSidebarVisible(preferences.sidebarVisible);
-        setAiVisible(false);
+        setAiVisible(preferences.aiVisible);
         setAiEngine(preferences.aiEngine);
         setAiModel(preferences.aiModel);
         setAiExecutable(preferences.aiExecutable);
@@ -1720,7 +1720,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 14,
+      version: 16,
       theme,
       locale,
       sidebarSide,
@@ -2982,10 +2982,7 @@ export function App() {
                 </div>
                 {project && (
                   <>
-                    <div
-                      className="explorer-toolbar horizontal-menu-scroll"
-                      data-horizontal-menu
-                    >
+                    <div className="explorer-toolbar">
                       <IconButton
                         icon="file-plus"
                         label="New file"

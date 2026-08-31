@@ -2206,8 +2206,10 @@ async function runSmokeTest(window: BrowserWindow) {
         Math.abs(modelOptionMetrics.height - permissionOptionRect.height) <= 1 &&
         selectorGeometry.modelOption.radius >= modelOptionMetrics.height / 2 - 2 &&
         selectorGeometry.permissionOption.radius >= permissionOptionRect.height / 2 - 2 &&
-        selectorGeometry.modelPicker.radius >= 28 &&
-        selectorGeometry.permissionPicker.radius >= 28 &&
+        selectorGeometry.modelPicker.radius >= 27 &&
+        selectorGeometry.modelPicker.radius <= 29 &&
+        selectorGeometry.permissionPicker.radius >= 27 &&
+        selectorGeometry.permissionPicker.radius <= 29 &&
         selectorGeometry.modelPicker.padding >= 10 &&
         selectorGeometry.permissionPicker.padding >= 10;
       modelToggle.click();
@@ -2264,6 +2266,9 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedComposerRect = aiPanel
         .querySelector('.ai-composer')
         .getBoundingClientRect();
+      const expandedContext = aiPanel.querySelector('.ai-context');
+      const expandedContextRect = expandedContext.getBoundingClientRect();
+      const expandedContextStyle = getComputedStyle(expandedContext);
       const aiSettingsActionRect = aiPanel
         .querySelector('[aria-label="AI settings"]')
         .getBoundingClientRect();
@@ -2280,6 +2285,8 @@ async function runSmokeTest(window: BrowserWindow) {
         Math.abs(expandedFooterRect.width - expandedComposerRect.width) <= 2 &&
         expandedMessageRect.width <= expandedFooterRect.width * 0.9 &&
         expandedMessageRect.width >= 480 &&
+        expandedContextRect.top - expandedComposerRect.bottom >= 8 &&
+        expandedContextStyle.backgroundColor === 'rgba(0, 0, 0, 0)' &&
         Math.abs(expandedExitRect.left - aiSettingsActionRect.right) <= 12 &&
         Math.abs(expandedExitRect.top - aiSettingsActionRect.top) <= 2;
       expandToggle.click();
@@ -2471,9 +2478,13 @@ async function runSmokeTest(window: BrowserWindow) {
       const uvEntries = [...uvHelpbook.querySelectorAll('article')];
       const uvBounds = uvHelpbook.getBoundingClientRect();
       const terminalBounds = terminalPanel.getBoundingClientRect();
+      const expectedUvWidth = Math.min(
+        380,
+        Math.max(280, terminalBounds.width - 20)
+      );
       const uvHelpbookReady = Boolean(
         getComputedStyle(uvHelpbook).position === 'absolute' &&
-        uvHelpbook.getBoundingClientRect().width >= 380 &&
+        uvBounds.width >= expectedUvWidth - 2 &&
         uvEntries.length >= 3 &&
         uvEntries[1].getBoundingClientRect().top > uvEntries[0].getBoundingClientRect().top &&
         uvBounds.top >= terminalBounds.top &&
@@ -2518,6 +2529,21 @@ async function runSmokeTest(window: BrowserWindow) {
         pythonControlsBeforeFile,
         projectReady: document.body.innerText.includes('smoke-project'),
         sidebarWidth: document.querySelector('.sidebar')?.getBoundingClientRect().width || 0,
+        explorerToolbarReady: (() => {
+          const toolbar = document.querySelector('.explorer-toolbar');
+          const buttons = [...(toolbar?.querySelectorAll('button') || [])];
+          if (!toolbar || buttons.length !== 7) return false;
+          const bounds = toolbar.getBoundingClientRect();
+          return (
+            getComputedStyle(toolbar).overflowX !== 'auto' &&
+            toolbar.scrollWidth <= toolbar.clientWidth + 1 &&
+            buttons.every(button => {
+              const box = button.getBoundingClientRect();
+              return box.left >= bounds.left && box.right <= bounds.right + 1;
+            })
+          );
+        })(),
+        aiPanelWidth: aiPanel.getBoundingClientRect().width,
         editorReady: Boolean(editor),
         fileTabCloseReady: Boolean(
           fileTabCloseHitReady && fileTabCloseReady
@@ -2589,7 +2615,8 @@ async function runSmokeTest(window: BrowserWindow) {
         platformioReady,
         aiPanelReady:
           Boolean(aiPanel) &&
-          aiPanel.getBoundingClientRect().width >= 280 &&
+          aiPanel.getBoundingClientRect().width >= 550 &&
+          aiPanel.getBoundingClientRect().width <= 570 &&
           Boolean(aiSwapReady) &&
           (await window.oscode.listAiModels()).length >= 0,
         aiHiddenAtBoot,
@@ -2997,8 +3024,9 @@ async function runSmokeTest(window: BrowserWindow) {
       result.autoUpdatePromptReady !== true ||
       result.pythonControlsBeforeFile !== false ||
       result.projectReady !== true ||
-      Number(result.sidebarWidth) < 470 ||
-      Number(result.sidebarWidth) > 490 ||
+      Number(result.sidebarWidth) < 510 ||
+      Number(result.sidebarWidth) > 530 ||
+      result.explorerToolbarReady !== true ||
       result.editorReady !== true ||
       result.fileTabCloseReady !== true ||
       result.fileTabPillHighlightReady !== true ||
