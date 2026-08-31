@@ -54,6 +54,21 @@ const mcpClient = await fs.readFile(
   new URL("../electron/main/mcp-client.ts", import.meta.url),
   "utf8",
 );
+const releaseCleanup = await fs.readFile(
+  new URL("../releaseScripts/common/cleanup-release.mjs", import.meta.url),
+  "utf8",
+);
+
+test("release cleanup safely unlocks generated package directories", () => {
+  assert.match(releaseCleanup, /path\.basename\(target\) !== "release"/);
+  assert.match(releaseCleanup, /details\.isSymbolicLink\(\)/);
+  assert.match(releaseCleanup, /await fs\.chmod\(directory, 0o700\)/);
+  assert.match(releaseCleanup, /await makeDirectoriesWritable\(target\)/);
+  assert.match(
+    releaseCleanup,
+    /await fs\.rm\(target, \{ recursive: true, force: true \}\)/,
+  );
+});
 
 test("Git status groups large untracked dependency folders", () => {
   assert.match(main, /--untracked-files=normal/);
@@ -91,15 +106,182 @@ test("file and browser tabs use dedicated accessible close buttons", () => {
   assert.match(app, /className="tab-select"/);
   assert.match(app, /className="tab-close"/);
   assert.match(app, /aria-label=\{`Close \$\{t\.name\}`\}/);
-  assert.match(app, /onClick=\{\(\) => void closeTab\(t\.path\)\}/);
+  assert.match(
+    app,
+    /className="tab-close"[\s\S]*onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*void closeTab\(t\.path\);/,
+  );
+  assert.match(app, /const closing = tabsRef\.current\.find/);
+  assert.match(app, /setActivePath\(\(current\) =>/);
   assert.match(app, /aria-label="Close Agent browser tab"/);
   assert.match(
     styles,
     /\.tab-close\s*\{[\s\S]*width: 30px;[\s\S]*height: 30px;/,
   );
+  assert.match(styles, /\.tab-close\s*\{[\s\S]*border-radius: 50%;/);
   assert.match(styles, /\.tab-close:hover,[\s\S]*\.tab-close:focus-visible/);
+  assert.match(
+    styles,
+    /A file tab is one interactive pill[\s\S]*\.app \.tab-select,[\s\S]*\.app \.tab-select:hover:not\(:disabled\)[\s\S]*background: transparent !important;[\s\S]*box-shadow: none !important;/,
+  );
+  assert.match(
+    styles,
+    /\.app \.tab:hover,[\s\S]*\.app \.tab:focus-within,[\s\S]*\.app \.tab\.active\s*\{[\s\S]*border-radius: var\(--radius-pill\) !important;[\s\S]*background: var\(--control-selected-fill\) !important;/,
+  );
+  assert.match(
+    main,
+    /fileTabPillHighlightReady[\s\S]*fileTabPillProbe\.matches\(':focus-within'\)[\s\S]*fileTabSelectStyle\.backgroundColor/,
+  );
   assert.match(main, /fileTabCloseHitReady = clickIconCenter/);
   assert.match(main, /result\.fileTabCloseReady !== true/);
+  assert.match(main, /result\.fileTabPillHighlightReady !== true/);
+});
+
+test("interactive chrome uses scoped pill and circular control geometry", () => {
+  assert.match(styles, /--radius-pill: 999px;/);
+  assert.match(styles, /--radius-composer: 26px;/);
+  assert.match(
+    styles,
+    /\.global-search-toggle,[\s\S]*\.tab-close[\s\S]*border-radius: 50%;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-composer\s*\{[\s\S]*border-radius: var\(--radius-composer\);/,
+  );
+  assert.match(
+    styles,
+    /\.editor-command-bar button,[\s\S]*\.markdown-toolbar button[\s\S]*border-radius: var\(--radius-pill\);/,
+  );
+});
+
+test("flat pill polish removes accent rails and keeps search chrome responsive", () => {
+  assert.match(styles, /Flat pill visual pass/);
+  assert.match(
+    styles,
+    /\.tab\.active::before\s*\{[\s\S]*content: none !important;[\s\S]*display: none !important;/,
+  );
+  assert.match(
+    styles,
+    /\.tab,[\s\S]*\.tab\.active\s*\{[\s\S]*border-color: transparent !important;[\s\S]*box-shadow: none !important;/,
+  );
+  assert.match(
+    styles,
+    /\.topbar \.global-activity-strip > \.global-search\.expanded\s*\{[\s\S]*min-width: 180px;[\s\S]*flex: 1 1 260px;/,
+  );
+  assert.match(styles, /--selection-fill:/);
+  assert.match(styles, /--focus-neutral:/);
+});
+
+test("the final rendered control contract keeps fields, pills, and switches contained", () => {
+  const contractStart = styles.lastIndexOf("/* Rendered-control contract");
+  const roundedSystemStart = styles.lastIndexOf("/* Rounded control system");
+  assert.ok(contractStart > roundedSystemStart);
+  const contract = styles.slice(contractStart);
+
+  assert.match(
+    contract,
+    /input:not\(\[type="checkbox"\]\)[\s\S]*textarea[\s\S]*border: 0 !important;[\s\S]*outline: 0 !important;/,
+  );
+  assert.match(
+    contract,
+    /\.topbar \.top-actions \.icon-button\.active\s*\{[\s\S]*border-radius: var\(--radius-pill\) !important;|\.topbar \.top-actions \.icon-button\s*\{[\s\S]*border-radius: var\(--radius-pill\) !important;/,
+  );
+  assert.match(
+    contract,
+    /\.notification-row,[\s\S]*border-radius: 20px;[\s\S]*background: var\(--control-hover-fill\);/,
+  );
+  assert.match(
+    contract,
+    /\.app \.git-panel-head > \.git-help-trigger,[\s\S]*border-radius: 50% !important;/,
+  );
+  assert.match(
+    contract,
+    /\.theme-choice button,[\s\S]*border-radius: var\(--radius-pill\) !important;/,
+  );
+  assert.match(
+    contract,
+    /\.settings-select-row select,[\s\S]*padding-inline: 22px 58px !important;[\s\S]*appearance: none;/,
+  );
+  assert.match(
+    contract,
+    /\.toggle-row > i\s*\{[\s\S]*overflow: hidden;[\s\S]*width: 48px;|\.toggle-row > i\s*\{[\s\S]*width: 48px;[\s\S]*overflow: hidden;/,
+  );
+  assert.match(
+    contract,
+    /\.ai-model-popover \.ai-setting-row\s*\{[\s\S]*min-height: 72px;[\s\S]*gap: 24px;[\s\S]*padding-block: 10px;/,
+  );
+  assert.match(
+    contract,
+    /\.ai-thinking-setting\.toggle-row > i\s*\{[\s\S]*width: 46px !important;[\s\S]*height: 26px !important;[\s\S]*overflow: hidden !important;[\s\S]*contain: paint;/,
+  );
+  assert.match(
+    contract,
+    /\.ai-thinking-setting\.toggle-row > i::after\s*\{[\s\S]*inset: auto !important;[\s\S]*right: auto !important;[\s\S]*width: 18px !important;[\s\S]*transform: translate3d\(0, 0, 0\) !important;/,
+  );
+  assert.match(
+    contract,
+    /Final pill-surface contract[\s\S]*\.global-search::before,[\s\S]*content: none !important/,
+    "the search capsule must never regain an inner native frame",
+  );
+  assert.match(
+    contract,
+    /The local-agent message bar is one uninterrupted capsule[\s\S]*\.ai-composer,[\s\S]*border-radius: var\(--radius-pill\) !important/,
+    "the message composer must render as one pill",
+  );
+  assert.match(
+    contract,
+    /Notifications read as separate message pills[\s\S]*\.notification-row:not\(\.update-prompt\)[\s\S]*border-radius: var\(--radius-pill\) !important/,
+    "regular notification messages must render as pills",
+  );
+  assert.match(
+    contract,
+    /\.tab\.active::before\s*\{[\s\S]*content: none !important;[\s\S]*display: none !important;/,
+  );
+});
+
+test("text fields use filled surfaces without native borders or focus halos", () => {
+  const borderlessContract = styles.slice(
+    styles.lastIndexOf(
+      "Text fields remain visible through their filled surface",
+    ),
+  );
+  assert.match(borderlessContract, /:focus-visible/);
+  assert.match(borderlessContract, /\.app textarea:focus-visible/);
+  assert.match(borderlessContract, /\.ai-ollama-search/);
+  assert.match(borderlessContract, /:focus-within/);
+  assert.match(borderlessContract, /border: 0 !important;/);
+  assert.match(borderlessContract, /outline: 0 !important;/);
+  assert.match(borderlessContract, /box-shadow: none !important;/);
+  assert.equal(
+    styles.trimEnd().endsWith(borderlessContract.trimEnd()),
+    true,
+    "the borderless field contract must remain the final cascade override",
+  );
+  assert.match(main, /aiTextFieldsBorderless/);
+  assert.match(
+    main,
+    /ollamaInputStyle\.borderTopWidth === '0px'[\s\S]*ollamaInputStyle\.boxShadow === 'none'[\s\S]*ollamaSearchStyle\.borderTopWidth === '0px'/,
+  );
+});
+
+test("thinking uses the shared switch and terminal fitting waits for stable layout", () => {
+  assert.match(ai, /ai-setting-row ai-thinking-setting toggle-row/);
+  assert.match(
+    ai,
+    /checked=\{thinkingEnabled\}[\s\S]*<i aria-hidden="true" \/>/,
+  );
+  assert.match(
+    terminal,
+    /secondFitFrame = requestAnimationFrame\(fitTerminal\)/,
+  );
+  assert.match(terminal, /document\.fonts\?\.ready\.then\(resize\)/);
+  assert.match(
+    terminal,
+    /host\.current\.clientWidth < 2[\s\S]*host\.current\.clientHeight < 2/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-tabs,[\s\S]*height: 60px;[\s\S]*padding: 8px 12px;/,
+  );
 });
 
 test("project media opens in local image, video, and audio previews", () => {
@@ -180,7 +362,7 @@ test("Computer Control system permissions, linked completion, and native badges 
     /\.computer-control-banner\s*\{[\s\S]*background: var\(--baby-200\)/,
   );
   assert.match(app, /className="computer-control-stop"/);
-  assert.match(app, /className="top-run-stop"/);
+  assert.match(app, /className="editor-stop-action"/);
   assert.match(
     styles,
     /\.computer-control-actions > \.computer-control-stop,[\s\S]*background: color-mix\(in srgb, var\(--danger\) 24%, var\(--baby-950\)\)/,
@@ -201,6 +383,12 @@ test("AI defaults to Small, bundled context maximum, and custom 8k", () => {
 test("model downloads, inference hardware, visible capabilities, and spellcheck stay discoverable", () => {
   assert.match(ai, /downloadOsCodeModel\(tier\)/);
   assert.match(ai, />Inference hardware</);
+  assert.match(ai, /CPU · Intel Mac default/);
+  assert.match(ai, /Metal \/ MPS · GPU acceleration/);
+  assert.match(
+    ai,
+    /hardware\?\.platform === "darwin"[\s\S]*hardware\.arch === "x64"[\s\S]*hardware\.engine === "llamacpp"/,
+  );
   assert.match(ai, />Files</);
   assert.match(ai, />Edits</);
   assert.match(ai, />Browser</);
@@ -238,7 +426,7 @@ test("user chat identity is an icon and compact controls cannot wrap labels", ()
     styles,
     /\.ai-permission-row > \.icon-button span[\s\S]*display: none !important/,
   );
-  assert.match(styles, /\.shell-tab-strip[\s\S]*flex-wrap: wrap/);
+  assert.match(app, /className="terminal-action-strip horizontal-menu-scroll"/);
   assert.match(app, /className="terminal-session-actions"/);
   assert.match(
     styles,
@@ -445,6 +633,25 @@ test("AI chat shows a steerable queue and can expand to the full window", () => 
   assert.match(
     styles,
     /\.ai-queue-stack article\s*\{[\s\S]*grid-template-columns:/,
+  );
+  assert.match(styles, /Full-window chat is a focused reading workspace/);
+  assert.match(
+    styles,
+    /--ai-expanded-column: min\(900px, calc\(100vw - 96px\)\)/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-message\s*\{[\s\S]*width: fit-content;[\s\S]*max-width: min\(800px, 100%\);[\s\S]*border-radius: 20px;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-footer-controls\s*\{[\s\S]*gap: 14px;[\s\S]*padding: 16px 0 0;/,
+  );
+  assert.match(main, /aiExpandedLayoutReady/);
+  assert.match(main, /aiFooterSelectorSpacingReady/);
+  assert.match(
+    main,
+    /Math\.abs\(expandedExitRect\.left - aiSettingsActionRect\.right\) <= 12/,
   );
 });
 
@@ -788,9 +995,14 @@ test("dense command menus keep padded controls and scroll horizontally", () => {
     app,
     /document\.addEventListener\("wheel", scrollHorizontalMenu, \{[\s\S]*passive: false/,
   );
+  assert.doesNotMatch(app, /className="terminal-tabs horizontal-menu-scroll"/);
   assert.match(
     app,
-    /className="terminal-tabs horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+    /className="shell-tab-strip horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+  );
+  assert.match(
+    app,
+    /className="terminal-action-strip horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
   );
   assert.match(
     app,
@@ -808,9 +1020,10 @@ test("dense command menus keep padded controls and scroll horizontally", () => {
     styles,
     /\.horizontal-menu-scroll\s*\{[\s\S]*overflow-x: auto !important;[\s\S]*touch-action: pan-x/,
   );
+  assert.match(styles, /The terminal has two independent overflow rails/);
   assert.match(
     styles,
-    /\.terminal-tabs\.horizontal-menu-scroll > \.terminal-run-actions,[\s\S]*min-width: max-content;[\s\S]*flex: 0 0 auto/,
+    /\.terminal-tabs > \.terminal-action-strip\.horizontal-menu-scroll\s*\{[\s\S]*overflow-x: auto !important;/,
   );
 });
 
@@ -826,6 +1039,17 @@ test("application updates use a remembered one-time notification and Settings to
   assert.match(main, /\.oscode-smoke-test/);
   assert.match(main, /if \(smokeMarkerReady\) unlinkSync\(smokeMarker\)/);
   assert.match(main, /callback\(\{ cancel: !allowDevelopmentRenderer \}\)/);
+});
+
+test("packaged Intel smoke waits for the agent browser controls and preview", () => {
+  assert.match(
+    main,
+    /result\.agentBrowserViewReady[\s\S]*Date\.now\(\) \+ 60000/,
+  );
+  assert.match(
+    main,
+    /while \(Date\.now\(\) < deadline && !view\)[\s\S]*Agent Browser/,
+  );
 });
 
 test("application updater exposes manual download, progress, install, and dismissal controls", () => {
@@ -874,7 +1098,10 @@ test("project windows share one model queue while keeping project chats separate
   assert.match(main, /AI is working in \$\{running\.projectName\}/);
   assert.match(main, /aiExecutionOwner\?\.id === event\.sender\.id/);
   assert.match(main, /Another project is already running Python/);
-  assert.match(main, /broadcastToRenderers\("preferences:changed"/);
+  assert.match(
+    main,
+    /broadcastToOtherRenderers\([\s\S]*event\.sender\.id,[\s\S]*"preferences:changed"/,
+  );
   assert.match(app, /onPreferencesChanged/);
   assert.match(app, /next\.kind === "queue"/);
 });
@@ -900,23 +1127,234 @@ test("model selector collapses after configuration and queued windows get a bann
   assert.match(styles, /\.ai-pipeline-banner\s*\{/);
 });
 
-test("model and permission controls use padded drawers that leave the chat after sending", () => {
+test("model and permission controls share a comfortable footer above the chat composer", () => {
   assert.match(ai, /permissionsDrawerOpen/);
+  assert.match(ai, /className="ai-footer-controls"/);
+  assert.match(ai, /className="ai-bottom-model"/);
+  assert.match(ai, /<FeatherIcon icon="cpu" size="18" \/>/);
+  assert.match(ai, /className="ai-footer-label"/);
   assert.match(ai, /className="ai-capability-toggle"/);
   assert.match(ai, /aria-expanded=\{permissionsDrawerOpen\}/);
-  assert.match(ai, /setPermissionsDrawerOpen\(true\)/);
+  assert.match(
+    ai,
+    /const \[permissionsDrawerOpen, setPermissionsDrawerOpen\] = useState\(false\)/,
+  );
+  assert.doesNotMatch(ai, /setPermissionsDrawerOpen\(true\)/);
   assert.match(ai, /setPermissionsDrawerOpen\(false\)/);
+  assert.match(
+    ai,
+    /onClick=\{\(\) => setPermissionsDrawerOpen\(\(current\) => !current\)\}/,
+  );
+  assert.match(
+    main,
+    /aiPermissionsClosedAtBoot[\s\S]*permissionToggle\?\.getAttribute\('aria-expanded'\) === 'false'[\s\S]*!aiPanel\.querySelector\('\.ai-capability-bar'\)/,
+  );
+  assert.match(main, /'permission controls after explicit click'/);
+  assert.match(main, /result\.aiPermissionsClosedAtBoot !== true/);
   assert.match(ai, /className="ai-stop-button"/);
   assert.match(ai, /window\.oscode\.stopAi\(\)/);
+  assert.match(styles, /Comfortable AI footer/);
   assert.match(
     styles,
-    /Final compact drawers[\s\S]*\.ai-tier-toggle\s*\{[\s\S]*min-height: 54px;[\s\S]*padding: 10px 14px/,
+    /\.ai-footer-controls\s*\{[\s\S]*grid-template-columns:[\s\S]*gap: 12px/,
+  );
+  assert.match(
+    styles,
+    /Cross-platform panel hierarchy[\s\S]*\.ai-footer-controls \.ai-tier-toggle,[\s\S]*min-height: var\(--ui-control-height\);[\s\S]*border-radius: var\(--radius-pill\) !important/,
+  );
+  assert.match(
+    styles,
+    /Final 1\.0\.1 size decisions[\s\S]*\.ai-panel \.ai-footer-controls \.ai-capability-bar,[\s\S]*width: min\(600px, calc\(100vw - 32px\)\)/,
+  );
+  assert.match(
+    styles,
+    /Cross-platform panel hierarchy[\s\S]*\.ai-panel \.ai-footer-controls \.ai-capability-bar > button\s*\{[\s\S]*height: var\(--ui-control-height\);[\s\S]*border-radius: var\(--radius-pill\) !important/,
+  );
+  assert.match(
+    styles,
+    /Model and permission selectors are one matched control family[\s\S]*\.ai-bottom-model,[\s\S]*height: var\(--ui-control-height\);/,
+  );
+  assert.match(
+    styles,
+    /Model and permission selectors are one matched control family[\s\S]*\.ai-panel \.ai-footer-controls \.ai-tier-picker,[\s\S]*width: min\(400px, calc\(200% \+ 10px\)\);[\s\S]*padding: 20px;[\s\S]*border-radius: var\(--radius-pill\);/,
+  );
+  assert.match(
+    styles,
+    /Model and permission selectors are one matched control family[\s\S]*\.ai-panel \.ai-footer-controls \.ai-capability-bar,[\s\S]*width: min\(583px, calc\(300% - 2px\)\);[\s\S]*max-width: calc\(100vw - 32px\);[\s\S]*padding: 20px;[\s\S]*border-radius: var\(--radius-pill\);/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel \.ai-footer-controls \.ai-tier-picker > button,[\s\S]*\.ai-panel \.ai-footer-controls \.ai-capability-bar > button\s*\{[\s\S]*height: var\(--ui-control-height\);[\s\S]*border-radius: var\(--radius-pill\) !important;/,
+  );
+  assert.match(
+    main,
+    /aiSelectorGeometryReady[\s\S]*Math\.abs\(modelToggleRect\.width - permissionToggleRect\.width\) <= 2[\s\S]*Math\.abs\(modelOptionMetrics\.width - permissionOptionRect\.width\) <= 2/,
+  );
+  assert.match(main, /result\.aiSelectorGeometryReady !== true/);
+  assert.match(
+    styles,
+    /@container ai-panel \(max-width: 360px\)[\s\S]*\.ai-footer-controls \.ai-footer-label\s*\{[\s\S]*display: none;/,
+  );
+  assert.match(
+    styles,
+    /Cross-platform panel hierarchy[\s\S]*\.ai-footer-controls \.ai-tier-toggle > svg:first-child,[\s\S]*width: 18px;[\s\S]*height: 18px;/,
+  );
+  assert.match(
+    styles,
+    /Footer selectors use an explicit icon-label-chevron rhythm[\s\S]*\.ai-footer-controls \.ai-tier-toggle\s*\{[\s\S]*grid-template-columns: 18px minmax\(0, 1fr\) 18px;[\s\S]*column-gap: 9px;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-footer-controls \.ai-capability-toggle > span\s*\{[\s\S]*grid-template-columns: 18px minmax\(0, 1fr\);[\s\S]*gap: 9px;/,
   );
   assert.match(styles, /\.ai-capability-drawer\s*\{/);
   assert.match(styles, /\.ai-capability-toggle\s*\{/);
+  assert.ok(
+    ai.indexOf('className="ai-footer-controls"') <
+      ai.indexOf('className="ai-composer"'),
+  );
   assert.match(aiMain, /output tokens/);
   assert.match(aiMain, /Reading context/);
   assert.match(aiMain, /__OSCODE_PROGRESS__/);
+});
+
+test("settings, permissions, models, and Advanced share one cross-platform control hierarchy", () => {
+  const hierarchyStart = styles.lastIndexOf(
+    "/* Cross-platform panel hierarchy",
+  );
+  assert.ok(hierarchyStart >= 0);
+  const hierarchy = styles.slice(hierarchyStart);
+
+  assert.match(
+    hierarchy,
+    /\.ai-permission-tools\s*\{[\s\S]*border-radius: 34px;/,
+  );
+  assert.match(
+    hierarchy,
+    /\.ai-model-popover \.ai-manager-actions button,[\s\S]*height: var\(--ui-control-height\);[\s\S]*border-radius: var\(--radius-pill\);/,
+  );
+  assert.match(
+    hierarchy,
+    /\.ai-model-row\s*\{[\s\S]*border-radius: 16px;[\s\S]*background: var\(--control-hover-fill\);/,
+  );
+  assert.match(
+    hierarchy,
+    /\.advanced-menu\s*\{[\s\S]*padding: 16px;[\s\S]*\.advanced-dock \.advanced-menu > button\s*\{[\s\S]*border-radius: var\(--radius-pill\);/,
+  );
+  assert.match(
+    hierarchy,
+    /\.advanced-content\s*\{[\s\S]*margin: 16px;[\s\S]*padding: 16px;[\s\S]*border-radius: 20px;/,
+  );
+  assert.doesNotMatch(hierarchy, /\[data-platform=/);
+  assert.doesNotMatch(hierarchy, /\.ai-head-actions/);
+});
+
+test("panel cohesion keeps Python, chats, permissions, and the top rail responsive", () => {
+  const cohesionStart = styles.indexOf("/* 1.0.1 panel cohesion");
+  assert.ok(cohesionStart >= 0);
+  const cohesion = styles.slice(cohesionStart);
+
+  assert.match(
+    app,
+    /global-activity-strip horizontal-menu-scroll[\s\S]*className="top-actions"[\s\S]*className="global-search-results"/,
+  );
+  assert.doesNotMatch(app, /top-actions horizontal-menu-scroll/);
+  assert.match(
+    cohesion,
+    /\.topbar \.global-activity-strip,[\s\S]*overflow-x: auto;/,
+  );
+  assert.match(
+    cohesion,
+    /\.topbar \.global-activity-strip > \.top-actions\s*\{[\s\S]*width: max-content;[\s\S]*overflow: visible;/,
+  );
+
+  assert.doesNotMatch(app, /env-manager-addon/);
+  assert.match(app, /project-environment-settings/);
+  assert.match(app, /advanced-action-grid/);
+  assert.match(app, /Use installed Python/);
+  assert.match(app, /Create project \.venv/);
+  assert.match(
+    cohesion,
+    /\.advanced-subsection\s*\{[\s\S]*padding: 16px;[\s\S]*border-radius: 18px;/,
+  );
+  assert.match(
+    cohesion,
+    /\.advanced-content,[\s\S]*padding: 20px;[\s\S]*border-radius: 22px;/,
+  );
+  assert.match(
+    cohesion,
+    /\.mcp-settings textarea\s*\{[\s\S]*padding: 14px 16px;[\s\S]*border-radius: 18px;/,
+  );
+
+  assert.match(app, /advanced-dock-runtimes/);
+  assert.match(app, /advanced-content advanced-runtime-content/);
+  assert.match(
+    cohesion,
+    /Python configuration needs room[\s\S]*\.advanced-dock\.advanced-dock-runtimes\s*\{[\s\S]*width: min\(640px, calc\(100vw - 32px\)\);/,
+  );
+  assert.match(
+    cohesion,
+    /\.advanced-runtime-content,[\s\S]*padding: 26px;[\s\S]*\.advanced-runtime-content \.advanced-subsection\s*\{[\s\S]*padding: 22px;/,
+  );
+  assert.match(
+    cohesion,
+    /@container advanced-runtime \(max-width: 560px\)[\s\S]*\.advanced-runtime-content \.advanced-action-grid,[\s\S]*grid-template-columns: minmax\(0, 1fr\);/,
+  );
+  assert.match(main, /advancedRuntimeLayoutReady/);
+  assert.match(
+    main,
+    /advancedRuntimeDock\.getBoundingClientRect\(\)\.width >= 600[\s\S]*rect\.width >= 220[\s\S]*button\.scrollWidth <= button\.clientWidth \+ 1/,
+  );
+
+  assert.match(
+    cohesion,
+    /\.ai-chat-selector > \.primary\s*\{[\s\S]*border-radius: var\(--radius-pill\) !important;/,
+  );
+  assert.match(
+    cohesion,
+    /\.ai-chat-choice\.active\s*\{[\s\S]*background: var\(--control-selected-fill\);/,
+  );
+  assert.match(cohesion, /\.ai-chat-choice\s*\{[\s\S]*user-select: none;/);
+  assert.match(
+    cohesion,
+    /\.ai-context > div,[\s\S]*width: clamp\(180px, 58%, 480px\);/,
+  );
+});
+
+test("project navigation and footer selectors use blue fill without outlines", () => {
+  const interactionStart = styles.lastIndexOf(
+    "/* Unified blue-fill interaction",
+  );
+  assert.ok(interactionStart >= 0);
+  const interaction = styles.slice(interactionStart);
+
+  assert.match(
+    interaction,
+    /\.tree-row\s*\{[\s\S]*font-size: 13px !important;/,
+  );
+  assert.match(
+    interaction,
+    /\.section-head > \.project-browse-action\s*\{[\s\S]*height: var\(--ui-control-height\);[\s\S]*border-radius: var\(--radius-pill\) !important;/,
+  );
+  assert.match(
+    interaction,
+    /button:not\(:disabled\)[\s\S]*:hover,[\s\S]*background-color: var\(--control-selected-fill\);[\s\S]*color: var\(--accent\);/,
+  );
+  assert.match(
+    interaction,
+    /\.ai-footer-controls \.ai-tier-toggle,[\s\S]*\.ai-footer-controls \.ai-capability-toggle\[aria-expanded="true"\]\s*\{[\s\S]*border: 0 !important;[\s\S]*outline: 0 !important;[\s\S]*box-shadow: none !important;/,
+  );
+});
+
+test("commit history does not repeat sync counts in its summary", () => {
+  const historyStart = app.indexOf('className="git-group git-history-tree"');
+  const historyLegend = app.indexOf(
+    'className="git-sync-summary"',
+    historyStart,
+  );
+  const historySummary = app.slice(historyStart, historyLegend);
+  assert.match(historySummary, /Commit history/);
+  assert.doesNotMatch(historySummary, /unpushed|incoming|local only/i);
 });
 
 test("agent design and live inference feedback stay cross-platform across every engine", () => {
@@ -997,4 +1435,71 @@ test("packaged shutdown is safe when startup or terminal initialization is incom
   assert.match(main, /exited\?\.dispose\(\)/);
   assert.doesNotMatch(main, /await aiService\.dispose\(\)/);
   assert.doesNotMatch(main, /void aiService\.dispose\(\)/);
+});
+
+test("responsive workspace controls reflow instead of clipping", () => {
+  assert.match(styles, /Final responsive workspace contract/);
+  assert.match(
+    styles,
+    /\.ai-composer:not\(:has\(\.ai-steer-button\)\)[\s\S]*grid-template-columns: 44px minmax\(0, 1fr\) 44px/,
+  );
+  assert.match(
+    styles,
+    /\.topbar \.global-search\.expanded[\s\S]*min-width: 260px;[\s\S]*max-width: none/,
+  );
+  assert.match(styles, /container-name: git-panel/);
+  assert.match(styles, /@container git-panel \(max-width: 360px\)/);
+  assert.match(
+    styles,
+    /\.notification-row:not\(\.update-prompt\)[\s\S]*border-radius: 18px !important/,
+  );
+  assert.match(
+    styles,
+    /\.settings-dock > section \+ section[\s\S]*margin-top: 14px/,
+  );
+});
+
+test("terminal sessions and auxiliary panels keep the revised workspace hierarchy", () => {
+  assert.match(
+    app,
+    /className="editor-run-action"[\s\S]*onClick=\{\(\) => void run\(\)\}/,
+  );
+  assert.match(app, /className="terminal-view-tabs"/);
+  assert.match(
+    app,
+    /className="shell-tab-strip horizontal-menu-scroll"[\s\S]*role="tablist"/,
+  );
+  assert.match(
+    app,
+    /className="terminal-toolbar-divider"[\s\S]*className="terminal-action-strip horizontal-menu-scroll"/,
+  );
+  assert.match(
+    app,
+    /<FeatherIcon icon="book-open" size="13" \/> UV help[\s\S]*className="terminal-panel-close"/,
+  );
+  assert.match(styles, /1\.0 workspace refinement/);
+  assert.match(styles, /\.env-badge\s*\{[\s\S]*font-size: 12px !important/);
+  assert.match(
+    styles,
+    /\.terminal-tabs > \.shell-tab-strip\.horizontal-menu-scroll\s*\{[\s\S]*flex: 1 1 280px;[\s\S]*overflow-x: auto !important/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-action-strip > \.terminal-python-tools[\s\S]*margin: 0;/,
+  );
+  assert.match(main, /terminalDualScrollReady/);
+  assert.match(
+    main,
+    /terminalTabScrollReady[\s\S]*terminalActionScrollReady[\s\S]*terminalDividerRect\.width >= 1/,
+  );
+  assert.match(ai, /className="ai-expand-toggle"/);
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-expand-toggle\s*\{[\s\S]*position: static;[\s\S]*pointer-events: auto !important/,
+  );
+  assert.match(ai, /label="AI settings"[\s\S]*className="ai-expand-toggle"/);
+  assert.match(
+    styles,
+    /\.ai-model-popover,[\s\S]*\.ai-permission-popover\s*\{[\s\S]*border-radius: 20px;[\s\S]*background: var\(--overlay-surface\)/,
+  );
 });

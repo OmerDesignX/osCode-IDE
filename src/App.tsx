@@ -522,6 +522,7 @@ export function App() {
     [aiComputerAccess, setAiComputerAccess] = useState(false),
     [aiContextLimit, setAiContextLimit] = useState(262144),
     [aiHardware, setAiHardware] = useState<AiInferenceHardware>("auto"),
+    [aiThinkingEnabled, setAiThinkingEnabled] = useState(true),
     [spellcheck, setSpellcheck] = useState(true),
     [autoSave, setAutoSave] = useState(true),
     [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false),
@@ -562,6 +563,7 @@ export function App() {
     | null
   >(null);
   const editorTabsRef = useRef<HTMLDivElement | null>(null);
+  const shellSequenceRef = useRef(1);
   const projectPickerOpen = useRef(false);
   const savingPaths = useRef(new Set<string>());
   const externalConflictPaths = useRef(new Set<string>());
@@ -648,6 +650,7 @@ export function App() {
         setAiExecutable(preferences.aiExecutable);
         setAiContextLimit(preferences.aiContextLimit);
         setAiHardware(preferences.aiHardware);
+        setAiThinkingEnabled(preferences.aiThinkingEnabled);
         setAutoSave(preferences.autoSave);
       }),
     [preferencesReady],
@@ -1140,7 +1143,7 @@ export function App() {
     setNotice("Project closed and removed from startup");
   };
   const closeTab = async (path: string) => {
-    const closing = tabs.find((tab) => tab.path === path);
+    const closing = tabsRef.current.find((tab) => tab.path === path);
     if (!closing) return;
     if (
       closing.content !== closing.saved &&
@@ -1149,9 +1152,16 @@ export function App() {
       ))
     )
       return;
-    const remaining = tabs.filter((tab) => tab.path !== path);
+    const currentTabs = tabsRef.current;
+    const closingIndex = currentTabs.findIndex((tab) => tab.path === path);
+    const remaining = currentTabs.filter((tab) => tab.path !== path);
     setTabs(remaining);
-    if (path === activePath) setActivePath(remaining.at(-1)?.path || "");
+    setActivePath((current) => {
+      if (current !== path) return current;
+      return (
+        remaining[Math.min(closingIndex, remaining.length - 1)]?.path || ""
+      );
+    });
   };
   const beginProjectOperation = (operation: "file" | "folder" | "rename") => {
     if (operation === "rename" && !selectedEntry) return;
@@ -1650,6 +1660,7 @@ export function App() {
         setAiWebAccess(false);
         setAiContextLimit(preferences.aiContextLimit);
         setAiHardware(preferences.aiHardware);
+        setAiThinkingEnabled(preferences.aiThinkingEnabled);
         setSuggestions(preferences.suggestions);
         setWordWrap(preferences.wordWrap);
         setProseWrap(preferences.proseWrap);
@@ -1709,7 +1720,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 12,
+      version: 14,
       theme,
       locale,
       sidebarSide,
@@ -1728,6 +1739,7 @@ export function App() {
       aiWebAccess,
       aiContextLimit,
       aiHardware,
+      aiThinkingEnabled,
       suggestions,
       wordWrap,
       proseWrap,
@@ -1765,6 +1777,7 @@ export function App() {
     aiWebAccess,
     aiContextLimit,
     aiHardware,
+    aiThinkingEnabled,
     suggestions,
     wordWrap,
     proseWrap,
@@ -2460,6 +2473,104 @@ export function App() {
                 </button>
               </div>
             )}
+            <div className="top-actions">
+              {pythonContext && (
+                <select
+                  className="runtime-select"
+                  value={runtime}
+                  onChange={(event) => chooseRuntimeValue(event.target.value)}
+                  aria-label="Python interpreter"
+                >
+                  {runtimeOptions}
+                  <option value="more">Download more…</option>
+                </select>
+              )}
+              {showUpdateAction && (
+                <IconButton
+                  icon={
+                    updateStatus.state === "ready"
+                      ? "download-cloud"
+                      : updateStatus.state === "downloading"
+                        ? "loader"
+                        : "refresh-cw"
+                  }
+                  label={updateActionLabel}
+                  className={`app-update-action ${updateStatus.state}`}
+                  active={updateStatus.state === "ready"}
+                  disabled={["checking", "downloading", "installing"].includes(
+                    updateStatus.state,
+                  )}
+                  onClick={() => void runAppUpdateAction()}
+                />
+              )}
+              <IconButton
+                icon="bell"
+                label="Notifications"
+                badge={aiAttention ? 1 : undefined}
+                active={notificationsOpen}
+                onClick={() => {
+                  setNotificationsOpen((open) => !open);
+                  setAdvanced(false);
+                  setSettingsOpen(false);
+                  setPlatformioOpen(false);
+                }}
+              />
+              <IconButton
+                icon="cpu"
+                label="PlatformIO"
+                className="platformio-action"
+                active={platformioOpen}
+                onClick={() => {
+                  setPlatformioOpen((open) => !open);
+                  setAdvanced(false);
+                  setSettingsOpen(false);
+                  setNotificationsOpen(false);
+                }}
+              />
+              <span className="divider" />
+              <IconButton
+                icon="sidebar"
+                label={tr("Files", "الملفات")}
+                active={sidebarVisible}
+                onClick={() => setSidebarVisible((visible) => !visible)}
+              />
+              <IconButton
+                icon="message-square"
+                label={tr("Chat", "المحادثة")}
+                badge={aiAttention ? 1 : undefined}
+                active={aiVisible}
+                onClick={() => {
+                  const opening = !aiVisible;
+                  setAiVisible(opening);
+                  if (opening) setNotificationsOpen(false);
+                  if (opening && aiAttention?.kind !== "permission")
+                    handleAiAttentionChange(null);
+                }}
+              />
+              <span className="divider" />
+              <IconButton
+                icon="sliders"
+                label={tr("Advanced", "متقدم")}
+                active={advanced}
+                onClick={() => {
+                  setAdvanced(!advanced);
+                  setSettingsOpen(false);
+                  setPlatformioOpen(false);
+                  setNotificationsOpen(false);
+                }}
+              />
+              <IconButton
+                icon="settings"
+                label={tr("Settings", "الإعدادات")}
+                active={settingsOpen}
+                onClick={() => {
+                  setSettingsOpen(!settingsOpen);
+                  setAdvanced(false);
+                  setPlatformioOpen(false);
+                  setNotificationsOpen(false);
+                }}
+              />
+            </div>
           </div>
           {!!globalSearch.trim() && (
             <div
@@ -2520,123 +2631,6 @@ export function App() {
               </div>
             </div>
           )}
-        </div>
-        <div
-          className="top-actions horizontal-menu-scroll"
-          data-horizontal-menu
-        >
-          {pythonContext && (
-            <>
-              <select
-                className="runtime-select"
-                value={runtime}
-                onChange={(e) => chooseRuntimeValue(e.target.value)}
-                aria-label="Python interpreter"
-              >
-                {runtimeOptions}
-                <option value="more">Download more…</option>
-              </select>
-              <IconButton
-                icon="play"
-                label="Run"
-                onClick={run}
-                disabled={running || !runtime || !active?.name.endsWith(".py")}
-              />
-              <IconButton
-                icon="square"
-                label="Stop"
-                className="top-run-stop"
-                onClick={stopPythonProcess}
-                disabled={!running}
-              />
-              <span className="divider" />
-            </>
-          )}
-          {showUpdateAction && (
-            <IconButton
-              icon={
-                updateStatus.state === "ready"
-                  ? "download-cloud"
-                  : updateStatus.state === "downloading"
-                    ? "loader"
-                    : "refresh-cw"
-              }
-              label={updateActionLabel}
-              className={`app-update-action ${updateStatus.state}`}
-              active={updateStatus.state === "ready"}
-              disabled={["checking", "downloading", "installing"].includes(
-                updateStatus.state,
-              )}
-              onClick={() => void runAppUpdateAction()}
-            />
-          )}
-          <IconButton
-            icon="bell"
-            label="Notifications"
-            badge={aiAttention ? 1 : undefined}
-            active={notificationsOpen}
-            onClick={() => {
-              setNotificationsOpen((open) => !open);
-              setAdvanced(false);
-              setSettingsOpen(false);
-              setPlatformioOpen(false);
-            }}
-          />
-          <IconButton
-            icon="cpu"
-            label="PlatformIO"
-            className="platformio-action"
-            active={platformioOpen}
-            onClick={() => {
-              setPlatformioOpen((open) => !open);
-              setAdvanced(false);
-              setSettingsOpen(false);
-              setNotificationsOpen(false);
-            }}
-          />
-          <span className="divider" />
-          <IconButton
-            icon="sidebar"
-            label={tr("Files", "الملفات")}
-            active={sidebarVisible}
-            onClick={() => setSidebarVisible((visible) => !visible)}
-          />
-          <IconButton
-            icon="message-square"
-            label={tr("Chat", "المحادثة")}
-            badge={aiAttention ? 1 : undefined}
-            active={aiVisible}
-            onClick={() => {
-              const opening = !aiVisible;
-              setAiVisible(opening);
-              if (opening) setNotificationsOpen(false);
-              if (opening && aiAttention?.kind !== "permission")
-                handleAiAttentionChange(null);
-            }}
-          />
-          <span className="divider" />
-          <IconButton
-            icon="sliders"
-            label={tr("Advanced", "متقدم")}
-            active={advanced}
-            onClick={() => {
-              setAdvanced(!advanced);
-              setSettingsOpen(false);
-              setPlatformioOpen(false);
-              setNotificationsOpen(false);
-            }}
-          />
-          <IconButton
-            icon="settings"
-            label={tr("Settings", "الإعدادات")}
-            active={settingsOpen}
-            onClick={() => {
-              setSettingsOpen(!settingsOpen);
-              setAdvanced(false);
-              setPlatformioOpen(false);
-              setNotificationsOpen(false);
-            }}
-          />
         </div>
       </header>
       {notificationsOpen && (
@@ -3324,11 +3318,6 @@ export function App() {
                               <FeatherIcon icon="git-commit" size="13" />
                               Commit history
                             </span>
-                            <small>
-                              {git.remote
-                                ? `${git.ahead} unpushed · ${git.behind} incoming`
-                                : "local only"}
-                            </small>
                           </summary>
                           <div
                             className="git-sync-summary"
@@ -3848,7 +3837,10 @@ export function App() {
                   type="button"
                   className="tab-close"
                   aria-label="Close Agent browser tab"
-                  onClick={() => {
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
                     setBrowserViewOpen(false);
                   }}
                 >
@@ -3874,7 +3866,12 @@ export function App() {
                   type="button"
                   className="tab-close"
                   aria-label={`Close ${t.name}`}
-                  onClick={() => void closeTab(t.path)}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void closeTab(t.path);
+                  }}
                 >
                   <FeatherIcon icon="x" size="13" />
                 </button>
@@ -3966,6 +3963,30 @@ export function App() {
                 <button onClick={() => void openSaveHistory()}>
                   <FeatherIcon icon="clock" size="15" /> Save history
                 </button>
+                {pythonContext && (
+                  <>
+                    <span
+                      className="editor-command-divider"
+                      aria-hidden="true"
+                    />
+                    <button
+                      className="editor-run-action"
+                      onClick={() => void run()}
+                      disabled={
+                        running || !runtime || !active?.name.endsWith(".py")
+                      }
+                    >
+                      <FeatherIcon icon="play" size="15" /> Run
+                    </button>
+                    <button
+                      className="editor-stop-action"
+                      onClick={stopPythonProcess}
+                      disabled={!running}
+                    >
+                      <FeatherIcon icon="square" size="15" /> Stop
+                    </button>
+                  </>
+                )}
                 <span className="editor-command-divider" aria-hidden="true" />
                 <button
                   onClick={() =>
@@ -4649,7 +4670,7 @@ export function App() {
           )}
           {advanced && (
             <div
-              className={`advanced-dock${advancedSection === "mcp" ? " advanced-dock-wide" : ""}`}
+              className={`advanced-dock${advancedSection === "mcp" ? " advanced-dock-wide" : ""}${advancedSection === "runtimes" ? " advanced-dock-runtimes" : ""}`}
             >
               <div className="advanced-title">
                 {advancedSection !== "menu" && (
@@ -4743,43 +4764,93 @@ export function App() {
                 </div>
               )}
               {advancedSection === "runtimes" && (
-                <div className="advanced-content">
+                <div className="advanced-content advanced-runtime-content">
                   <p>
                     Choose an app or system Python runtime. osCode keeps its
                     default environment in application data, outside the
                     project.
                   </p>
-                  <button className="secondary-action" onClick={chooseRuntime}>
-                    Use installed Python
-                  </button>
-                  <button
-                    className="secondary-action"
-                    disabled={!project || !runtime}
-                    onClick={createVenv}
-                  >
-                    Create .venv
-                  </button>
-                  {["3.10", "3.11", "3.12", "3.13", "3.14"].map((v) => {
-                    const found = runtimes.find((r) => r.version === v);
-                    return (
-                      <div className="runtime-row" key={v}>
-                        <span>
-                          Python {v}
-                          {v === "3.14" ? " · latest" : ""}
-                        </span>
-                        {found?.installed ? (
-                          <b>Ready</b>
-                        ) : (
-                          <button
-                            disabled={!!installing}
-                            onClick={() => installRuntime(v)}
-                          >
-                            {installing === v ? "Installing…" : "Download"}
-                          </button>
-                        )}
+                  <div className="advanced-action-grid">
+                    <button
+                      className="secondary-action"
+                      onClick={chooseRuntime}
+                    >
+                      <FeatherIcon icon="hard-drive" size="16" />
+                      Use installed Python
+                    </button>
+                    <button
+                      className="secondary-action"
+                      disabled={!project || !runtime}
+                      onClick={() => createVenv("")}
+                    >
+                      <FeatherIcon icon="folder-plus" size="16" />
+                      Create project .venv
+                    </button>
+                  </div>
+                  {project && (
+                    <section className="advanced-subsection project-environment-settings">
+                      <span className="settings-label">
+                        PROJECT ENVIRONMENTS
+                      </span>
+                      <label className="advanced-select-row">
+                        <span>Active environment</span>
+                        <select
+                          className="runtime-select"
+                          value={runtime}
+                          onChange={(event) =>
+                            chooseRuntimeValue(event.target.value)
+                          }
+                        >
+                          {runtimeOptions}
+                          <option value="more">Download more…</option>
+                        </select>
+                      </label>
+                      <div className="named-env">
+                        <input
+                          className="field"
+                          aria-label="New environment name"
+                          placeholder="Environment name"
+                          value={envName}
+                          onChange={(event) => setEnvName(event.target.value)}
+                        />
+                        <button
+                          className="primary"
+                          disabled={!envName.trim()}
+                          onClick={() => createVenv(envName)}
+                        >
+                          Create
+                        </button>
                       </div>
-                    );
-                  })}
+                      <p>
+                        The selected environment is shared by Run, Debug, and
+                        Terminal. Named environments are created in the project.
+                      </p>
+                    </section>
+                  )}
+                  <section className="advanced-subsection runtime-catalog">
+                    <span className="settings-label">AVAILABLE PYTHON</span>
+                    {["3.10", "3.11", "3.12", "3.13", "3.14"].map((v) => {
+                      const found = runtimes.find((r) => r.version === v);
+                      return (
+                        <div className="runtime-row" key={v}>
+                          <span>
+                            Python {v}
+                            {v === "3.14" ? " · latest" : ""}
+                          </span>
+                          {found?.installed ? (
+                            <b>Ready</b>
+                          ) : (
+                            <button
+                              disabled={!!installing}
+                              onClick={() => installRuntime(v)}
+                            >
+                              {installing === v ? "Installing…" : "Download"}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </section>
                 </div>
               )}
               {advancedSection === "mcp" && (
@@ -4858,46 +4929,6 @@ export function App() {
               )}
             </div>
           )}
-          {advanced && advancedSection === "runtimes" && project && (
-            <div className="env-manager-addon">
-              <span className="eyebrow">PROJECT ENVIRONMENTS</span>
-              <select
-                className="runtime-select"
-                value={runtime}
-                onChange={(e) => chooseRuntimeValue(e.target.value)}
-              >
-                {runtimeOptions}
-                <option value="more">Download more…</option>
-              </select>
-              <button
-                className="secondary-action"
-                onClick={() => createVenv("")}
-              >
-                Create project .venv
-              </button>
-              <div className="named-env">
-                <input
-                  className="field"
-                  aria-label="New environment name"
-                  placeholder="Environment name"
-                  value={envName}
-                  onChange={(e) => setEnvName(e.target.value)}
-                />
-                <button
-                  className="primary"
-                  disabled={!envName.trim()}
-                  onClick={() => createVenv(envName)}
-                >
-                  Create
-                </button>
-              </div>
-              <p>
-                The selected environment is applied to Run, Debug, and Terminal.
-                App environments stay in osCode application data. Create a
-                project environment only when you want it stored in the project.
-              </p>
-            </div>
-          )}
           <button
             className="terminal-toggle"
             onClick={() => setTerminalOpen(!terminalOpen)}
@@ -4919,31 +4950,41 @@ export function App() {
           {terminalOpen && (
             <div className="terminal-panel">
               <div
-                className="terminal-tabs horizontal-menu-scroll"
-                data-horizontal-menu
-                role="tablist"
-                aria-label="Terminal views"
+                className="terminal-tabs"
+                role="toolbar"
+                aria-label="Terminal controls"
               >
                 {pythonContext && (
-                  <button
-                    type="button"
-                    className={terminalView === "shell" ? "active" : ""}
-                    onClick={() => setTerminalView("shell")}
+                  <div
+                    className="terminal-view-tabs"
+                    aria-label="Terminal mode"
                   >
-                    Shell
-                  </button>
-                )}
-                {pythonContext && (
-                  <button
-                    type="button"
-                    className={terminalView === "run" ? "active" : ""}
-                    onClick={() => setTerminalView("run")}
-                  >
-                    Run {running && <i className="running-dot" />}
-                  </button>
+                    <button
+                      type="button"
+                      className={terminalView === "shell" ? "active" : ""}
+                      aria-pressed={terminalView === "shell"}
+                      onClick={() => setTerminalView("shell")}
+                    >
+                      <FeatherIcon icon="terminal" size="14" /> Shell
+                    </button>
+                    <button
+                      type="button"
+                      className={terminalView === "run" ? "active" : ""}
+                      aria-pressed={terminalView === "run"}
+                      onClick={() => setTerminalView("run")}
+                    >
+                      <FeatherIcon icon="play" size="14" /> Run output
+                      {running && <i className="running-dot" />}
+                    </button>
+                  </div>
                 )}
                 {terminalView === "shell" && (
-                  <div className="shell-tab-strip" aria-label="Shell sessions">
+                  <div
+                    className="shell-tab-strip horizontal-menu-scroll"
+                    data-horizontal-menu
+                    role="tablist"
+                    aria-label="Shell sessions"
+                  >
                     {shellTabs.map((shell) => (
                       <div
                         className={
@@ -4951,7 +4992,11 @@ export function App() {
                         }
                         key={shell.id}
                       >
-                        <button onClick={() => setActiveShellId(shell.id)}>
+                        <button
+                          role="tab"
+                          aria-selected={shell.id === activeTerminalId}
+                          onClick={() => setActiveShellId(shell.id)}
+                        >
                           {shell.title}
                         </button>
                         <button
@@ -4972,6 +5017,49 @@ export function App() {
                         </button>
                       </div>
                     ))}
+                  </div>
+                )}
+                {terminalView === "run" && (
+                  <div
+                    className="terminal-run-actions horizontal-menu-scroll"
+                    data-horizontal-menu
+                    aria-label="Run controls"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void run()}
+                      disabled={
+                        running || !runtime || !active?.name.endsWith(".py")
+                      }
+                    >
+                      <FeatherIcon icon="play" size="14" /> Run script
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-run-stop"
+                      disabled={!running}
+                      onClick={stopPythonProcess}
+                    >
+                      <FeatherIcon icon="square" size="14" /> Stop
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-clear"
+                      disabled={!runOutput}
+                      onClick={() => setRunOutput("")}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+                <span className="terminal-toolbar-divider" aria-hidden="true" />
+                <div
+                  className="terminal-action-strip horizontal-menu-scroll"
+                  data-horizontal-menu
+                  role="group"
+                  aria-label="Terminal actions"
+                >
+                  {terminalView === "shell" && (
                     <div
                       className="terminal-session-actions"
                       aria-label="Terminal session controls"
@@ -4981,9 +5069,10 @@ export function App() {
                         label="New terminal"
                         className="terminal-session-control"
                         onClick={() => {
+                          shellSequenceRef.current += 1;
                           const next = {
                             id: `shell-${globalThis.crypto.randomUUID()}`,
-                            title: `Shell ${shellTabs.length + 1}`,
+                            title: `Shell ${shellSequenceRef.current}`,
                             restart: 0,
                           };
                           setShellTabs((current) => [...current, next]);
@@ -5012,68 +5101,48 @@ export function App() {
                         }}
                       />
                     </div>
-                  </div>
-                )}
-                {terminalView === "run" && (
-                  <div className="terminal-run-actions">
-                    <button
-                      type="button"
-                      onClick={() => void run()}
-                      disabled={
-                        running || !runtime || !active?.name.endsWith(".py")
-                      }
-                    >
-                      <FeatherIcon icon="play" size="14" /> Run script
-                    </button>
-                    <button
-                      type="button"
-                      className="terminal-run-stop"
-                      disabled={!running}
-                      onClick={stopPythonProcess}
-                    >
-                      <FeatherIcon icon="square" size="14" /> Stop
-                    </button>
-                    <button
-                      type="button"
-                      className="terminal-clear"
-                      disabled={!runOutput}
-                      onClick={() => setRunOutput("")}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                )}
-                {pythonContext && (
-                  <div className="terminal-python-tools">
-                    <button
-                      type="button"
-                      className={pythonManagerOpen ? "active" : ""}
-                      aria-expanded={pythonManagerOpen}
-                      onClick={() => {
-                        setPythonManagerOpen((open) => !open);
-                        setUvHelpOpen(false);
-                      }}
-                    >
-                      <FeatherIcon icon="package" size="13" /> Packages
-                    </button>
-                    <button
-                      type="button"
-                      className={uvHelpOpen ? "active" : ""}
-                      aria-expanded={uvHelpOpen}
-                      onClick={() => {
-                        setUvHelpOpen((open) => !open);
-                        setPythonManagerOpen(false);
-                      }}
-                    >
-                      <FeatherIcon icon="book-open" size="13" /> UV help
-                    </button>
-                  </div>
-                )}
-                <IconButton
-                  icon="x"
-                  label="Close terminal panel"
-                  onClick={() => setTerminalOpen(false)}
-                />
+                  )}
+                  {pythonContext && (
+                    <div className="terminal-python-tools">
+                      <button
+                        type="button"
+                        className={pythonManagerOpen ? "active" : ""}
+                        aria-expanded={pythonManagerOpen}
+                        onClick={() => {
+                          setPythonManagerOpen((open) => !open);
+                          setUvHelpOpen(false);
+                        }}
+                      >
+                        <FeatherIcon icon="package" size="13" /> Packages
+                      </button>
+                      <button
+                        type="button"
+                        className={uvHelpOpen ? "active" : ""}
+                        aria-expanded={uvHelpOpen}
+                        onClick={() => {
+                          setUvHelpOpen((open) => !open);
+                          setPythonManagerOpen(false);
+                        }}
+                      >
+                        <FeatherIcon icon="book-open" size="13" /> UV help
+                      </button>
+                      <IconButton
+                        icon="x"
+                        label="Close terminal panel"
+                        className="terminal-panel-close"
+                        onClick={() => setTerminalOpen(false)}
+                      />
+                    </div>
+                  )}
+                  {!pythonContext && (
+                    <IconButton
+                      icon="x"
+                      label="Close terminal panel"
+                      className="terminal-panel-close"
+                      onClick={() => setTerminalOpen(false)}
+                    />
+                  )}
+                </div>
               </div>
               <div className="terminal-workspace">
                 <div className="terminal-main">
@@ -5094,7 +5163,7 @@ export function App() {
                           onClick={() => {
                             const next = {
                               id: `shell-${globalThis.crypto.randomUUID()}`,
-                              title: "Shell 1",
+                              title: `Shell ${shellSequenceRef.current}`,
                               restart: 0,
                             };
                             setShellTabs([next]);
@@ -5391,6 +5460,7 @@ export function App() {
               computerAccess={aiComputerAccess}
               contextLimit={aiContextLimit}
               hardwarePreference={aiHardware}
+              thinkingEnabled={aiThinkingEnabled}
               width={aiPanelWidth}
               side={aiPanelSide}
               projectName={project?.name || ""}
@@ -5408,6 +5478,7 @@ export function App() {
               onComputerAccess={setAiComputerAccess}
               onContextLimit={setAiContextLimit}
               onHardwarePreference={setAiHardware}
+              onThinkingEnabled={setAiThinkingEnabled}
               onChanged={refreshAfterAiChanges}
               onNotice={setNotice}
               onChatOpened={() => {

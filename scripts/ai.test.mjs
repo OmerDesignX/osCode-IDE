@@ -17,9 +17,17 @@ import {
   pythonPackageInstallSpecs,
   requiredProjectImageDownloadCount,
   requiresProjectMutation,
+  shouldRetryLlamaOnCpu,
   privateAttachmentExternalDetail,
   toolResultForModel,
 } from "../dist-electron/main/ai.js";
+
+test("automatic Intel macOS inference can retry without Metal", () => {
+  assert.equal(shouldRetryLlamaOnCpu("darwin", "x64", "auto"), true);
+  assert.equal(shouldRetryLlamaOnCpu("darwin", "x64", "cpu"), false);
+  assert.equal(shouldRetryLlamaOnCpu("darwin", "arm64", "auto"), false);
+  assert.equal(shouldRetryLlamaOnCpu("win32", "x64", "auto"), false);
+});
 import {
   materializeAiMedia,
   prepareAiAttachments,

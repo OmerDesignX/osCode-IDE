@@ -155,6 +155,20 @@ function broadcastToRenderers(channel: string, ...args: unknown[]) {
       window.webContents.send(channel, ...args);
   }
 }
+function broadcastToOtherRenderers(
+  senderId: number,
+  channel: string,
+  ...args: unknown[]
+) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (
+      window.webContents.id !== senderId &&
+      !window.isDestroyed() &&
+      !window.webContents.isDestroyed()
+    )
+      window.webContents.send(channel, ...args);
+  }
+}
 function attentionOverlay(kind: AppAttentionKind, count: number) {
   const fill = kind === "permission" ? "#f4b860" : "#89cff0";
   const label = count > 9 ? "9+" : String(count);
@@ -1857,6 +1871,26 @@ async function runSmokeTest(window: BrowserWindow) {
         'Python controls after Markdown preview'
       );
       const editorTabs = document.querySelector('.tabs');
+      const fileTabPillProbe =
+        [...editorTabs.querySelectorAll('.tab')].find(
+          tab => !tab.classList.contains('active')
+        ) || editorTabs.querySelector('.tab');
+      const fileTabSelectProbe = fileTabPillProbe.querySelector('.tab-select');
+      const fileTabBackgroundBeforeFocus =
+        getComputedStyle(fileTabPillProbe).backgroundColor;
+      fileTabSelectProbe.focus();
+      const fileTabPillRect = fileTabPillProbe.getBoundingClientRect();
+      const fileTabPillStyle = getComputedStyle(fileTabPillProbe);
+      const fileTabSelectStyle = getComputedStyle(fileTabSelectProbe);
+      const fileTabPillHighlightReady =
+        fileTabPillProbe.matches(':focus-within') &&
+        fileTabPillStyle.backgroundColor !== fileTabBackgroundBeforeFocus &&
+        ['rgba(0, 0, 0, 0)', 'transparent'].includes(
+          fileTabSelectStyle.backgroundColor
+        ) &&
+        fileTabSelectStyle.boxShadow === 'none' &&
+        parseFloat(fileTabPillStyle.borderTopLeftRadius) >=
+          fileTabPillRect.height / 2 - 2;
       const tabCountBeforeClose = editorTabs.querySelectorAll('.tab').length;
       const fileTabCloseHitReady = clickIconCenter(
         editorTabs,
@@ -1951,6 +1985,58 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('.advanced-dock'),
         'advanced mode'
       );
+      const pythonAdvancedButton = [...advancedDock.querySelectorAll('button')].find(
+        item => item.textContent.trim() === 'Python'
+      );
+      pythonAdvancedButton.click();
+      const advancedRuntimeContent = await waitFor(
+        () => document.querySelector('.advanced-runtime-content'),
+        'Python advanced settings'
+      );
+      const advancedRuntimeDock = document.querySelector(
+        '.advanced-dock-runtimes'
+      );
+      const advancedRuntimeActions = [
+        ...advancedRuntimeContent.querySelectorAll(
+          '.advanced-action-grid > button'
+        )
+      ];
+      const advancedRuntimeSection = advancedRuntimeContent.querySelector(
+        '.project-environment-settings'
+      );
+      const advancedRuntimeSelect = advancedRuntimeSection.querySelector(
+        '.advanced-select-row > select'
+      );
+      const advancedRuntimeSectionRect =
+        advancedRuntimeSection.getBoundingClientRect();
+      const advancedRuntimeSelectRect =
+        advancedRuntimeSelect.getBoundingClientRect();
+      const advancedRuntimeContentStyle = getComputedStyle(
+        advancedRuntimeContent
+      );
+      const advancedRuntimeSectionStyle = getComputedStyle(
+        advancedRuntimeSection
+      );
+      const advancedRuntimeLayoutReady =
+        advancedRuntimeDock.getBoundingClientRect().width >= 600 &&
+        parseFloat(advancedRuntimeContentStyle.paddingLeft) >= 24 &&
+        parseFloat(advancedRuntimeSectionStyle.paddingLeft) >= 20 &&
+        advancedRuntimeActions.length === 2 &&
+        advancedRuntimeActions.every(button => {
+          const rect = button.getBoundingClientRect();
+          return (
+            rect.width >= 220 &&
+            rect.height >= 54 &&
+            button.scrollWidth <= button.clientWidth + 1
+          );
+        }) &&
+        advancedRuntimeSelectRect.left >= advancedRuntimeSectionRect.left &&
+        advancedRuntimeSelectRect.right <= advancedRuntimeSectionRect.right;
+      advancedDock.querySelector('[aria-label="Back to Advanced"]').click();
+      await waitFor(
+        () => advancedDock.querySelector('.advanced-menu'),
+        'Advanced menu after Python settings'
+      );
       const mcpButton = [...advancedDock.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'MCP'
       );
@@ -2018,6 +2104,34 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('.ai-panel'),
         'AI panel after Chat is enabled'
       );
+      const permissionToggle = aiPanel.querySelector('.ai-capability-toggle');
+      const aiPermissionsClosedAtBoot =
+        permissionToggle?.getAttribute('aria-expanded') === 'false' &&
+        !aiPanel.querySelector('.ai-capability-bar');
+      permissionToggle.click();
+      await waitFor(
+        () => {
+          const picker = aiPanel.querySelector('.ai-capability-bar');
+          return picker?.getBoundingClientRect().width > 0 ? picker : null;
+        },
+        'permission controls after explicit click'
+      );
+      const permissionPicker = aiPanel.querySelector('.ai-capability-bar');
+      const permissionOption = permissionPicker.querySelector('button');
+      const permissionPickerRect = permissionPicker.getBoundingClientRect();
+      const permissionOptionRect = permissionOption.getBoundingClientRect();
+      const permissionPickerStyle = getComputedStyle(permissionPicker);
+      const permissionOptionStyle = getComputedStyle(permissionOption);
+      const permissionPickerMetrics = {
+        width: permissionPickerRect.width,
+        radius: parseFloat(permissionPickerStyle.borderTopLeftRadius),
+        padding: parseFloat(permissionPickerStyle.paddingTop)
+      };
+      const permissionOptionMetrics = {
+        width: permissionOptionRect.width,
+        height: permissionOptionRect.height,
+        radius: parseFloat(permissionOptionStyle.borderTopLeftRadius)
+      };
       const aiCapabilitiesDefaultOff = [
         'File access: off',
         'Web access: off',
@@ -2025,6 +2139,154 @@ async function runSmokeTest(window: BrowserWindow) {
         'Terminal access: ask first',
         'Computer Control: off'
       ].every(label => aiPanel.querySelector('[aria-label="' + label + '"]'));
+      permissionToggle.click();
+      await waitFor(
+        () => !aiPanel.querySelector('.ai-capability-bar'),
+        'permission controls close after explicit click'
+      );
+      const modelToggle = aiPanel.querySelector('.ai-tier-toggle');
+      const modelToggleRect = modelToggle.getBoundingClientRect();
+      const modelIconRect = modelToggle
+        .querySelector(':scope > svg:first-child')
+        .getBoundingClientRect();
+      const permissionToggleRect = permissionToggle.getBoundingClientRect();
+      const permissionIconRect = permissionToggle
+        .querySelector(':scope > span > svg')
+        .getBoundingClientRect();
+      modelToggle.click();
+      const modelGeometrySnapshot = await waitFor(
+        () => {
+          const picker = aiPanel.querySelector('.ai-tier-picker');
+          const option = picker?.querySelector('button');
+          const pickerRect = picker?.getBoundingClientRect();
+          const optionRect = option?.getBoundingClientRect();
+          if (!picker || !option || !pickerRect?.width || !optionRect?.width)
+            return null;
+          const pickerStyle = getComputedStyle(picker);
+          const optionStyle = getComputedStyle(option);
+          return {
+            picker: {
+              width: pickerRect.width,
+              radius: parseFloat(pickerStyle.borderTopLeftRadius),
+              padding: parseFloat(pickerStyle.paddingTop)
+            },
+            option: {
+              width: optionRect.width,
+              height: optionRect.height,
+              radius: parseFloat(optionStyle.borderTopLeftRadius)
+            }
+          };
+        },
+        'model controls after explicit click'
+      );
+      const modelPickerMetrics = modelGeometrySnapshot.picker;
+      const modelOptionMetrics = modelGeometrySnapshot.option;
+      const selectorGeometry = {
+        modelToggle: {
+          width: modelToggleRect.width,
+          height: modelToggleRect.height,
+          radius: parseFloat(getComputedStyle(modelToggle).borderTopLeftRadius)
+        },
+        permissionToggle: {
+          width: permissionToggleRect.width,
+          height: permissionToggleRect.height,
+          radius: parseFloat(getComputedStyle(permissionToggle).borderTopLeftRadius)
+        },
+        modelPicker: modelPickerMetrics,
+        permissionPicker: permissionPickerMetrics,
+        modelOption: modelOptionMetrics,
+        permissionOption: permissionOptionMetrics
+      };
+      const aiSelectorGeometryReady =
+        Math.abs(modelToggleRect.width - permissionToggleRect.width) <= 2 &&
+        Math.abs(modelToggleRect.height - permissionToggleRect.height) <= 1 &&
+        selectorGeometry.modelToggle.radius >= modelToggleRect.height / 2 - 2 &&
+        selectorGeometry.permissionToggle.radius >= permissionToggleRect.height / 2 - 2 &&
+        Math.abs(modelOptionMetrics.width - permissionOptionRect.width) <= 2 &&
+        Math.abs(modelOptionMetrics.height - permissionOptionRect.height) <= 1 &&
+        selectorGeometry.modelOption.radius >= modelOptionMetrics.height / 2 - 2 &&
+        selectorGeometry.permissionOption.radius >= permissionOptionRect.height / 2 - 2 &&
+        selectorGeometry.modelPicker.radius >= 28 &&
+        selectorGeometry.permissionPicker.radius >= 28 &&
+        selectorGeometry.modelPicker.padding >= 10 &&
+        selectorGeometry.permissionPicker.padding >= 10;
+      modelToggle.click();
+      await waitFor(
+        () => !aiPanel.querySelector('.ai-tier-picker'),
+        'model controls close after explicit click'
+      );
+      const compactSelectorInsetsReady =
+        Math.abs(
+          modelIconRect.left -
+            modelToggleRect.left -
+            (permissionIconRect.left - permissionToggleRect.left)
+        ) <= 2;
+      const expandToggle = aiPanel.querySelector('.ai-expand-toggle');
+      expandToggle.click();
+      await waitFor(
+        () => aiPanel.classList.contains('expanded'),
+        'full-window AI chat'
+      );
+      const expandedModelIconRect = modelToggle
+        .querySelector(':scope > svg:first-child')
+        .getBoundingClientRect();
+      const expandedModelLabelRect = modelToggle
+        .querySelector(':scope > .ai-footer-label')
+        .getBoundingClientRect();
+      const expandedPermissionIconRect = permissionToggle
+        .querySelector(':scope > span > svg')
+        .getBoundingClientRect();
+      const expandedPermissionLabelRect = permissionToggle
+        .querySelector(':scope > span > .ai-footer-label')
+        .getBoundingClientRect();
+      const modelIconGap =
+        expandedModelLabelRect.left - expandedModelIconRect.right;
+      const permissionIconGap =
+        expandedPermissionLabelRect.left - expandedPermissionIconRect.right;
+      const aiFooterSelectorSpacing = {
+        modelIconGap,
+        permissionIconGap,
+        compactModelInset: modelIconRect.left - modelToggleRect.left,
+        compactPermissionInset:
+          permissionIconRect.left - permissionToggleRect.left
+      };
+      const aiFooterSelectorSpacingReady =
+        compactSelectorInsetsReady &&
+        modelIconGap >= 7 &&
+        modelIconGap <= 11 &&
+        permissionIconGap >= 7 &&
+        permissionIconGap <= 11 &&
+        Math.abs(modelIconGap - permissionIconGap) <= 1;
+      const expandedPanelRect = aiPanel.getBoundingClientRect();
+      const expandedFooterRect = aiPanel
+        .querySelector('.ai-footer-controls')
+        .getBoundingClientRect();
+      const expandedComposerRect = aiPanel
+        .querySelector('.ai-composer')
+        .getBoundingClientRect();
+      const aiSettingsActionRect = aiPanel
+        .querySelector('[aria-label="AI settings"]')
+        .getBoundingClientRect();
+      const expandedExitRect = expandToggle.getBoundingClientRect();
+      const layoutProbe = document.createElement('article');
+      layoutProbe.className = 'ai-message assistant';
+      layoutProbe.innerHTML =
+        '<header class="ai-message-author"><i>O</i><span>osCode</span></header><p>Layout probe</p>';
+      aiPanel.querySelector('.ai-conversation').append(layoutProbe);
+      const expandedMessageRect = layoutProbe.getBoundingClientRect();
+      layoutProbe.remove();
+      const aiExpandedLayoutReady =
+        expandedPanelRect.width - expandedFooterRect.width >= 300 &&
+        Math.abs(expandedFooterRect.width - expandedComposerRect.width) <= 2 &&
+        expandedMessageRect.width <= expandedFooterRect.width * 0.9 &&
+        expandedMessageRect.width >= 480 &&
+        Math.abs(expandedExitRect.left - aiSettingsActionRect.right) <= 12 &&
+        Math.abs(expandedExitRect.top - aiSettingsActionRect.top) <= 2;
+      expandToggle.click();
+      await waitFor(
+        () => !aiPanel.classList.contains('expanded'),
+        'exit full-window AI chat'
+      );
       const layoutSelect = [...settingsDock.querySelectorAll('label')].find(
         item => item.querySelector('span')?.textContent.trim() === 'Project and AI layout'
       )?.querySelector('select');
@@ -2122,6 +2384,38 @@ async function runSmokeTest(window: BrowserWindow) {
             '.ai-agent-popover, .ai-history-popover, .ai-permission-popover, .ai-model-manager'
           ),
         'AI popup close'
+      );
+      const ollamaSettings = await openAiPopup(
+        'AI settings',
+        () => document.querySelector('.ai-model-manager'),
+        'AI settings for Ollama field check'
+      );
+      const customEngineSelect = [...ollamaSettings.querySelectorAll('label')]
+        .find(item => item.querySelector('span')?.textContent.trim() === 'Custom engine')
+        ?.querySelector('select');
+      customEngineSelect.value = 'ollama';
+      customEngineSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      const ollamaPicker = await waitFor(
+        () => document.querySelector('.ai-ollama-picker'),
+        'Ollama model picker'
+      );
+      const ollamaSearch = ollamaPicker.querySelector('.ai-ollama-search');
+      const ollamaInput = ollamaSearch.querySelector('input');
+      ollamaInput.focus();
+      await new Promise(resolve => requestAnimationFrame(() => resolve()));
+      const ollamaInputStyle = getComputedStyle(ollamaInput);
+      const ollamaSearchStyle = getComputedStyle(ollamaSearch);
+      const aiTextFieldsBorderless =
+        ollamaInputStyle.borderTopWidth === '0px' &&
+        ollamaInputStyle.outlineStyle === 'none' &&
+        ollamaInputStyle.boxShadow === 'none' &&
+        ollamaSearchStyle.borderTopWidth === '0px' &&
+        ollamaSearchStyle.outlineStyle === 'none' &&
+        ollamaSearchStyle.boxShadow === 'none';
+      ollamaPicker.querySelector('[aria-label="Close Ollama models"]').click();
+      await waitFor(
+        () => !document.querySelector('.ai-ollama-picker'),
+        'Ollama model picker close'
       );
       const terminalToggle = document.querySelector('.terminal-toggle');
       terminalToggle.click();
@@ -2228,6 +2522,7 @@ async function runSmokeTest(window: BrowserWindow) {
         fileTabCloseReady: Boolean(
           fileTabCloseHitReady && fileTabCloseReady
         ),
+        fileTabPillHighlightReady,
         editorCommandsReady: (() => {
           const bar = document.querySelector('.editor-command-bar');
           const buttons = [...(bar?.querySelectorAll('button') || [])];
@@ -2275,6 +2570,7 @@ async function runSmokeTest(window: BrowserWindow) {
           gitAfterSync.ahead === 0 &&
           gitAfterSync.behind === 0,
         advancedReady: Boolean(advancedDock),
+        advancedRuntimeLayoutReady,
         mcpReady,
         settingsReady: Boolean(settingsDock),
         utilityPanelGeometryReady:
@@ -2297,8 +2593,15 @@ async function runSmokeTest(window: BrowserWindow) {
           Boolean(aiSwapReady) &&
           (await window.oscode.listAiModels()).length >= 0,
         aiHiddenAtBoot,
+        aiPermissionsClosedAtBoot,
         aiCapabilitiesDefaultOff,
         aiPopupsExclusive: Boolean(aiPopupsExclusive),
+        selectorGeometry,
+        aiSelectorGeometryReady,
+        aiFooterSelectorSpacing,
+        aiFooterSelectorSpacingReady,
+        aiExpandedLayoutReady,
+        aiTextFieldsBorderless,
         aiContextReady: Boolean(aiContextReady),
         aiModelSelected: Boolean(aiModelSelected),
         lightThemeReady: Boolean(lightThemeReady),
@@ -2347,7 +2650,87 @@ async function runSmokeTest(window: BrowserWindow) {
       ].map(item => Math.round(item.getBoundingClientRect().height)).filter(Boolean);
       const terminalSessionHeights = [...document.querySelectorAll('.terminal-session-control')]
         .map(item => Math.round(item.getBoundingClientRect().height));
-      const horizontalMenu = document.querySelector('.top-actions[data-horizontal-menu]');
+      const terminalToggleForLayout = document.querySelector('.terminal-toggle');
+      const openedTerminalForLayout = !document.querySelector('.terminal-panel');
+      if (openedTerminalForLayout) {
+        terminalToggleForLayout?.click();
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          if (document.querySelector('.terminal-panel')) break;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+      const terminalTabRail = document.querySelector(
+        '.shell-tab-strip[data-horizontal-menu]'
+      );
+      const terminalActionRail = document.querySelector(
+        '.terminal-action-strip[data-horizontal-menu]'
+      );
+      const terminalDivider = document.querySelector(
+        '.terminal-toolbar-divider'
+      );
+      const exerciseTerminalRail = async rail => {
+        if (!(rail instanceof HTMLElement)) {
+          return { ready: false, missing: true };
+        }
+        const originalWidth = rail.style.width;
+        const originalMinWidth = rail.style.minWidth;
+        const originalMaxWidth = rail.style.maxWidth;
+        const originalFlex = rail.style.flex;
+        const originalScrollBehavior = rail.style.scrollBehavior;
+        rail.style.width = '96px';
+        rail.style.minWidth = '96px';
+        rail.style.maxWidth = '96px';
+        rail.style.flex = '0 0 96px';
+        rail.style.scrollBehavior = 'auto';
+        rail.scrollLeft = 0;
+        await new Promise(resolve =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
+        const overflows = rail.scrollWidth > rail.clientWidth + 1;
+        rail.scrollLeft = 80;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        const measurement = {
+          overflowX: getComputedStyle(rail).overflowX,
+          scrollWidth: rail.scrollWidth,
+          clientWidth: rail.clientWidth,
+          scrollLeft: rail.scrollLeft
+        };
+        const ready = Boolean(
+          overflows &&
+          measurement.scrollLeft > 0 &&
+          measurement.overflowX === 'auto'
+        );
+        rail.style.width = originalWidth;
+        rail.style.minWidth = originalMinWidth;
+        rail.style.maxWidth = originalMaxWidth;
+        rail.style.flex = originalFlex;
+        rail.style.scrollBehavior = originalScrollBehavior;
+        rail.scrollLeft = 0;
+        return { ready, ...measurement };
+      };
+      const terminalTabScrollCheck = await exerciseTerminalRail(
+        terminalTabRail
+      );
+      const terminalActionScrollCheck = await exerciseTerminalRail(
+        terminalActionRail
+      );
+      const terminalTabScrollReady = terminalTabScrollCheck.ready;
+      const terminalActionScrollReady = terminalActionScrollCheck.ready;
+      const terminalTabRect = terminalTabRail?.getBoundingClientRect();
+      const terminalActionRect = terminalActionRail?.getBoundingClientRect();
+      const terminalDividerRect = terminalDivider?.getBoundingClientRect();
+      const terminalDualScrollReady = Boolean(
+        terminalTabScrollReady &&
+        terminalActionScrollReady &&
+        terminalDividerRect &&
+        terminalDividerRect.width >= 1 &&
+        terminalDividerRect.height >= 24 &&
+        terminalTabRect &&
+        terminalActionRect &&
+        terminalTabRect.right <= terminalDividerRect.left + 3 &&
+        terminalDividerRect.right <= terminalActionRect.left + 3
+      );
+      const horizontalMenu = activityStrip;
       let globalActivityScrollReady = false;
       if (activityStrip instanceof HTMLElement) {
         const originalWidth = activityStrip.style.width;
@@ -2382,7 +2765,7 @@ async function runSmokeTest(window: BrowserWindow) {
         horizontalMenu.style.scrollBehavior = 'auto';
         horizontalMenu.scrollLeft = 0;
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const menuControlHeights = [...horizontalMenu.querySelectorAll('button')]
+        const menuControlHeights = [...horizontalMenu.querySelectorAll('.top-actions button')]
           .map(item => Math.round(item.getBoundingClientRect().height));
         const menuOverflows = horizontalMenu.scrollWidth > horizontalMenu.clientWidth + 1;
         horizontalMenu.scrollLeft = 140;
@@ -2399,6 +2782,7 @@ async function runSmokeTest(window: BrowserWindow) {
         horizontalMenu.style.scrollBehavior = originalScrollBehavior;
         horizontalMenu.scrollLeft = 0;
       }
+      if (openedTerminalForLayout) terminalToggleForLayout?.click();
       return {
         ready: Boolean(
         toggle && search && status && actions && actionControl && bar &&
@@ -2427,6 +2811,17 @@ async function runSmokeTest(window: BrowserWindow) {
             Math.max(...terminalSessionHeights) - Math.min(...terminalSessionHeights) <= 1
           )
         ),
+        terminalDualScrollReady,
+        terminalDualScroll: {
+          tabs: terminalTabScrollCheck,
+          actions: terminalActionScrollCheck,
+          tabRight: terminalTabRect?.right,
+          dividerLeft: terminalDividerRect?.left,
+          dividerRight: terminalDividerRect?.right,
+          actionLeft: terminalActionRect?.left,
+          dividerWidth: terminalDividerRect?.width,
+          dividerHeight: terminalDividerRect?.height
+        },
         globalActivityScrollReady,
         nonDownloadProgressHidden,
         horizontalMenuScrollReady,
@@ -2466,6 +2861,12 @@ async function runSmokeTest(window: BrowserWindow) {
         result.globalSearchLayout as
           { terminalSessionControlsBalanced?: boolean } | undefined
       )?.terminalSessionControlsBalanced,
+    );
+    result.terminalDualScrollReady = Boolean(
+      (
+        result.globalSearchLayout as
+          { terminalDualScrollReady?: boolean } | undefined
+      )?.terminalDualScrollReady,
     );
     result.horizontalMenuScrollReady = Boolean(
       (
@@ -2515,10 +2916,15 @@ async function runSmokeTest(window: BrowserWindow) {
       await new Promise((resolve) => setTimeout(resolve, 180));
       result.agentBrowserViewReady =
         await contents.executeJavaScript(`(async () => {
-        const deadline = Date.now() + 10000;
-        const view = [...document.querySelectorAll('button')].find(
-          item => item.textContent.trim() === 'Agent Browser'
-        );
+        const deadline = Date.now() + 60000;
+        let view;
+        while (Date.now() < deadline && !view) {
+          view = [...document.querySelectorAll('button')].find(
+            item => item.textContent.trim() === 'Agent Browser'
+          );
+          if (!view)
+            await new Promise(resolve => setTimeout(resolve, 80));
+        }
         if (!view) return false;
         view.click();
         while (Date.now() < deadline) {
@@ -2595,6 +3001,7 @@ async function runSmokeTest(window: BrowserWindow) {
       Number(result.sidebarWidth) > 490 ||
       result.editorReady !== true ||
       result.fileTabCloseReady !== true ||
+      result.fileTabPillHighlightReady !== true ||
       result.editorCommandsReady !== true ||
       result.markdownReady !== true ||
       result.imageMediaReady !== true ||
@@ -2612,6 +3019,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.gitRemoteReady !== true ||
       result.gitSyncReady !== true ||
       result.advancedReady !== true ||
+      result.advancedRuntimeLayoutReady !== true ||
       result.mcpReady !== true ||
       result.settingsReady !== true ||
       result.utilityPanelGeometryReady !== true ||
@@ -2622,6 +3030,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.platformioReady !== true ||
       result.aiPanelReady !== true ||
       result.aiHiddenAtBoot !== true ||
+      result.aiPermissionsClosedAtBoot !== true ||
       result.aiCapabilitiesDefaultOff !== true ||
       result.agentBrowserReady !== true ||
       result.agentBrowserViewReady !== true ||
@@ -2631,6 +3040,10 @@ async function runSmokeTest(window: BrowserWindow) {
       result.computerControlBannerReady !== true ||
       result.computerEmergencyStopReady !== true ||
       result.aiPopupsExclusive !== true ||
+      result.aiSelectorGeometryReady !== true ||
+      result.aiFooterSelectorSpacingReady !== true ||
+      result.aiExpandedLayoutReady !== true ||
+      result.aiTextFieldsBorderless !== true ||
       result.aiContextReady !== true ||
       result.aiModelSelected !== true ||
       result.globalSearchWithActivityReady !== true ||
@@ -2638,6 +3051,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.nonDownloadProgressHidden !== true ||
       result.balancedControlSizing !== true ||
       result.terminalSessionControlsBalanced !== true ||
+      result.terminalDualScrollReady !== true ||
       result.horizontalMenuScrollReady !== true ||
       result.lightThemeReady !== true ||
       result.pythonPackageManagerReady !== true ||
@@ -3032,11 +3446,15 @@ function registerIpc() {
       return true;
     },
   );
-  ipcMain.handle("preferences:set", async (_e, value: unknown) => {
+  ipcMain.handle("preferences:set", async (event, value: unknown) => {
     const preferences = await writePreferences(value);
     if (appUpdateService?.isEnabled() !== preferences.autoUpdateEnabled)
       await appUpdateService?.setEnabled(preferences.autoUpdateEnabled);
-    broadcastToRenderers("preferences:changed", preferences);
+    broadcastToOtherRenderers(
+      event.sender.id,
+      "preferences:changed",
+      preferences,
+    );
     return true;
   });
   ipcMain.handle("updates:status", () => appUpdateService.getStatus());
@@ -4486,6 +4904,10 @@ app.whenReady().then(async () => {
       return python;
     },
     status: (message) => broadcastToRenderers("ai:status", message),
+    modelOutput: (output) => {
+      if (aiExecutionOwner && !aiExecutionOwner.isDestroyed())
+        aiExecutionOwner.send("ai:model-output", output);
+    },
     checkpoint: (root, relative, before) =>
       saveHistoryStore.record(root, relative, before, "agent").then(() => {}),
     action: (action) => {

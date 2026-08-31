@@ -16,6 +16,7 @@ import type {
   AiInferenceHardware,
   AiHistoryEntry,
   AiModel,
+  AiModelOutput,
   AiModelTier,
   AiPipelineState,
   AiPermissionKind,
@@ -39,6 +40,7 @@ type Props = {
   computerAccess: boolean;
   contextLimit: number;
   hardwarePreference: AiInferenceHardware;
+  thinkingEnabled: boolean;
   width: number;
   side: "left" | "right";
   projectName: string;
@@ -53,6 +55,7 @@ type Props = {
   onComputerAccess: (enabled: boolean) => void;
   onContextLimit: (limit: number) => void;
   onHardwarePreference: (hardware: AiInferenceHardware) => void;
+  onThinkingEnabled: (enabled: boolean) => void;
   onChanged: (files: string[]) => Promise<void>;
   onNotice: (message: string) => void;
   onChatOpened?: () => void;
@@ -324,7 +327,18 @@ function recommendedActiveContext(
   model: AiModel,
   _hardware: AiHardwareProfile | null,
 ) {
-  if (osCodeGgufTier(model)) return model.contextLimit || 262_144;
+  if (model.engine === "llamacpp" && osCodeGgufTier(model))
+    return Math.min(
+      model.preferredContext || 8_192,
+      model.contextLimit || 8_192,
+    );
+  if (
+    model.engine === "mlx" &&
+    ["bundled", "downloaded", "available"].includes(model.source) &&
+    model.tier &&
+    model.tier !== "custom"
+  )
+    return model.contextLimit || 262_144;
   return Math.min(model.preferredContext || 8_192, model.contextLimit || 8_192);
 }
 
@@ -373,6 +387,7 @@ export function AiPanel({
   computerAccess,
   contextLimit,
   hardwarePreference,
+  thinkingEnabled,
   width,
   side,
   projectName,
@@ -387,6 +402,7 @@ export function AiPanel({
   onComputerAccess,
   onContextLimit,
   onHardwarePreference,
+  onThinkingEnabled,
   onChanged,
   onNotice,
   onChatOpened,
@@ -402,6 +418,11 @@ export function AiPanel({
   const [attachments, setAttachments] = useState<AiChatAttachment[]>([]);
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
+  const [liveModelOutput, setLiveModelOutput] = useState<{
+    chatId: string;
+    reasoning: string;
+    answer: string;
+  }>({ chatId: "", reasoning: "", answer: "" });
   const [cudaBusy, setCudaBusy] = useState(false);
   const [downloadingTier, setDownloadingTier] = useState<
     Exclude<AiModelTier, "custom"> | ""
@@ -409,7 +430,7 @@ export function AiPanel({
   const [status, setStatus] = useState("Ready · local only");
   const [modelsOpen, setModelsOpen] = useState(false);
   const [tierPickerOpen, setTierPickerOpen] = useState(false);
-  const [permissionsDrawerOpen, setPermissionsDrawerOpen] = useState(true);
+  const [permissionsDrawerOpen, setPermissionsDrawerOpen] = useState(false);
   const [pipelineState, setPipelineState] = useState<AiPipelineState>({
     state: "idle",
     label: "",
@@ -550,6 +571,10 @@ export function AiPanel({
   );
   const activeChat = agentState.chats.find((item) => item.id === chatId);
   const selectedModel = models.find((item) => item.path === model);
+  const intelLlamaMac =
+    hardware?.platform === "darwin" &&
+    hardware.arch === "x64" &&
+    hardware.engine === "llamacpp";
   const activeGoal = agentState.goals.find(
     (item) => item.chatId === chatId && item.status === "active",
   );
@@ -673,6 +698,7 @@ export function AiPanel({
     messagesRef.current = cleanMessages;
     setChatId(chat.id);
     setMessages(cleanMessages);
+    setLiveModelOutput({ chatId: "", reasoning: "", answer: "" });
     setContextSummary(chat.contextSummary);
     setUsage({ used: 0, limit: contextLimit, compacted: false });
     setGoalDraft(
@@ -690,6 +716,27 @@ export function AiPanel({
   useEffect(() => {
     void refreshModels().catch(() => undefined);
     const offStatus = window.oscode.onAiStatus(setStatus);
+    const offModelOutput = window.oscode.onAiModelOutput(
+      (output: AiModelOutput) => {
+        if (output.chatId !== chatIdRef.current) return;
+        setLiveModelOutput((current) => {
+          const base =
+            output.reset || current.chatId !== output.chatId
+              ? { chatId: output.chatId, reasoning: "", answer: "" }
+              : current;
+          if (!output.delta) return base;
+          return output.phase === "reasoning"
+            ? {
+                ...base,
+                reasoning: `${base.reasoning}${output.delta}`.slice(-40_000),
+              }
+            : {
+                ...base,
+                answer: `${base.answer}${output.delta}`.slice(-100_000),
+              };
+        });
+      },
+    );
     const offAction = window.oscode.onAiAction((action) => {
       if (action.chatId !== chatIdRef.current) return;
       const next = mergeActionEntries(liveActionsRef.current, [action]);
@@ -699,6 +746,7 @@ export function AiPanel({
     const offPipeline = window.oscode.onAiPipelineState(setPipelineState);
     return () => {
       offStatus();
+      offModelOutput();
       offAction();
       offPipeline();
     };
@@ -733,7 +781,7 @@ export function AiPanel({
     setChatId("");
     setMessages([]);
     setContextSummary("");
-    setPermissionsDrawerOpen(true);
+    setPermissionsDrawerOpen(false);
     if (projectName)
       void refreshAgentState()
         .then((next) => {
@@ -1270,6 +1318,11 @@ export function AiPanel({
     stoppingRef.current = false;
     setBusy(true);
     busyRef.current = true;
+    setLiveModelOutput({
+      chatId: currentChatId,
+      reasoning: "",
+      answer: "",
+    });
     if (queueId) await window.oscode.updateAiQueue(queueId, "running");
     let failed = false;
     try {
@@ -1292,6 +1345,7 @@ export function AiPanel({
         resumePermission: Boolean(continuation),
         contextLimit,
         hardware: hardwarePreference,
+        thinkingEnabled,
         contextSummary: requestSummary,
         goal: activeGoal?.text || "",
       });
@@ -1442,6 +1496,7 @@ export function AiPanel({
         );
       setBusy(false);
       busyRef.current = false;
+      setLiveModelOutput({ chatId: "", reasoning: "", answer: "" });
       steeringRef.current = false;
       stoppingRef.current = false;
       await refreshAgentState().catch(() => undefined);
@@ -1464,6 +1519,7 @@ export function AiPanel({
     const next = [...chat.messages, userMessage];
     setBusy(true);
     busyRef.current = true;
+    setLiveModelOutput({ chatId: chat.id, reasoning: "", answer: "" });
     setStatus(`Running scheduled work in ${chat.title}`);
     await window.oscode.updateAiQueue(item.id, "running");
     let failed = false;
@@ -1483,6 +1539,7 @@ export function AiPanel({
         resumePermission: false,
         contextLimit,
         hardware: hardwarePreference,
+        thinkingEnabled,
         contextSummary: chat.contextSummary,
         goal,
       });
@@ -1529,6 +1586,7 @@ export function AiPanel({
       );
       setBusy(false);
       busyRef.current = false;
+      setLiveModelOutput({ chatId: "", reasoning: "", answer: "" });
       setStatus(
         failed ? "Scheduled work needs attention" : "Ready · local only",
       );
@@ -1871,6 +1929,7 @@ export function AiPanel({
           <IconButton
             icon={expanded ? "minimize-2" : "maximize-2"}
             label={expanded ? "Exit full-window chat" : "Open full-window chat"}
+            className="ai-expand-toggle"
             active={expanded}
             onClick={() => {
               closeAiPopups();
@@ -1880,95 +1939,6 @@ export function AiPanel({
         </div>
       </div>
 
-      <button
-        className="ai-tier-toggle"
-        type="button"
-        aria-expanded={tierPickerOpen}
-        aria-controls="ai-model-size-picker"
-        onClick={() => {
-          setTierPickerOpen((current) => !current);
-          setCustomListOpen(false);
-        }}
-      >
-        <span>
-          <b>{selectedModel?.name || "Choose a local model"}</b>
-          <small>
-            {selectedModel?.installed === false
-              ? "Download required"
-              : selectedModel
-                ? "Ready"
-                : "Small, Medium, Large, or Custom"}
-          </small>
-        </span>
-        <FeatherIcon
-          icon={tierPickerOpen ? "chevron-up" : "chevron-down"}
-          size="18"
-        />
-      </button>
-
-      {tierPickerOpen && (
-        <div
-          id="ai-model-size-picker"
-          className="ai-tier-picker"
-          aria-label="osCode model size"
-        >
-          {(["small", "medium", "large"] as const).map((tier) => {
-            const item =
-              tierModels.find(
-                (entry) =>
-                  osCodeGgufTier(entry) === tier && entry.supported !== false,
-              ) || tierModels.find((entry) => osCodeGgufTier(entry) === tier);
-            return (
-              <button
-                key={tier}
-                className={item?.path === model ? "active" : ""}
-                disabled={
-                  !item ||
-                  item.supported === false ||
-                  Boolean(downloadingTier) ||
-                  busy
-                }
-                title={item?.supportReason || `${item?.name || tier} model`}
-                onClick={() => void selectBundledTier(tier)}
-              >
-                <b>{tier[0].toUpperCase() + tier.slice(1)}</b>
-                <span>
-                  {item?.supported === false ? (
-                    "Not supported"
-                  ) : item?.installed ? (
-                    "Ready"
-                  ) : downloadingTier === tier ? (
-                    "Downloading…"
-                  ) : (
-                    <>
-                      <FeatherIcon icon="download" size="12" /> Download
-                    </>
-                  )}
-                </span>
-              </button>
-            );
-          })}
-          <button
-            className={
-              selectedModel && osCodeGgufTier(selectedModel) === null
-                ? "active"
-                : ""
-            }
-            onClick={() => {
-              const willOpen = !customListOpen;
-              closeAiPopups();
-              setCustomListOpen(willOpen);
-            }}
-          >
-            <b>Custom</b>
-            <span>
-              {customModels.length
-                ? `${customModels.length} added`
-                : "Add model"}
-            </span>
-          </button>
-        </div>
-      )}
       {pipelineState.state === "waiting" && (
         <div className="ai-pipeline-banner" role="status" aria-live="polite">
           <FeatherIcon icon="clock" size="17" />
@@ -2829,30 +2799,60 @@ export function AiPanel({
                     )
                   }
                 >
-                  <option value="auto">
-                    Auto
-                    {hardware?.gpuAvailable
-                      ? ` · ${hardware.accelerator === "cuda" ? `CUDA${hardware.acceleratorVersion ? ` ${hardware.acceleratorVersion}` : ""}` : "GPU"}`
-                      : " · CPU"}
-                  </option>
-                  <option value="gpu" disabled={!hardware?.gpuAvailable}>
-                    GPU
-                    {hardware?.gpuAvailable && hardware.accelerator !== "none"
-                      ? ` · ${hardware.accelerator === "cuda" ? `CUDA${hardware.acceleratorVersion ? ` ${hardware.acceleratorVersion}` : ""}` : hardware.accelerator[0].toUpperCase() + hardware.accelerator.slice(1)}`
-                      : ""}
-                    {hardware?.gpuAvailable && hardware.gpuName
-                      ? ` · ${hardware.gpuName}`
-                      : " · not detected"}
-                    {(hardware?.gpuCount || 0) > 1
-                      ? ["cuda", "vulkan"].includes(
-                          hardware?.accelerator || "none",
-                        )
-                        ? ` · ${hardware?.gpuCount} GPUs · automatic split`
-                        : ` · ${hardware?.gpuCount} GPUs detected`
-                      : ""}
-                  </option>
-                  <option value="cpu">CPU</option>
+                  {intelLlamaMac ? (
+                    <>
+                      <option value="cpu">CPU · Intel Mac default</option>
+                      <option value="gpu" disabled={!hardware?.gpuAvailable}>
+                        Metal / MPS · GPU acceleration
+                        {hardware?.gpuAvailable && hardware.gpuName
+                          ? ` · ${hardware.gpuName}`
+                          : " · not detected"}
+                      </option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="auto">
+                        Auto
+                        {hardware?.gpuAvailable
+                          ? ` · ${hardware.accelerator === "cuda" ? `CUDA${hardware.acceleratorVersion ? ` ${hardware.acceleratorVersion}` : ""}` : "GPU"}`
+                          : " · CPU"}
+                      </option>
+                      <option value="gpu" disabled={!hardware?.gpuAvailable}>
+                        GPU
+                        {hardware?.gpuAvailable &&
+                        hardware.accelerator !== "none"
+                          ? ` · ${hardware.accelerator === "cuda" ? `CUDA${hardware.acceleratorVersion ? ` ${hardware.acceleratorVersion}` : ""}` : hardware.accelerator[0].toUpperCase() + hardware.accelerator.slice(1)}`
+                          : ""}
+                        {hardware?.gpuAvailable && hardware.gpuName
+                          ? ` · ${hardware.gpuName}`
+                          : " · not detected"}
+                        {(hardware?.gpuCount || 0) > 1
+                          ? ["cuda", "vulkan"].includes(
+                              hardware?.accelerator || "none",
+                            )
+                            ? ` · ${hardware?.gpuCount} GPUs · automatic split`
+                            : ` · ${hardware?.gpuCount} GPUs detected`
+                          : ""}
+                      </option>
+                      <option value="cpu">CPU</option>
+                    </>
+                  )}
                 </select>
+              </label>
+              <label className="ai-setting-row ai-thinking-setting toggle-row">
+                <span>
+                  <b>Show model thinking</b>
+                  <small>
+                    Stream reasoning from compatible osCode and custom local
+                    models.
+                  </small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={thinkingEnabled}
+                  onChange={(event) => onThinkingEnabled(event.target.checked)}
+                />
+                <i aria-hidden="true" />
               </label>
               <label className="ai-setting-row">
                 <span>Custom engine</span>
@@ -3071,7 +3071,7 @@ export function AiPanel({
                 </>
               )}
             </header>
-            {message.thinking && (
+            {thinkingEnabled && message.thinking && (
               <details
                 className="ai-reasoning"
                 open={messageIndex === messages.length - 1}
@@ -3137,6 +3137,39 @@ export function AiPanel({
             )}
           </article>
         ))}
+        {busy &&
+          liveModelOutput.chatId === chatId &&
+          (liveModelOutput.reasoning || liveModelOutput.answer) && (
+            <article
+              className="ai-message assistant ai-live-model-output"
+              aria-live="polite"
+            >
+              <header className="ai-message-author">
+                <i>O</i>
+                <span>
+                  {selectedModel && osCodeGgufTier(selectedModel)
+                    ? "osCode"
+                    : "Custom Model"}
+                </span>
+                <small>Live</small>
+              </header>
+              {thinkingEnabled && liveModelOutput.reasoning && (
+                <details className="ai-reasoning ai-live-reasoning" open>
+                  <summary>
+                    <span>
+                      <FeatherIcon icon="cpu" size="14" />
+                      Model thinking
+                    </span>
+                    <small>Live</small>
+                  </summary>
+                  <AiMessageContent content={liveModelOutput.reasoning} />
+                </details>
+              )}
+              {liveModelOutput.answer && (
+                <AiMessageContent content={liveModelOutput.answer} />
+              )}
+            </article>
+          )}
         {busy && (
           <div className="ai-live-work" role="status" aria-live="polite">
             <div className="ai-thinking">
@@ -3329,173 +3362,6 @@ export function AiPanel({
         </section>
       )}
 
-      <section className="ai-capability-drawer">
-        <button
-          type="button"
-          className="ai-capability-toggle"
-          aria-expanded={permissionsDrawerOpen}
-          aria-controls="ai-capability-controls"
-          onClick={() => setPermissionsDrawerOpen((current) => !current)}
-        >
-          <span>
-            <FeatherIcon icon="shield" size="16" />
-            <span>
-              <b>Agent permissions</b>
-              <small>
-                {
-                  [
-                    fileAccess,
-                    fileAccess && editMode !== "read-only",
-                    webAccess,
-                    browserAccess,
-                    terminalMode === "auto",
-                    computerAccess,
-                  ].filter(Boolean).length
-                }{" "}
-                enabled
-              </small>
-            </span>
-          </span>
-          <FeatherIcon
-            icon={permissionsDrawerOpen ? "chevron-up" : "chevron-down"}
-            size="17"
-          />
-        </button>
-        {permissionsDrawerOpen && (
-          <div
-            id="ai-capability-controls"
-            className="ai-capability-bar horizontal-menu-scroll"
-            data-horizontal-menu
-            aria-label="Agent permissions"
-          >
-            <button
-              className={fileAccess ? "enabled" : ""}
-              aria-pressed={fileAccess}
-              aria-label={`File access: ${fileAccess ? "on" : "off"}`}
-              title={`Files ${fileAccess ? "on" : "off"}: allow osCode to read project files`}
-              data-tooltip={`Files ${fileAccess ? "on" : "off"}: read project files`}
-              onClick={() => {
-                const next = !fileAccess;
-                applyCapabilities(
-                  { ...capabilityRef.current, fileAccess: next },
-                  `Files ${next ? "allowed" : "off"}`,
-                );
-              }}
-            >
-              <FeatherIcon
-                icon={fileAccess ? "folder" : "folder-minus"}
-                size="17"
-              />
-              <span>Files</span>
-            </button>
-            <button
-              className={
-                !fileAccess ? "" : editMode === "auto" ? "enabled" : "guarded"
-              }
-              disabled={!fileAccess}
-              aria-pressed={fileAccess && editMode === "auto"}
-              aria-label={`Editing: ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}`}
-              title={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}: allow osCode to change project files`}
-              data-tooltip={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "auto-save" : "ask first"}: change files`}
-              onClick={() => {
-                const next = editMode === "ask" ? "auto" : "ask";
-                applyCapabilities(
-                  { ...capabilityRef.current, editMode: next },
-                  `Edits ${next === "auto" ? "allowed and automatic" : "allowed with review"}`,
-                );
-              }}
-            >
-              <FeatherIcon
-                icon={
-                  !fileAccess
-                    ? "edit-2"
-                    : editMode === "auto"
-                      ? "edit-3"
-                      : "shield"
-                }
-                size="17"
-              />
-              <span>Edits</span>
-            </button>
-            <button
-              className={webAccess ? "enabled network" : ""}
-              aria-pressed={webAccess}
-              aria-label={`Web access: ${webAccess ? "on" : "off"}`}
-              title={`Web ${webAccess ? "on" : "off"}: allow public searches and HTTPS pages`}
-              data-tooltip={`Web ${webAccess ? "on" : "off"}: search public pages`}
-              onClick={() => {
-                const next = !webAccess;
-                applyCapabilities(
-                  { ...capabilityRef.current, webAccess: next },
-                  `Web ${next ? "allowed" : "off"}`,
-                );
-                if (!next && browserAccess)
-                  void window.oscode.stopAgentControl();
-              }}
-            >
-              <FeatherIcon icon={webAccess ? "wifi" : "wifi-off"} size="17" />
-              <span>Web</span>
-            </button>
-            <span className="ai-capability-divider" aria-hidden="true" />
-            <button
-              className={browserAccess ? "enabled" : ""}
-              aria-pressed={browserAccess}
-              aria-label={`Dedicated agent browser: ${browserAccess ? "on" : "off"}`}
-              title={`Browser ${browserAccess ? "on" : "off"}: open and test pages in an isolated browser`}
-              data-tooltip={`Browser ${browserAccess ? "on" : "off"}: open and test pages`}
-              onClick={() => {
-                const next = !browserAccess;
-                applyCapabilities(
-                  { ...capabilityRef.current, browserAccess: next },
-                  `Browser ${next ? "allowed" : "off"}`,
-                );
-                if (!next) void window.oscode.stopAgentControl();
-              }}
-            >
-              <FeatherIcon icon="compass" size="17" />
-              <span>Browser</span>
-            </button>
-            <button
-              className={terminalMode === "auto" ? "enabled" : "guarded"}
-              aria-pressed={terminalMode === "auto"}
-              aria-label={`Terminal access: ${terminalMode === "auto" ? "automatic" : "ask first"}`}
-              title={`Terminal ${terminalMode === "auto" ? "automatic" : "ask first"}: run commands in the host shell`}
-              data-tooltip={`Terminal ${terminalMode === "auto" ? "auto" : "ask"}: run host shell commands`}
-              onClick={() => {
-                const next = terminalMode === "ask" ? "auto" : "ask";
-                applyCapabilities(
-                  { ...capabilityRef.current, terminalMode: next },
-                  `Terminal ${next === "auto" ? "automatic for this chat" : "will ask before commands"}`,
-                );
-              }}
-            >
-              <FeatherIcon
-                icon={terminalMode === "auto" ? "terminal" : "shield"}
-                size="17"
-              />
-              <span>Terminal</span>
-            </button>
-            <button
-              className={computerAccess ? "enabled" : ""}
-              aria-pressed={computerAccess}
-              aria-label={`Computer Control: ${computerAccess ? "on" : "off"}`}
-              title={`Computer Control ${computerAccess ? "on" : "off"}: operate approved visible apps`}
-              data-tooltip={`Control ${computerAccess ? "on" : "off"}: use approved visible apps`}
-              onClick={() => {
-                const next = !computerAccess;
-                applyCapabilities(
-                  { ...capabilityRef.current, computerAccess: next },
-                  `Control ${next ? "allowed" : "off"}`,
-                );
-                if (!next) void window.oscode.stopAgentControl();
-              }}
-            >
-              <FeatherIcon icon="mouse-pointer" size="17" />
-              <span>Control</span>
-            </button>
-          </div>
-        )}
-      </section>
       {!!attachments.length && (
         <div className="ai-attachments" aria-label="Attached local files">
           {attachments.map((attachment) => (
@@ -3526,6 +3392,271 @@ export function AiPanel({
           ))}
         </div>
       )}
+
+      <div className="ai-footer-controls" aria-label="Chat controls">
+        <div className="ai-bottom-model">
+          <button
+            className="ai-tier-toggle"
+            type="button"
+            aria-expanded={tierPickerOpen}
+            aria-controls="ai-model-size-picker"
+            onClick={() => {
+              setTierPickerOpen((current) => !current);
+              setCustomListOpen(false);
+            }}
+          >
+            <FeatherIcon icon="cpu" size="18" />
+            <span className="ai-footer-label">
+              <b>{selectedModel?.name || "Choose a local model"}</b>
+              <small>
+                {selectedModel?.installed === false
+                  ? "Download required"
+                  : selectedModel
+                    ? "Ready"
+                    : "Small, Medium, Large, or Custom"}
+              </small>
+            </span>
+            <FeatherIcon
+              icon={tierPickerOpen ? "chevron-up" : "chevron-down"}
+              size="16"
+            />
+          </button>
+
+          {tierPickerOpen && (
+            <div
+              id="ai-model-size-picker"
+              className="ai-tier-picker"
+              aria-label="osCode model size"
+            >
+              {(["small", "medium", "large"] as const).map((tier) => {
+                const item =
+                  tierModels.find(
+                    (entry) =>
+                      osCodeGgufTier(entry) === tier &&
+                      entry.supported !== false,
+                  ) ||
+                  tierModels.find((entry) => osCodeGgufTier(entry) === tier);
+                return (
+                  <button
+                    key={tier}
+                    className={item?.path === model ? "active" : ""}
+                    disabled={
+                      !item ||
+                      item.supported === false ||
+                      Boolean(downloadingTier) ||
+                      busy
+                    }
+                    title={item?.supportReason || `${item?.name || tier} model`}
+                    onClick={() => void selectBundledTier(tier)}
+                  >
+                    <b>{tier[0].toUpperCase() + tier.slice(1)}</b>
+                    <span>
+                      {item?.supported === false ? (
+                        "Not supported"
+                      ) : item?.installed ? (
+                        "Ready"
+                      ) : downloadingTier === tier ? (
+                        "Downloading…"
+                      ) : (
+                        <>
+                          <FeatherIcon icon="download" size="12" /> Download
+                        </>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+              <button
+                className={
+                  selectedModel && osCodeGgufTier(selectedModel) === null
+                    ? "active"
+                    : ""
+                }
+                onClick={() => {
+                  const willOpen = !customListOpen;
+                  closeAiPopups();
+                  setCustomListOpen(willOpen);
+                }}
+              >
+                <b>Custom</b>
+                <span>
+                  {customModels.length
+                    ? `${customModels.length} added`
+                    : "Add model"}
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        <section className="ai-capability-drawer">
+          <button
+            type="button"
+            className="ai-capability-toggle"
+            aria-expanded={permissionsDrawerOpen}
+            aria-controls="ai-capability-controls"
+            onClick={() => setPermissionsDrawerOpen((current) => !current)}
+          >
+            <span>
+              <FeatherIcon icon="shield" size="16" />
+              <span className="ai-footer-label">
+                <b>Permissions</b>
+                <small>
+                  {
+                    [
+                      fileAccess,
+                      fileAccess && editMode !== "read-only",
+                      webAccess,
+                      browserAccess,
+                      terminalMode === "auto",
+                      computerAccess,
+                    ].filter(Boolean).length
+                  }{" "}
+                  enabled
+                </small>
+              </span>
+            </span>
+            <FeatherIcon
+              icon={permissionsDrawerOpen ? "chevron-up" : "chevron-down"}
+              size="17"
+            />
+          </button>
+          {permissionsDrawerOpen && (
+            <div
+              id="ai-capability-controls"
+              className="ai-capability-bar horizontal-menu-scroll"
+              data-horizontal-menu
+              aria-label="Agent permissions"
+            >
+              <button
+                className={fileAccess ? "enabled" : ""}
+                aria-pressed={fileAccess}
+                aria-label={`File access: ${fileAccess ? "on" : "off"}`}
+                title={`Files ${fileAccess ? "on" : "off"}: allow osCode to read project files`}
+                data-tooltip={`Files ${fileAccess ? "on" : "off"}: read project files`}
+                onClick={() => {
+                  const next = !fileAccess;
+                  applyCapabilities(
+                    { ...capabilityRef.current, fileAccess: next },
+                    `Files ${next ? "allowed" : "off"}`,
+                  );
+                }}
+              >
+                <FeatherIcon
+                  icon={fileAccess ? "folder" : "folder-minus"}
+                  size="17"
+                />
+                <span>Files</span>
+              </button>
+              <button
+                className={
+                  !fileAccess ? "" : editMode === "auto" ? "enabled" : "guarded"
+                }
+                disabled={!fileAccess}
+                aria-pressed={fileAccess && editMode === "auto"}
+                aria-label={`Editing: ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}`}
+                title={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "automatic" : "ask first"}: allow osCode to change project files`}
+                data-tooltip={`Edits ${!fileAccess ? "off" : editMode === "auto" ? "auto-save" : "ask first"}: change files`}
+                onClick={() => {
+                  const next = editMode === "ask" ? "auto" : "ask";
+                  applyCapabilities(
+                    { ...capabilityRef.current, editMode: next },
+                    `Edits ${next === "auto" ? "allowed and automatic" : "allowed with review"}`,
+                  );
+                }}
+              >
+                <FeatherIcon
+                  icon={
+                    !fileAccess
+                      ? "edit-2"
+                      : editMode === "auto"
+                        ? "edit-3"
+                        : "shield"
+                  }
+                  size="17"
+                />
+                <span>Edits</span>
+              </button>
+              <button
+                className={webAccess ? "enabled network" : ""}
+                aria-pressed={webAccess}
+                aria-label={`Web access: ${webAccess ? "on" : "off"}`}
+                title={`Web ${webAccess ? "on" : "off"}: allow public searches and HTTPS pages`}
+                data-tooltip={`Web ${webAccess ? "on" : "off"}: search public pages`}
+                onClick={() => {
+                  const next = !webAccess;
+                  applyCapabilities(
+                    { ...capabilityRef.current, webAccess: next },
+                    `Web ${next ? "allowed" : "off"}`,
+                  );
+                  if (!next && browserAccess)
+                    void window.oscode.stopAgentControl();
+                }}
+              >
+                <FeatherIcon icon={webAccess ? "wifi" : "wifi-off"} size="17" />
+                <span>Web</span>
+              </button>
+              <span className="ai-capability-divider" aria-hidden="true" />
+              <button
+                className={browserAccess ? "enabled" : ""}
+                aria-pressed={browserAccess}
+                aria-label={`Dedicated agent browser: ${browserAccess ? "on" : "off"}`}
+                title={`Browser ${browserAccess ? "on" : "off"}: open and test pages in an isolated browser`}
+                data-tooltip={`Browser ${browserAccess ? "on" : "off"}: open and test pages`}
+                onClick={() => {
+                  const next = !browserAccess;
+                  applyCapabilities(
+                    { ...capabilityRef.current, browserAccess: next },
+                    `Browser ${next ? "allowed" : "off"}`,
+                  );
+                  if (!next) void window.oscode.stopAgentControl();
+                }}
+              >
+                <FeatherIcon icon="compass" size="17" />
+                <span>Browser</span>
+              </button>
+              <button
+                className={terminalMode === "auto" ? "enabled" : "guarded"}
+                aria-pressed={terminalMode === "auto"}
+                aria-label={`Terminal access: ${terminalMode === "auto" ? "automatic" : "ask first"}`}
+                title={`Terminal ${terminalMode === "auto" ? "automatic" : "ask first"}: run commands in the host shell`}
+                data-tooltip={`Terminal ${terminalMode === "auto" ? "auto" : "ask"}: run host shell commands`}
+                onClick={() => {
+                  const next = terminalMode === "ask" ? "auto" : "ask";
+                  applyCapabilities(
+                    { ...capabilityRef.current, terminalMode: next },
+                    `Terminal ${next === "auto" ? "automatic for this chat" : "will ask before commands"}`,
+                  );
+                }}
+              >
+                <FeatherIcon
+                  icon={terminalMode === "auto" ? "terminal" : "shield"}
+                  size="17"
+                />
+                <span>Terminal</span>
+              </button>
+              <button
+                className={computerAccess ? "enabled" : ""}
+                aria-pressed={computerAccess}
+                aria-label={`Computer Control: ${computerAccess ? "on" : "off"}`}
+                title={`Computer Control ${computerAccess ? "on" : "off"}: operate approved visible apps`}
+                data-tooltip={`Control ${computerAccess ? "on" : "off"}: use approved visible apps`}
+                onClick={() => {
+                  const next = !computerAccess;
+                  applyCapabilities(
+                    { ...capabilityRef.current, computerAccess: next },
+                    `Control ${next ? "allowed" : "off"}`,
+                  );
+                  if (!next) void window.oscode.stopAgentControl();
+                }}
+              >
+                <FeatherIcon icon="mouse-pointer" size="17" />
+                <span>Control</span>
+              </button>
+            </div>
+          )}
+        </section>
+      </div>
       <form className="ai-composer" onSubmit={send}>
         <input
           ref={attachmentInputRef}

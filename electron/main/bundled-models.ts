@@ -14,6 +14,13 @@ const tiers: Array<Exclude<AiModelTier, "custom">> = [
 ];
 const osCodeContextLimit = 262_144;
 
+export function defaultBuiltInContext(
+  _engine: "llamacpp" | "mlx",
+  maximum = osCodeContextLimit,
+) {
+  return maximum;
+}
+
 async function mlxContextLimit(directory: string) {
   try {
     const config = JSON.parse(
@@ -185,12 +192,15 @@ export async function bundledModels(modelsRoot: string): Promise<AiModel[]> {
       installed,
       supported,
       contextLimit: osCodeContextLimit,
+      preferredContext: defaultBuiltInContext(engine),
       supportReason: supported
         ? undefined
         : `Needs about ${Math.ceil(requiredMemory(tier, bytes) / 1024 ** 3)} GB memory`,
     });
-    if (installed && engine === "mlx")
+    if (installed && engine === "mlx") {
       results.at(-1)!.contextLimit = await mlxContextLimit(installedPath);
+      results.at(-1)!.preferredContext = results.at(-1)!.contextLimit;
+    }
   }
   return results;
 }

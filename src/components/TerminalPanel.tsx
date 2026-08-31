@@ -59,7 +59,6 @@ export function TerminalPanel({
     const fit = new FitAddon();
     t.loadAddon(fit);
     t.open(host.current);
-    fit.fit();
     terminal.current = t;
     const off = window.oscode.onTerminalData((termId, data) => {
       if (termId === id) t.write(data);
@@ -75,15 +74,37 @@ export function TerminalPanel({
     t.onResize(({ cols, rows }) =>
       window.oscode.terminalResize(id, cols, rows),
     );
-    const resize = () => {
-      if (!activeRef.current) return;
+    let fitFrame = 0;
+    let secondFitFrame = 0;
+    let disposed = false;
+    const fitTerminal = () => {
+      if (
+        disposed ||
+        !activeRef.current ||
+        !host.current ||
+        host.current.clientWidth < 2 ||
+        host.current.clientHeight < 2
+      )
+        return;
       fit.fit();
       window.oscode.terminalResize(id, t.cols, t.rows);
+    };
+    const resize = () => {
+      cancelAnimationFrame(fitFrame);
+      cancelAnimationFrame(secondFitFrame);
+      fitFrame = requestAnimationFrame(() => {
+        secondFitFrame = requestAnimationFrame(fitTerminal);
+      });
     };
     const observer = new ResizeObserver(resize);
     observer.observe(host.current);
     window.addEventListener("resize", resize);
+    resize();
+    void document.fonts?.ready.then(resize);
     return () => {
+      disposed = true;
+      cancelAnimationFrame(fitFrame);
+      cancelAnimationFrame(secondFitFrame);
       off();
       window.oscode.terminalDispose(id);
       observer.disconnect();
