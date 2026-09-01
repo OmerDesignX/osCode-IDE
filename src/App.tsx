@@ -1,5 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import { FeatherIcon } from "./components/FeatherIcon";
 import { IconButton } from "./components/IconButton";
 import { FileTree } from "./components/FileTree";
@@ -46,6 +49,28 @@ type FileComparison = {
   rightPath: string;
   rightName: string;
   rightContent: string;
+};
+type ProjectClipboardState = {
+  path: string;
+  mode: "copy" | "move";
+  name: string;
+  kind: TreeEntry["kind"];
+};
+type ProjectContextMenuState = {
+  x: number;
+  y: number;
+  source: "tree" | "tab" | "explorer";
+  entry?: TreeEntry;
+  tabPath?: string;
+};
+type ProjectContextAction = {
+  label: string;
+  icon: string;
+  shortcut?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  separatorBefore?: boolean;
+  run: () => unknown | Promise<unknown>;
 };
 
 function scrollHorizontalMenu(event: WheelEvent) {
@@ -465,6 +490,9 @@ export function App() {
     [pythonPackageLocation, setPythonPackageLocation] = useState<
       "" | "app" | "project"
     >(""),
+    [pythonPackageManager, setPythonPackageManager] = useState<
+      "" | "venv" | "conda"
+    >(""),
     [pythonPackageError, setPythonPackageError] = useState(""),
     [packageOperation, setPackageOperation] = useState(""),
     [running, setRunning] = useState(false),
@@ -481,6 +509,10 @@ export function App() {
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [lastProject, setLastProject] = useState("");
   const [selectedEntry, setSelectedEntry] = useState<TreeEntry | null>(null);
+  const [projectClipboard, setProjectClipboard] =
+    useState<ProjectClipboardState | null>(null);
+  const [projectContextMenu, setProjectContextMenu] =
+    useState<ProjectContextMenuState | null>(null);
   const [projectOperation, setProjectOperation] = useState<
     "file" | "folder" | "rename" | null
   >(null);
@@ -606,6 +638,11 @@ export function App() {
           "pipfile",
           "setup.py",
           ".python-version",
+          "poetry.lock",
+          "pipfile.lock",
+          "environment.yml",
+          "environment.yaml",
+          "conda-lock.yml",
         ].includes(entry.name.toLowerCase()),
     ),
   );
@@ -619,6 +656,23 @@ export function App() {
     return () =>
       document.removeEventListener("wheel", scrollHorizontalMenu, true);
   }, []);
+  useEffect(() => {
+    if (!projectContextMenu) return;
+    const close = () => setProjectContextMenu(null);
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    document.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      document.removeEventListener("keydown", key);
+    };
+  }, [projectContextMenu]);
   useEffect(() => {
     if (!pythonContext && terminalView !== "shell") setTerminalView("shell");
   }, [pythonContext, terminalView]);
@@ -898,6 +952,8 @@ export function App() {
     setBrowserSnapshot(null);
     setProject(nextProject);
     setSelectedEntry(null);
+    setProjectClipboard(null);
+    setProjectContextMenu(null);
     setProjectOperation(null);
     setTabs([]);
     setActivePath("");
@@ -909,6 +965,7 @@ export function App() {
     setUvHelpOpen(false);
     setPythonPackages([]);
     setPythonPackageEnvironment("");
+    setPythonPackageManager("");
     setPythonPackageError("");
     setPathInput(nextProject.root);
     setLastProject(nextProject.root);
@@ -1127,6 +1184,8 @@ export function App() {
     setLastProject("");
     setPathInput("");
     setSelectedEntry(null);
+    setProjectClipboard(null);
+    setProjectContextMenu(null);
     setProjectOperation(null);
     setTabs([]);
     setActivePath("");
@@ -1224,10 +1283,10 @@ export function App() {
       setNotice(errorMessage(e, "Project item could not change"));
     }
   };
-  const trashSelectedEntry = async () => {
-    if (!project || !selectedEntry) return;
+  const trashEntry = async (entry: TreeEntry) => {
+    if (!project) return;
     try {
-      const removedPath = selectedEntry.path;
+      const removedPath = entry.path;
       const hasUnsavedChanges = tabs.some(
         (tab) =>
           !tab.media &&
@@ -1258,6 +1317,9 @@ export function App() {
       setNotice(errorMessage(e, "Project item could not be removed"));
     }
   };
+  const trashSelectedEntry = async () => {
+    if (selectedEntry) await trashEntry(selectedEntry);
+  };
   const saveTab = async (
     tab: Tab,
     source: "manual" | "autosave" = "manual",
@@ -1286,6 +1348,301 @@ export function App() {
     }
   };
   const save = async () => (active ? saveTab(active) : false);
+  const saveAll = async () => {
+    const pending = tabsRef.current.filter(
+      (tab) => !tab.media && tab.content !== tab.saved,
+    );
+    if (!pending.length) {
+      setNotice("Every open file is already saved");
+      return true;
+    }
+    const results = [];
+    for (const tab of pending)
+      results.push(await saveTab(tab, "manual", false));
+    const complete = results.every(Boolean);
+    setNotice(
+      complete
+        ? `Saved ${pending.length} ${pending.length === 1 ? "file" : "files"}`
+        : "Some files could not be saved",
+    );
+    return complete;
+  };
+  const entryForTab = (tab: Tab): TreeEntry => ({
+    name: tab.name,
+    path: tab.path,
+    kind: "file",
+  });
+  const commandEntry = () =>
+    selectedEntry || (active ? entryForTab(active) : null);
+  const parentPath = (target: string) => {
+    const separator = Math.max(
+      target.lastIndexOf("/"),
+      target.lastIndexOf("\\"),
+    );
+    return separator > 0 ? target.slice(0, separator) : project?.root || "";
+  };
+  const showProjectContextMenu = (
+    source: ProjectContextMenuState["source"],
+    event: ReactMouseEvent,
+    entry?: TreeEntry,
+    tabPath?: string,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (entry) setSelectedEntry(entry);
+    if (tabPath) setActivePath(tabPath);
+    const menuWidth = 272;
+    const menuHeight = Math.min(560, window.innerHeight - 24);
+    setProjectContextMenu({
+      x: Math.max(
+        12,
+        Math.min(event.clientX, window.innerWidth - menuWidth - 12),
+      ),
+      y: Math.max(
+        12,
+        Math.min(event.clientY, window.innerHeight - menuHeight - 12),
+      ),
+      source,
+      entry,
+      tabPath,
+    });
+  };
+  const renameEntry = (entry: TreeEntry) => {
+    setSelectedEntry(entry);
+    setProjectOperation("rename");
+    setProjectItemName(entry.name);
+  };
+  const closeTabSet = async (paths: string[], description: string) => {
+    const targets = new Set(paths);
+    if (!targets.size) return true;
+    const current = tabsRef.current;
+    const unsaved = current.filter(
+      (tab) => targets.has(tab.path) && !tab.media && tab.content !== tab.saved,
+    );
+    if (
+      unsaved.length &&
+      !(await window.oscode.confirmDiscardChanges(
+        `${description} will discard changes in ${unsaved.length} unsaved ${unsaved.length === 1 ? "file" : "files"}.`,
+      ))
+    )
+      return false;
+    const remaining = current.filter((tab) => !targets.has(tab.path));
+    const activeIndex = current.findIndex((tab) => tab.path === activePath);
+    setTabs(remaining);
+    if (targets.has(activePath))
+      setActivePath(
+        remaining[Math.min(Math.max(0, activeIndex), remaining.length - 1)]
+          ?.path || "",
+      );
+    return true;
+  };
+  const saveEntryAs = async (entry: TreeEntry) => {
+    if (!project || entry.kind !== "file") return;
+    try {
+      const open = tabsRef.current.find((tab) => tab.path === entry.path);
+      let content: string | undefined;
+      if (open) content = open.media ? undefined : open.content;
+      else
+        content = await window.oscode
+          .readFile(entry.path)
+          .catch(() => undefined);
+      const result = await window.oscode.saveFileAs(entry.path, content);
+      if (!result) return;
+      setProject({ ...project, tree: result.tree });
+      setTabs((current) => {
+        if (open)
+          return current
+            .filter(
+              (tab) => tab.path !== result.newPath || tab.path === entry.path,
+            )
+            .map((tab) =>
+              tab.path === entry.path
+                ? {
+                    ...tab,
+                    path: result.newPath,
+                    name: result.name,
+                    ...(content === undefined
+                      ? {}
+                      : { content, saved: content }),
+                  }
+                : tab,
+            );
+        if (current.some((tab) => tab.path === result.newPath))
+          return current.map((tab) =>
+            tab.path === result.newPath
+              ? {
+                  ...tab,
+                  name: result.name,
+                  ...(content === undefined ? {} : { content, saved: content }),
+                }
+              : tab,
+          );
+        if (content === undefined) return current;
+        return [
+          ...current,
+          {
+            path: result.newPath,
+            name: result.name,
+            content,
+            saved: content,
+          },
+        ];
+      });
+      setActivePath(result.newPath);
+      setSelectedEntry({
+        name: result.name,
+        path: result.newPath,
+        kind: "file",
+      });
+      if (!open && content === undefined)
+        await openFile({
+          name: result.name,
+          path: result.newPath,
+          kind: "file",
+        });
+      setNotice(`Saved as ${result.name}`);
+    } catch (error) {
+      setNotice(errorMessage(error, "File could not be saved as a new file"));
+    }
+  };
+  const revertEntry = async (entry: TreeEntry) => {
+    const tab = tabsRef.current.find((item) => item.path === entry.path);
+    if (!tab || tab.media) return;
+    if (
+      tab.content !== tab.saved &&
+      !(await window.oscode.confirmDiscardChanges(
+        `Reverting “${tab.name}” will discard its unsaved editor changes.`,
+      ))
+    )
+      return;
+    try {
+      const content = await window.oscode.readFile(tab.path);
+      setTabs((current) =>
+        current.map((item) =>
+          item.path === tab.path ? { ...item, content, saved: content } : item,
+        ),
+      );
+      externalConflictPaths.current.delete(tab.path);
+      setNotice(`${tab.name} reverted from disk`);
+    } catch (error) {
+      setNotice(errorMessage(error, "File could not be reverted"));
+    }
+  };
+  const duplicateEntry = async (entry: TreeEntry) => {
+    if (!project) return;
+    try {
+      const open = tabsRef.current.find((tab) => tab.path === entry.path);
+      const result = await window.oscode.duplicateProjectItem(
+        entry.path,
+        open && !open.media ? open.content : undefined,
+      );
+      setProject({ ...project, tree: result.tree });
+      setSelectedEntry(result.item);
+      if (result.item.kind === "file") await openFile(result.item);
+      setNotice(`Duplicated as ${result.name}`);
+    } catch (error) {
+      setNotice(errorMessage(error, "Project item could not be duplicated"));
+    }
+  };
+  const transferEntry = async (
+    entry: TreeEntry,
+    mode: "copy" | "move",
+    destination?: string,
+  ) => {
+    if (!project) return;
+    try {
+      const targetDirectory =
+        destination || (await window.oscode.chooseProjectDirectory(entry.path));
+      if (!targetDirectory) return;
+      if (mode === "move" && parentPath(entry.path) === targetDirectory) {
+        setNotice(`${entry.name} is already in that folder`);
+        return;
+      }
+      const result = await window.oscode.transferProjectItem(
+        entry.path,
+        targetDirectory,
+        mode,
+      );
+      setProject({ ...project, tree: result.tree });
+      setSelectedEntry(result.item);
+      if (mode === "move") {
+        const updatePath = (candidate: string) =>
+          entryContains(entry.path, candidate)
+            ? result.newPath + candidate.slice(entry.path.length)
+            : candidate;
+        setTabs((current) =>
+          current.map((tab) => ({
+            ...tab,
+            path: updatePath(tab.path),
+            name: tab.path === entry.path ? result.name : tab.name,
+          })),
+        );
+        setActivePath((current) => updatePath(current));
+      } else if (result.item.kind === "file") await openFile(result.item);
+      setNotice(`${mode === "move" ? "Moved" : "Copied"} ${entry.name}`);
+      const state = await window.oscode.gitState();
+      setGit(state);
+      setRemote(state.remote);
+    } catch (error) {
+      setNotice(
+        errorMessage(
+          error,
+          `Project item could not be ${mode === "move" ? "moved" : "copied"}`,
+        ),
+      );
+    }
+  };
+  const rememberProjectClipboard = (
+    entry: TreeEntry,
+    mode: ProjectClipboardState["mode"],
+  ) => {
+    setProjectClipboard({
+      path: entry.path,
+      mode,
+      name: entry.name,
+      kind: entry.kind,
+    });
+    setNotice(`${mode === "move" ? "Cut" : "Copied"} ${entry.name}`);
+  };
+  const pasteProjectClipboard = async (entry?: TreeEntry) => {
+    if (!projectClipboard || !project) return;
+    const destination =
+      entry?.kind === "directory"
+        ? entry.path
+        : entry
+          ? parentPath(entry.path)
+          : project.root;
+    const sourceEntry: TreeEntry = {
+      name: projectClipboard.name,
+      path: projectClipboard.path,
+      kind: projectClipboard.kind,
+    };
+    await transferEntry(sourceEntry, projectClipboard.mode, destination);
+    if (projectClipboard.mode === "move") setProjectClipboard(null);
+  };
+  const copyEntryPath = async (entry: TreeEntry, relative: boolean) => {
+    try {
+      await window.oscode.copyProjectPath(entry.path, relative);
+      setNotice(relative ? "Relative path copied" : "Full path copied");
+    } catch (error) {
+      setNotice(errorMessage(error, "Path could not be copied"));
+    }
+  };
+  const revealEntry = async (entry: TreeEntry) => {
+    try {
+      await window.oscode.revealProjectItem(entry.path);
+    } catch (error) {
+      setNotice(errorMessage(error, "Project item could not be revealed"));
+    }
+  };
+  const openEntryToSide = async (entry: TreeEntry) => {
+    if (entry.kind !== "file") return;
+    const previous = active?.media ? "" : active?.path || "";
+    await openFile(entry);
+    setSplitLeftPath(previous || entry.path);
+    setSplitRightPath(entry.path);
+    setEditorView("split");
+  };
   const refreshMcpServers = async () => {
     try {
       setMcpServers(await window.oscode.listMcpServers());
@@ -1620,11 +1977,15 @@ export function App() {
       window.oscode.getProjectPython(),
     ]);
     setRuntimes(found);
-    const preferred =
-      found.find((x) => x.path === saved) ||
-      (preferProject
-        ? found.find((x) => x.version.startsWith("Project"))
-        : undefined);
+    const detectedProject = found.find((item) => item.scope === "project");
+    const savedRuntime = found.find((item) => item.path === saved);
+    const preferred = preferProject
+      ? detectedProject || savedRuntime
+      : savedRuntime;
+    if (preferProject && detectedProject && detectedProject.path !== saved) {
+      await window.oscode.setProjectPython(detectedProject.path);
+      setNotice(`Detected and selected ${runtimeLabel(detectedProject)}`);
+    }
     setRuntime(
       (current) =>
         preferred?.path ||
@@ -1634,6 +1995,7 @@ export function App() {
             found.find((x) => x.installed)?.path ||
             ""),
     );
+    return preferred;
   };
   useEffect(() => {
     let cancelled = false;
@@ -1841,6 +2203,7 @@ export function App() {
       setPythonPackages([]);
       setPythonPackageEnvironment("");
       setPythonPackageLocation("");
+      setPythonPackageManager("");
       setPythonPackageError(
         project
           ? "No Python interpreter is selected. Choose an installed or bundled Python runtime first."
@@ -1853,12 +2216,14 @@ export function App() {
       setPythonPackages(state.packages);
       setPythonPackageEnvironment(state.environment);
       setPythonPackageLocation(state.location);
+      setPythonPackageManager(state.manager || "");
       setPythonPackageError(state.error || "");
       await useDetectedProjectEnvironment(state.interpreter);
     } catch (e) {
       setPythonPackages([]);
       setPythonPackageEnvironment("");
       setPythonPackageLocation("");
+      setPythonPackageManager("");
       const message = errorMessage(
         e,
         "Installed Python packages could not load",
@@ -1928,6 +2293,7 @@ export function App() {
     setPythonPackages([]);
     setPythonPackageEnvironment("");
     setPythonPackageLocation("");
+    setPythonPackageManager("");
     setPythonPackageError("");
     if (!project) return;
     try {
@@ -1945,6 +2311,271 @@ export function App() {
       setSettingsOpen(false);
     } else void selectRuntime(value);
   };
+  const createInDirectory = (
+    operation: "file" | "folder",
+    directory?: TreeEntry,
+  ) => {
+    setSelectedEntry(directory?.kind === "directory" ? directory : null);
+    setProjectOperation(operation);
+    setProjectItemName("");
+  };
+  const runEditorAction = (id: string) => {
+    if (!active || active.media) {
+      setNotice("Open an editable text file first");
+      return;
+    }
+    void editorRef.current?.getAction(id)?.run();
+    editorRef.current?.focus();
+  };
+  const cycleEditor = (direction: -1 | 1) => {
+    const current = tabsRef.current;
+    if (!current.length) return;
+    const index = Math.max(
+      0,
+      current.findIndex((tab) => tab.path === activePath),
+    );
+    const next = (index + direction + current.length) % current.length;
+    setActivePath(current[next].path);
+  };
+  const contextTab = projectContextMenu?.tabPath
+    ? tabs.find((tab) => tab.path === projectContextMenu.tabPath)
+    : undefined;
+  const contextEntry =
+    projectContextMenu?.entry || (contextTab ? entryForTab(contextTab) : null);
+  const contextTabIndex = contextTab
+    ? tabs.findIndex((tab) => tab.path === contextTab.path)
+    : -1;
+  const projectContextActions: ProjectContextAction[] = (() => {
+    if (!projectContextMenu || !project) return [];
+    if (projectContextMenu.source === "explorer") {
+      const rootEntry: TreeEntry = {
+        name: project.name,
+        path: project.root,
+        kind: "directory",
+      };
+      return [
+        {
+          label: "New File",
+          icon: "file-plus",
+          shortcut: `${shortcutModifier}+N`,
+          run: () => createInDirectory("file"),
+        },
+        {
+          label: "New Folder",
+          icon: "folder-plus",
+          shortcut: `${shortcutModifier}+Shift+N`,
+          run: () => createInDirectory("folder"),
+        },
+        {
+          label: projectClipboard ? `Paste ${projectClipboard.name}` : "Paste",
+          icon: "clipboard",
+          shortcut: `${shortcutModifier}+V`,
+          disabled: !projectClipboard,
+          run: () => pasteProjectClipboard(),
+        },
+        {
+          label: "Search Project",
+          icon: "search",
+          shortcut: `${shortcutModifier}+Shift+F`,
+          separatorBefore: true,
+          run: () => {
+            setSidebarVisible(true);
+            setProjectSearchOpen(true);
+          },
+        },
+        {
+          label: "Refresh Explorer",
+          icon: "refresh-cw",
+          run: refreshProjectItems,
+        },
+        {
+          label: "Reveal Project Folder",
+          icon: "external-link",
+          separatorBefore: true,
+          run: () => revealEntry(rootEntry),
+        },
+      ];
+    }
+    if (!contextEntry) return [];
+    const open = tabs.find((tab) => tab.path === contextEntry.path);
+    const folder = contextEntry.kind === "directory";
+    const actions: ProjectContextAction[] = folder
+      ? [
+          {
+            label: "New File Here",
+            icon: "file-plus",
+            run: () => createInDirectory("file", contextEntry),
+          },
+          {
+            label: "New Folder Here",
+            icon: "folder-plus",
+            run: () => createInDirectory("folder", contextEntry),
+          },
+          {
+            label: projectClipboard
+              ? `Paste ${projectClipboard.name}`
+              : "Paste Here",
+            icon: "clipboard",
+            shortcut: `${shortcutModifier}+V`,
+            disabled: !projectClipboard,
+            run: () => pasteProjectClipboard(contextEntry),
+          },
+        ]
+      : [
+          {
+            label: "Open",
+            icon: "file-text",
+            run: () => openFile(contextEntry),
+          },
+          {
+            label: "Open to the Side",
+            icon: "columns",
+            run: () => openEntryToSide(contextEntry),
+          },
+          {
+            label: "Save",
+            icon: "save",
+            shortcut: `${shortcutModifier}+S`,
+            disabled:
+              !open || Boolean(open.media) || open.content === open.saved,
+            run: () => (open ? saveTab(open) : undefined),
+          },
+          {
+            label: "Save As…",
+            icon: "save",
+            shortcut: `${shortcutModifier}+Shift+S`,
+            run: () => saveEntryAs(contextEntry),
+          },
+          {
+            label: "Revert from Disk",
+            icon: "rotate-ccw",
+            disabled: !open || Boolean(open.media),
+            run: () => revertEntry(contextEntry),
+          },
+        ];
+    actions.push(
+      {
+        label: "Cut",
+        icon: "scissors",
+        shortcut: `${shortcutModifier}+X`,
+        separatorBefore: true,
+        run: () => rememberProjectClipboard(contextEntry, "move"),
+      },
+      {
+        label: "Copy",
+        icon: "copy",
+        shortcut: `${shortcutModifier}+C`,
+        run: () => rememberProjectClipboard(contextEntry, "copy"),
+      },
+      {
+        label: "Duplicate",
+        icon: "copy",
+        run: () => duplicateEntry(contextEntry),
+      },
+      {
+        label: "Copy To…",
+        icon: "folder-plus",
+        run: () => transferEntry(contextEntry, "copy"),
+      },
+      {
+        label: "Move To…",
+        icon: "folder",
+        run: () => transferEntry(contextEntry, "move"),
+      },
+      {
+        label: "Rename",
+        icon: "edit-2",
+        shortcut: "F2",
+        run: () => renameEntry(contextEntry),
+      },
+      {
+        label: "Copy Relative Path",
+        icon: "link",
+        separatorBefore: true,
+        run: () => copyEntryPath(contextEntry, true),
+      },
+      {
+        label: "Copy Full Path",
+        icon: "clipboard",
+        run: () => copyEntryPath(contextEntry, false),
+      },
+      {
+        label: "Reveal in File Manager",
+        icon: "external-link",
+        run: () => revealEntry(contextEntry),
+      },
+    );
+    if (projectContextMenu.source === "tab" && contextTab) {
+      actions.push(
+        {
+          label: "Split Editor",
+          icon: "columns",
+          separatorBefore: true,
+          disabled: Boolean(contextTab.media),
+          run: () => {
+            setActivePath(contextTab.path);
+            toggleSplitView();
+          },
+        },
+        {
+          label: "Compare with…",
+          icon: "git-merge",
+          disabled: Boolean(contextTab.media),
+          run: () => {
+            setActivePath(contextTab.path);
+            setCompareLeftPath(contextTab.path);
+            setCompareRightPath("");
+            setCompareOpen(true);
+          },
+        },
+        {
+          label: "Close Editor",
+          icon: "x",
+          shortcut: `${shortcutModifier}+W`,
+          separatorBefore: true,
+          run: () => closeTab(contextTab.path),
+        },
+        {
+          label: "Close Other Editors",
+          icon: "x-circle",
+          run: () =>
+            closeTabSet(
+              tabs
+                .filter((tab) => tab.path !== contextTab.path)
+                .map((tab) => tab.path),
+              "Closing the other editors",
+            ),
+        },
+        {
+          label: "Close Editors to the Right",
+          icon: "chevrons-right",
+          disabled: contextTabIndex < 0 || contextTabIndex === tabs.length - 1,
+          run: () =>
+            closeTabSet(
+              tabs.slice(contextTabIndex + 1).map((tab) => tab.path),
+              "Closing editors to the right",
+            ),
+        },
+        {
+          label: "Close All Editors",
+          icon: "x-square",
+          run: () =>
+            closeTabSet(
+              tabs.map((tab) => tab.path),
+              "Closing all editors",
+            ),
+        },
+      );
+    }
+    actions.push({
+      label: "Move to Trash",
+      icon: "trash-2",
+      danger: true,
+      separatorBefore: true,
+      run: () => trashEntry(contextEntry),
+    });
+    return actions;
+  })();
   menuActions.current = {
     "open-project": () => void openProject(),
     "new-file": () => {
@@ -1955,6 +2586,90 @@ export function App() {
       if (active) void save();
       else setNotice("Open a file before saving");
     },
+    "save-as": () => {
+      const entry = active ? entryForTab(active) : null;
+      if (entry) void saveEntryAs(entry);
+      else setNotice("Open a file before using Save As");
+    },
+    "save-all": () => void saveAll(),
+    "revert-file": () => {
+      const entry = active ? entryForTab(active) : null;
+      if (entry) void revertEntry(entry);
+      else setNotice("Open a file before reverting it");
+    },
+    "close-editor": () => {
+      if (active) void closeTab(active.path);
+    },
+    "close-all-editors": () =>
+      void closeTabSet(
+        tabs.map((tab) => tab.path),
+        "Closing all editors",
+      ),
+    "new-folder": () => {
+      if (project) createInDirectory("folder");
+      else setNotice("Open a project before creating a folder");
+    },
+    "rename-selected": () => {
+      const entry = commandEntry();
+      if (entry) renameEntry(entry);
+      else setNotice("Select a project item before renaming it");
+    },
+    "duplicate-selected": () => {
+      const entry = commandEntry();
+      if (entry) void duplicateEntry(entry);
+      else setNotice("Select a project item before duplicating it");
+    },
+    "copy-selected": () => {
+      const entry = commandEntry();
+      if (entry) void transferEntry(entry, "copy");
+      else setNotice("Select a project item before copying it");
+    },
+    "move-selected": () => {
+      const entry = commandEntry();
+      if (entry) void transferEntry(entry, "move");
+      else setNotice("Select a project item before moving it");
+    },
+    "trash-selected": () => {
+      const entry = commandEntry();
+      if (entry) void trashEntry(entry);
+      else setNotice("Select a project item before moving it to Trash");
+    },
+    "reveal-selected": () => {
+      const entry = commandEntry();
+      if (entry) void revealEntry(entry);
+      else setNotice("Select a project item to reveal it");
+    },
+    "copy-path": () => {
+      const entry = commandEntry();
+      if (entry) void copyEntryPath(entry, false);
+      else setNotice("Select a project item to copy its path");
+    },
+    "copy-relative-path": () => {
+      const entry = commandEntry();
+      if (entry) void copyEntryPath(entry, true);
+      else setNotice("Select a project item to copy its relative path");
+    },
+    find: () => runEditorAction("actions.find"),
+    replace: () => runEditorAction("editor.action.startFindReplaceAction"),
+    "find-in-files": () => {
+      setSidebarVisible(true);
+      setProjectSearchOpen(true);
+    },
+    "format-document": () => runEditorAction("editor.action.formatDocument"),
+    "toggle-line-comment": () => runEditorAction("editor.action.commentLine"),
+    "duplicate-line": () =>
+      runEditorAction("editor.action.copyLinesDownAction"),
+    "delete-line": () => runEditorAction("editor.action.deleteLines"),
+    "move-line-up": () => runEditorAction("editor.action.moveLinesUpAction"),
+    "move-line-down": () =>
+      runEditorAction("editor.action.moveLinesDownAction"),
+    "go-to-line": () => runEditorAction("editor.action.gotoLine"),
+    "next-editor": () => cycleEditor(1),
+    "previous-editor": () => cycleEditor(-1),
+    "toggle-sidebar": () => setSidebarVisible((current) => !current),
+    "toggle-ai": () => setAiVisible((current) => !current),
+    "split-editor": toggleSplitView,
+    "compare-file": openCompare,
     "toggle-terminal": () => setTerminalOpen((current) => !current),
     "toggle-theme": () =>
       setTheme((current) =>
@@ -1965,12 +2680,17 @@ export function App() {
             : "dark",
       ),
     "toggle-advanced": () => setAdvanced((current) => !current),
+    "open-settings": () => {
+      setAdvanced(false);
+      setSettingsOpen(true);
+    },
   };
   const runtimeLabel = (item: PythonRuntime) => {
     if (item.scope === "app-project" || item.scope === "project")
       return item.version;
     if (item.version.startsWith("Local "))
       return `Python ${item.version.slice("Local ".length)} · added`;
+    if (item.version.startsWith("Conda ")) return item.version;
     const location =
       item.scope === "app"
         ? " · app runtime"
@@ -2762,6 +3482,59 @@ export function App() {
           )}
         </div>
       )}
+      {projectContextMenu && (
+        <div
+          className="project-context-menu"
+          role="menu"
+          aria-label="File actions"
+          style={{
+            left: projectContextMenu.x,
+            top: projectContextMenu.y,
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            event.preventDefault();
+            const buttons = [
+              ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                "button:not(:disabled)",
+              ),
+            ];
+            if (!buttons.length) return;
+            const index = buttons.indexOf(
+              document.activeElement as HTMLButtonElement,
+            );
+            const direction = event.key === "ArrowDown" ? 1 : -1;
+            buttons[
+              (index + direction + buttons.length) % buttons.length
+            ].focus();
+          }}
+        >
+          {projectContextActions.map((action, index) => (
+            <div
+              className={action.separatorBefore ? "menu-separated" : ""}
+              key={`${action.label}:${index}`}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                autoFocus={index === 0}
+                className={action.danger ? "danger-text" : ""}
+                disabled={action.disabled}
+                onClick={() => {
+                  setProjectContextMenu(null);
+                  void action.run();
+                }}
+              >
+                <FeatherIcon icon={action.icon} size="15" />
+                <span>{action.label}</span>
+                {action.shortcut && <kbd>{action.shortcut}</kbd>}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {selectedCommit && (
         <div
           className="modal-scrim"
@@ -3000,6 +3773,26 @@ export function App() {
                         onClick={() => beginProjectOperation("rename")}
                       />
                       <IconButton
+                        icon="copy"
+                        label="Duplicate selected"
+                        disabled={!selectedEntry}
+                        onClick={() =>
+                          selectedEntry && void duplicateEntry(selectedEntry)
+                        }
+                      />
+                      <IconButton
+                        icon="clipboard"
+                        label={
+                          projectClipboard
+                            ? `Paste ${projectClipboard.name}`
+                            : "Paste project item"
+                        }
+                        disabled={!projectClipboard}
+                        onClick={() =>
+                          void pasteProjectClipboard(selectedEntry || undefined)
+                        }
+                      />
+                      <IconButton
                         icon="trash-2"
                         label="Move selected to Trash"
                         disabled={!selectedEntry}
@@ -3144,7 +3937,53 @@ export function App() {
                   </>
                 )}
                 {project ? (
-                  <div className="tree">
+                  <div
+                    className="tree"
+                    tabIndex={0}
+                    aria-label="Project files"
+                    onContextMenu={(event) => {
+                      if (event.target === event.currentTarget)
+                        showProjectContextMenu("explorer", event);
+                    }}
+                    onKeyDown={(event) => {
+                      const entry = selectedEntry;
+                      const modifier = event.metaKey || event.ctrlKey;
+                      if (entry && event.key === "F2") {
+                        event.preventDefault();
+                        renameEntry(entry);
+                      } else if (
+                        entry &&
+                        (event.key === "Delete" ||
+                          (event.metaKey && event.key === "Backspace"))
+                      ) {
+                        event.preventDefault();
+                        void trashEntry(entry);
+                      } else if (
+                        entry &&
+                        modifier &&
+                        event.key.toLowerCase() === "c"
+                      ) {
+                        event.preventDefault();
+                        rememberProjectClipboard(entry, "copy");
+                      } else if (
+                        entry &&
+                        modifier &&
+                        event.key.toLowerCase() === "x"
+                      ) {
+                        event.preventDefault();
+                        rememberProjectClipboard(entry, "move");
+                      } else if (modifier && event.key.toLowerCase() === "v") {
+                        event.preventDefault();
+                        void pasteProjectClipboard(entry || undefined);
+                      } else if (
+                        entry?.kind === "file" &&
+                        event.key === "Enter"
+                      ) {
+                        event.preventDefault();
+                        void openFile(entry);
+                      }
+                    }}
+                  >
                     <FileTree
                       entries={project.tree}
                       onOpen={openFile}
@@ -3155,6 +3994,9 @@ export function App() {
                         )
                       }
                       onSelect={setSelectedEntry}
+                      onContextMenu={(entry, event) =>
+                        showProjectContextMenu("tree", event, entry)
+                      }
                       selectedPath={selectedEntry?.path || ""}
                     />
                   </div>
@@ -3849,6 +4691,9 @@ export function App() {
               <div
                 className={`tab ${t.path === activePath ? "active" : ""}`}
                 key={t.path}
+                onContextMenu={(event) =>
+                  showProjectContextMenu("tab", event, entryForTab(t), t.path)
+                }
               >
                 <button
                   type="button"
@@ -3956,6 +4801,12 @@ export function App() {
                   onClick={() => void save()}
                 >
                   <FeatherIcon icon="save" size="15" /> Save
+                </button>
+                <button onClick={() => void saveEntryAs(entryForTab(active))}>
+                  <FeatherIcon icon="copy" size="15" /> Save As
+                </button>
+                <button disabled={!hasDirtyTabs} onClick={() => void saveAll()}>
+                  <FeatherIcon icon="layers" size="15" /> Save All
                 </button>
                 <button onClick={() => void openSaveHistory()}>
                   <FeatherIcon icon="clock" size="15" /> Save history
@@ -4763,9 +5614,10 @@ export function App() {
               {advancedSection === "runtimes" && (
                 <div className="advanced-content advanced-runtime-content">
                   <p>
-                    Choose an app or system Python runtime. osCode keeps its
-                    default environment in application data, outside the
-                    project.
+                    Existing venv, virtualenv, Poetry, tox, and Conda
+                    environments inside the project are detected and selected
+                    automatically. Run, Debug, Terminal, packages, and the agent
+                    share the selected interpreter.
                   </p>
                   <div className="advanced-action-grid">
                     <button
@@ -4782,6 +5634,22 @@ export function App() {
                     >
                       <FeatherIcon icon="folder-plus" size="16" />
                       Create project .venv
+                    </button>
+                    <button
+                      className="secondary-action"
+                      disabled={!project}
+                      onClick={() => {
+                        void refreshRuntimes(true).then((selected) =>
+                          setNotice(
+                            selected?.scope === "project"
+                              ? `Using ${runtimeLabel(selected)}`
+                              : "No project environment found; the bundled Python runtime is ready",
+                          ),
+                        );
+                      }}
+                    >
+                      <FeatherIcon icon="refresh-cw" size="16" />
+                      Rescan project
                     </button>
                   </div>
                   {project && (
@@ -4821,6 +5689,10 @@ export function App() {
                       <p>
                         The selected environment is shared by Run, Debug, and
                         Terminal. Named environments are created in the project.
+                        PyPI packages use osCode's bundled uv installer, so pip
+                        does not need to be installed globally. Existing Conda
+                        environments remain supported when their interpreter is
+                        selected.
                       </p>
                     </section>
                   )}
@@ -5212,7 +6084,11 @@ export function App() {
                         <b>Project libraries</b>
                         <small>
                           {pythonPackageLocation === "project"
-                            ? "Project .venv · inside project"
+                            ? `Project ${
+                                pythonPackageManager === "conda"
+                                  ? "Conda"
+                                  : "Python"
+                              } environment · inside project`
                             : "App environment · outside project"}{" "}
                           · {pythonPackages.length} installed
                         </small>
@@ -5257,7 +6133,11 @@ export function App() {
                         <small>
                           {activeRuntimeLabel}
                           {pythonPackageLocation === "project"
-                            ? " · Packages are stored in this project's .venv folder."
+                            ? ` · PyPI packages are installed into this project's ${
+                                pythonPackageManager === "conda"
+                                  ? "Conda environment"
+                                  : "Python environment"
+                              }.`
                             : " · Packages stay outside the project folder."}
                         </small>
                       </span>
@@ -5348,9 +6228,10 @@ export function App() {
                     </div>
                     {!pythonPackageEnvironment && !packageOperation && (
                       <p className="python-package-hint">
-                        Add creates an app-managed environment for this project.
-                        It lives in osCode application data, not in your project
-                        directory.
+                        Add uses the selected project environment when one is
+                        present. Otherwise it creates an app-managed environment
+                        in osCode application data. The bundled uv installer is
+                        pip-compatible across macOS, Windows, and Linux.
                       </p>
                     )}
                     <div
@@ -5384,8 +6265,8 @@ export function App() {
                       {!packageOperation && !pythonPackages.length && (
                         <p>
                           No libraries installed yet. Add a package here, or
-                          create a project .venv if you want the environment in
-                          the project folder.
+                          create or open a project venv/Conda environment if you
+                          want dependencies stored with the project.
                         </p>
                       )}
                       {!packageOperation &&
@@ -5436,10 +6317,11 @@ export function App() {
             </div>
           )}
         </main>
-        {aiVisible && preferencesReady && (
+        {preferencesReady && (
           <>
             <div
               className="ai-resizer"
+              hidden={!aiVisible}
               role="separator"
               aria-label="Resize AI chat"
               aria-orientation="vertical"
@@ -5461,6 +6343,8 @@ export function App() {
               width={aiPanelWidth}
               side={aiPanelSide}
               projectName={project?.name || ""}
+              activeFile={active && !active.media ? active.path : ""}
+              visible={aiVisible}
               openChatId={requestedAiChat}
               onEngine={(next) => {
                 setAiEngine(next);

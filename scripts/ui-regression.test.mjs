@@ -38,8 +38,20 @@ const main = await fs.readFile(
   new URL("../electron/main/index.ts", import.meta.url),
   "utf8",
 );
+const projectFileOperations = await fs.readFile(
+  new URL("../electron/main/project-files.ts", import.meta.url),
+  "utf8",
+);
+const projectPythonDiscovery = await fs.readFile(
+  new URL("../electron/main/python-project-environments.ts", import.meta.url),
+  "utf8",
+);
 const aiMain = await fs.readFile(
   new URL("../electron/main/ai.ts", import.meta.url),
+  "utf8",
+);
+const preload = await fs.readFile(
+  new URL("../electron/preload/index.cts", import.meta.url),
   "utf8",
 );
 const splitEditor = await fs.readFile(
@@ -67,6 +79,44 @@ test("release cleanup safely unlocks generated package directories", () => {
   assert.match(
     releaseCleanup,
     /await fs\.rm\(target, \{ recursive: true, force: true \}\)/,
+  );
+});
+
+test("AI work survives chat hiding, window hiding, and renderer reattachment", () => {
+  assert.doesNotMatch(
+    main,
+    /window\.on\("closed"[\s\S]{0,900}aiService\.stop\(\)/,
+  );
+  assert.match(
+    main,
+    /process\.platform === "darwin"[\s\S]*?event\.preventDefault\(\);[\s\S]*?window\.hide\(\)/,
+  );
+  assert.match(main, /async function persistAiResponse/);
+  assert.match(main, /broadcastToAiProject\([\s\S]*?"ai:chat-complete"/);
+  assert.match(main, /ipcMain\.handle\("ai:pipeline-current"/);
+  assert.match(preload, /aiPipelineState: \(\) => ipcRenderer\.invoke/);
+  assert.match(preload, /onAiChatComplete:/);
+  assert.match(ai, /window\.oscode[\s\S]{0,60}\.aiPipelineState\(\)/);
+  assert.match(ai, /window\.oscode\.onAiChatComplete/);
+  assert.match(ai, /pipelineState\.activeChatId === chatId/);
+  assert.match(app, /\{preferencesReady && \(/);
+  assert.match(app, /hidden=\{!aiVisible\}/);
+  assert.match(app, /visible=\{aiVisible\}/);
+  assert.match(ai, /hidden=\{!visible\}/);
+});
+
+test("osCode anchors project work to the active editor file without trapping traversal", () => {
+  assert.match(
+    app,
+    /activeFile=\{active && !active\.media \? active\.path : ""\}/,
+  );
+  assert.match(ai, /const executionChatId = chatIdRef\.current/);
+  assert.match(ai, /activeFile: activeFile \|\| ""/);
+  assert.match(aiMain, /ACTIVE EDITOR CONTEXT:/);
+  assert.match(aiMain, /inspect this exact file first/);
+  assert.match(
+    aiMain,
+    /Use the broader project tree only when the active file is insufficient/,
   );
 });
 
@@ -134,6 +184,51 @@ test("file and browser tabs use dedicated accessible close buttons", () => {
   assert.match(main, /fileTabCloseHitReady = clickIconCenter/);
   assert.match(main, /result\.fileTabCloseReady !== true/);
   assert.match(main, /result\.fileTabPillHighlightReady !== true/);
+});
+
+test("explorer and document tabs expose complete functional file commands", () => {
+  for (const channel of [
+    "project:duplicate-item",
+    "project:choose-directory",
+    "project:transfer-item",
+    "project:copy-path",
+    "project:reveal-item",
+    "file:save-as",
+  ]) {
+    assert.match(
+      main,
+      new RegExp(channel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+  }
+  assert.match(projectFileOperations, /assertInside\(root, target\)/);
+  assert.match(projectFileOperations, /fs\.cp\(source, destination/);
+  assert.match(
+    projectFileOperations,
+    /await fs\.rename\(source, destination\)/,
+  );
+  assert.match(
+    projectFileOperations,
+    /A folder cannot be placed inside itself/,
+  );
+  assert.match(preload, /duplicateProjectItem:/);
+  assert.match(preload, /transferProjectItem:/);
+  assert.match(preload, /saveFileAs:/);
+  assert.match(app, /className="project-context-menu"/);
+  assert.match(app, /showProjectContextMenu\("tree"/);
+  assert.match(app, /showProjectContextMenu\([\s\S]*?"tab"/);
+  assert.match(app, /Close Editors to the Right/);
+  assert.match(app, /Save As…/);
+  assert.match(app, /Copy Relative Path/);
+  assert.match(main, /label: "Selection"/);
+  assert.match(main, /label: "Go"/);
+  assert.match(
+    styles,
+    /\.project-context-menu\s*\{[\s\S]*padding: 8px;[\s\S]*border-radius: 18px;/,
+  );
+  assert.match(
+    styles,
+    /\.project-context-menu button[\s\S]*min-height: 38px;[\s\S]*padding: 0 12px;/,
+  );
 });
 
 test("interactive chrome uses scoped pill and circular control geometry", () => {
@@ -377,7 +472,8 @@ test("AI defaults to Small, bundled context maximum, and custom 8k", () => {
   assert.match(ai, /function preferredTier[\s\S]*return "small"/);
   assert.match(ai, /osCodeGgufTier\(model\)[\s\S]*262_144/);
   assert.match(ai, /model\.preferredContext \|\| 8_192/);
-  assert.match(app, /aiVisible && preferencesReady/);
+  assert.match(app, /\{preferencesReady && \(/);
+  assert.match(app, /hidden=\{!aiVisible\}/);
   assert.match(app, /\[aiPanelWidth, setAiPanelWidth\] = useState\(560\)/);
   assert.match(
     app,
@@ -497,8 +593,12 @@ test("app-managed and optional project Python environments are package-ready", (
     main,
     /\["venv", "--python", base\.path, "--seed", destination\]/,
   );
-  assert.match(main, /terminalEnv\.VIRTUAL_ENV = parent/);
-  assert.match(main, /terminalEnv\.UV_PROJECT_ENVIRONMENT = parent/);
+  assert.match(main, /pythonEnvironmentForInterpreter\(inspected\.path\)/);
+  assert.match(
+    main,
+    /terminalEnv\.UV_PROJECT_ENVIRONMENT = detected\.environment/,
+  );
+  assert.match(main, /terminalEnv\.CONDA_PREFIX = detected\.environment/);
   assert.match(main, /terminalEnv\.UV_CACHE_DIR = uvCacheRoot\(\)/);
   assert.match(main, /"python:install-package"/);
   assert.match(main, /"python:list-packages"/);
@@ -507,6 +607,16 @@ test("app-managed and optional project Python environments are package-ready", (
   assert.match(main, /ensureProjectPythonEnvironment/);
   assert.match(main, /appProjectEnvironmentRoot/);
   assert.match(main, /project-environments/);
+  assert.match(main, /discoverProjectPythonEnvironments/);
+  assert.match(main, /condaPythonList/);
+  assert.match(main, /\["conda", "mamba", "micromamba"\]/);
+  assert.match(app, /detectedProject \|\| savedRuntime/);
+  assert.match(projectPythonDiscovery, /"\.venv"/);
+  assert.match(projectPythonDiscovery, /"virtualenv"/);
+  assert.match(projectPythonDiscovery, /"\.conda"/);
+  assert.match(projectPythonDiscovery, /depth >= 3/);
+  assert.match(projectPythonDiscovery, /Scripts\/python\.exe/);
+  assert.match(projectPythonDiscovery, /"python\.exe"/);
   assert.match(
     main,
     /startProjectWatcher[\s\S]*"\.venv"[\s\S]*"__pycache__"/,
@@ -523,6 +633,8 @@ test("app-managed and optional project Python environments are package-ready", (
   assert.match(app, /aria-label="Filter installed Python packages"/);
   assert.match(app, /outside project/);
   assert.match(app, /Create project \.venv/);
+  assert.match(app, /Rescan project/);
+  assert.match(app, /Poetry, tox, and Conda/);
   assert.match(app, /Use app environment/);
   assert.match(app, /item\.scope === "app"/);
   assert.match(app, /className="uv-helpbook"/);
@@ -658,10 +770,32 @@ test("AI chat shows a steerable queue and can expand to the full window", () => 
   );
   assert.match(
     styles,
-    /\.ai-panel\.expanded \.ai-footer-controls\s*\{[\s\S]*gap: 14px;[\s\S]*padding: 16px 0 0;/,
+    /\.ai-panel\.expanded \.ai-footer-controls\s*\{[\s\S]*gap: 16px;[\s\S]*padding: 18px 0 0;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-bottom-model,[\s\S]*\.ai-panel\.expanded \.ai-footer-controls \.ai-capability-drawer\s*\{[\s\S]*height: 64px;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-footer-controls \.ai-tier-toggle,[\s\S]*\.ai-panel\.expanded \.ai-footer-controls \.ai-capability-toggle\s*\{[\s\S]*height: 64px;[\s\S]*min-height: 64px;[\s\S]*padding-inline: 20px;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-footer-controls \.ai-tier-toggle b,[\s\S]*font-size: 15px;[\s\S]*\.ai-panel\.expanded \.ai-footer-controls \.ai-tier-toggle small,[\s\S]*font-size: 13px;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-composer\s*\{[\s\S]*margin-top: 18px;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded \.ai-footer-controls \+ \.ai-composer\s*\{[\s\S]*margin-top: 18px;/,
   );
   assert.match(main, /aiExpandedLayoutReady/);
   assert.match(main, /aiFooterSelectorSpacingReady/);
+  assert.match(main, /aiExpandedFooterControlsReady/);
+  assert.match(main, /aiExpandedSelectorMenusReady/);
   assert.match(
     main,
     /Math\.abs\(expandedExitRect\.left - aiSettingsActionRect\.right\) <= 12/,
@@ -1108,7 +1242,8 @@ test("project windows share one model queue while keeping project chats separate
   assert.match(main, /"ai:pipeline-state"/);
   assert.match(main, /state: "waiting"/);
   assert.match(main, /position/);
-  assert.match(main, /AI is working in \$\{running\.projectName\}/);
+  assert.match(main, /AI is working in \$\{ownRunning\.projectName\}/);
+  assert.match(main, /activeChatId: ownRunning\.chatId/);
   assert.match(main, /aiExecutionOwner\?\.id === event\.sender\.id/);
   assert.match(main, /Another project is already running Python/);
   assert.match(
@@ -1156,7 +1291,11 @@ test("model and permission controls share a comfortable footer above the chat co
   assert.match(ai, /setPermissionsDrawerOpen\(false\)/);
   assert.match(
     ai,
-    /onClick=\{\(\) => setPermissionsDrawerOpen\(\(current\) => !current\)\}/,
+    /const next = !tierPickerOpen;[\s\S]*setTierPickerOpen\(next\);[\s\S]*if \(next\) setPermissionsDrawerOpen\(false\)/,
+  );
+  assert.match(
+    ai,
+    /const next = !permissionsDrawerOpen;[\s\S]*setPermissionsDrawerOpen\(next\);[\s\S]*setTierPickerOpen\(false\);[\s\S]*setCustomListOpen\(false\)/,
   );
   assert.match(
     main,
@@ -1440,7 +1579,10 @@ test("agent work is shown live and retained as a privacy-aware chat timeline", (
   assert.match(ai, /entry\.websites/);
   assert.match(aiMain, /title: "Searching the public web"/);
   assert.match(aiMain, /text not recorded/);
-  assert.match(main, /aiExecutionOwner\.send\("ai:action", action\)/);
+  assert.match(
+    main,
+    /broadcastToAiProject\(currentAiProjectRoot\(\), "ai:action", action\)/,
+  );
   assert.match(styles, /\.ai-activity-popover\s*\{/);
   assert.match(styles, /\.ai-action-timeline\s*\{/);
   assert.match(styles, /\.ai-live-work\s*\{/);
@@ -1483,7 +1625,7 @@ test("responsive workspace controls reflow instead of clipping", () => {
   );
   assert.match(
     main,
-    /explorerToolbarReady:[\s\S]*buttons\.length !== 7[\s\S]*toolbar\.scrollWidth <= toolbar\.clientWidth \+ 1/,
+    /explorerToolbarReady:[\s\S]*buttons\.length !== 9[\s\S]*toolbar\.scrollWidth <= toolbar\.clientWidth \+ 1/,
   );
   assert.match(
     styles,

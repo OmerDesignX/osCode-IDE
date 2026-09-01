@@ -4,6 +4,14 @@ export type TreeEntry = {
   kind: "file" | "directory";
   children?: TreeEntry[];
 };
+export type ProjectItemOperationResult = {
+  tree: TreeEntry[];
+  item: TreeEntry;
+  sourcePath: string;
+  newPath: string;
+  name: string;
+  kind: TreeEntry["kind"];
+};
 export type EditorPreferences = {
   version: 16;
   theme: "dark" | "blue-dark" | "blue-light";
@@ -86,6 +94,7 @@ export type AiPipelineState = {
   label: string;
   position: number;
   activeProject: string;
+  activeChatId: string;
 };
 export type AiModelOutput = {
   chatId: string;

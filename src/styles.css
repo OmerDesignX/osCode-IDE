@@ -8066,6 +8066,120 @@ textarea,
   box-shadow: none !important;
 }
 
+/* Explorer and editor-tab commands use one opaque, padded menu surface. */
+.project-context-menu {
+  position: fixed;
+  z-index: 500;
+  width: 272px;
+  max-height: min(560px, calc(100vh - 24px));
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--overlay-surface);
+  color: var(--text);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.36);
+}
+
+.project-context-menu > div {
+  padding: 0;
+}
+
+.project-context-menu > .menu-separated {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.app .project-context-menu button,
+.app .project-context-menu button:hover:not(:disabled),
+.app .project-context-menu button:focus-visible {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 0 !important;
+  border-radius: 11px !important;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none !important;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.app .project-context-menu button:hover:not(:disabled),
+.app .project-context-menu button:focus-visible {
+  background: var(--control-selected-fill) !important;
+  color: var(--accent);
+}
+
+.project-context-menu button:disabled {
+  opacity: 0.38;
+}
+
+.project-context-menu button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-context-menu kbd {
+  color: var(--muted);
+  font:
+    500 11px/1 Manrope,
+    sans-serif;
+  white-space: nowrap;
+}
+
+.app .project-context-menu button.danger-text,
+.app .project-context-menu button.danger-text:hover:not(:disabled) {
+  color: #ff7f8c;
+}
+
+.tree:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--focus-neutral);
+}
+
+/* New-file and rename controls follow the same roomy settings-panel rhythm. */
+.project-composer {
+  margin: 2px 12px 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel2);
+}
+
+.project-composer label {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.project-composer > div {
+  gap: 8px;
+}
+
+.project-composer input {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.project-composer button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
 .app input[type="search"] {
   appearance: none;
   -webkit-appearance: none;
@@ -9460,21 +9574,49 @@ textarea,
 }
 
 .ai-panel.expanded .ai-footer-controls {
-  gap: 14px;
-  padding: 16px 0 0;
+  gap: 16px;
+  padding: 18px 0 0;
   background: transparent;
+}
+
+.ai-panel.expanded .ai-bottom-model,
+.ai-panel.expanded .ai-footer-controls .ai-capability-drawer {
+  height: 64px;
 }
 
 .ai-panel.expanded .ai-footer-controls .ai-tier-toggle,
 .ai-panel.expanded .ai-footer-controls .ai-capability-toggle {
-  height: 52px;
-  min-height: 52px;
-  padding-inline: 18px;
+  height: 64px;
+  min-height: 64px;
+  padding-inline: 20px;
+}
+
+.ai-panel.expanded .ai-footer-controls .ai-footer-label {
+  gap: 3px;
+}
+
+.ai-panel.expanded .ai-footer-controls .ai-tier-toggle b,
+.ai-panel.expanded .ai-footer-controls .ai-capability-toggle b {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.ai-panel.expanded .ai-footer-controls .ai-tier-toggle small,
+.ai-panel.expanded .ai-footer-controls .ai-capability-toggle small {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.ai-panel.expanded .ai-footer-controls .ai-tier-picker > button,
+.ai-panel.expanded .ai-footer-controls .ai-capability-bar > button {
+  height: 56px;
+  min-height: 56px;
+  font-size: 14px;
 }
 
 .ai-panel.expanded .ai-composer {
   min-height: 96px;
-  margin-top: 14px;
+  margin-top: 18px;
   margin-bottom: 8px;
   padding: 14px 16px;
 }
@@ -12237,9 +12379,12 @@ button > svg * {
   display: none;
 }
 
-.ai-footer-controls + .ai-composer,
-.ai-panel.expanded .ai-footer-controls + .ai-composer {
+.ai-footer-controls + .ai-composer {
   margin-top: 10px;
+}
+
+.ai-panel.expanded .ai-footer-controls + .ai-composer {
+  margin-top: 18px;
 }
 
 @container ai-panel (max-width: 360px) {

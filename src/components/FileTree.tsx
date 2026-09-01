@@ -1,5 +1,5 @@
 import { FeatherIcon } from "./FeatherIcon";
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import type { TreeEntry } from "../types";
 export function FileTree({
   entries,
@@ -7,6 +7,7 @@ export function FileTree({
   onExpand,
   onError,
   onSelect,
+  onContextMenu,
   selectedPath,
   level = 0,
 }: {
@@ -15,6 +16,7 @@ export function FileTree({
   onExpand: (path: string) => Promise<void>;
   onError: (error: unknown) => void;
   onSelect: (entry: TreeEntry) => void;
+  onContextMenu: (entry: TreeEntry, event: MouseEvent) => void;
   selectedPath: string;
   level?: number;
 }) {
@@ -28,6 +30,7 @@ export function FileTree({
           onExpand={onExpand}
           onError={onError}
           onSelect={onSelect}
+          onContextMenu={onContextMenu}
           selectedPath={selectedPath}
           level={level}
         />
@@ -41,6 +44,7 @@ function TreeNode({
   onExpand,
   onError,
   onSelect,
+  onContextMenu,
   selectedPath,
   level,
 }: {
@@ -49,6 +53,7 @@ function TreeNode({
   onExpand: (path: string) => Promise<void>;
   onError: (error: unknown) => void;
   onSelect: (entry: TreeEntry) => void;
+  onContextMenu: (entry: TreeEntry, event: MouseEvent) => void;
   selectedPath: string;
   level: number;
 }) {
@@ -80,6 +85,12 @@ function TreeNode({
         className={`tree-row ${selectedPath === entry.path ? "selected" : ""}`}
         style={{ paddingLeft: 12 + level * 15 }}
         onClick={toggle}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onSelect(entry);
+          onContextMenu(entry, event);
+        }}
       >
         <FeatherIcon
           icon={
@@ -102,6 +113,7 @@ function TreeNode({
           onExpand={onExpand}
           onError={onError}
           onSelect={onSelect}
+          onContextMenu={onContextMenu}
           selectedPath={selectedPath}
           level={level + 1}
         />

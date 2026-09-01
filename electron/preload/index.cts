@@ -19,6 +19,25 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("project:create-item", directory, name, kind),
   renameProjectItem: (path: string, name: string) =>
     ipcRenderer.invoke("project:rename-item", path, name),
+  duplicateProjectItem: (path: string, content?: string) =>
+    ipcRenderer.invoke("project:duplicate-item", path, content),
+  chooseProjectDirectory: (path: string) =>
+    ipcRenderer.invoke("project:choose-directory", path),
+  transferProjectItem: (
+    source: string,
+    destinationDirectory: string,
+    mode: "copy" | "move",
+  ) =>
+    ipcRenderer.invoke(
+      "project:transfer-item",
+      source,
+      destinationDirectory,
+      mode,
+    ),
+  copyProjectPath: (path: string, relative = false) =>
+    ipcRenderer.invoke("project:copy-path", path, relative),
+  revealProjectItem: (path: string) =>
+    ipcRenderer.invoke("project:reveal-item", path),
   trashProjectItem: (path: string, hasUnsavedChanges = false) =>
     ipcRenderer.invoke("project:trash-item", path, hasUnsavedChanges),
   loadPreferences: () => ipcRenderer.invoke("preferences:get"),
@@ -137,10 +156,16 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.on("agent:activity", listener);
     return () => ipcRenderer.removeListener("agent:activity", listener);
   },
+  aiPipelineState: () => ipcRenderer.invoke("ai:pipeline-current"),
   onAiPipelineState: (callback: (state: unknown) => void) => {
     const listener = (_event: unknown, state: unknown) => callback(state);
     ipcRenderer.on("ai:pipeline-state", listener);
     return () => ipcRenderer.removeListener("ai:pipeline-state", listener);
+  },
+  onAiChatComplete: (callback: (chatId: string) => void) => {
+    const listener = (_event: unknown, chatId: string) => callback(chatId);
+    ipcRenderer.on("ai:chat-complete", listener);
+    return () => ipcRenderer.removeListener("ai:chat-complete", listener);
   },
   resolveAiEdits: (ids: string[], approve: boolean) =>
     ipcRenderer.invoke("ai:resolve-edits", ids, approve),
@@ -180,6 +205,8 @@ contextBridge.exposeInMainWorld("oscode", {
   readFile: (path: string) => ipcRenderer.invoke("file:read", path),
   writeFile: (path: string, content: string, source = "manual") =>
     ipcRenderer.invoke("file:write", path, content, source),
+  saveFileAs: (path: string, content?: string) =>
+    ipcRenderer.invoke("file:save-as", path, content),
   listSaveHistory: (path: string) =>
     ipcRenderer.invoke("file:history-list", path),
   restoreSaveHistory: (path: string, id: string) =>

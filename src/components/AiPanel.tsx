@@ -44,6 +44,8 @@ type Props = {
   width: number;
   side: "left" | "right";
   projectName: string;
+  activeFile?: string;
+  visible?: boolean;
   openChatId?: string;
   onEngine: (engine: AiEngine) => void;
   onModel: (model: string) => void;
@@ -391,6 +393,8 @@ export function AiPanel({
   width,
   side,
   projectName,
+  activeFile,
+  visible = true,
   openChatId,
   onEngine,
   onModel,
@@ -436,6 +440,7 @@ export function AiPanel({
     label: "",
     position: 0,
     activeProject: "",
+    activeChatId: "",
   });
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [ollamaPickerOpen, setOllamaPickerOpen] = useState(false);
@@ -715,6 +720,10 @@ export function AiPanel({
 
   useEffect(() => {
     void refreshModels().catch(() => undefined);
+    void window.oscode
+      .aiPipelineState()
+      .then(setPipelineState)
+      .catch(() => undefined);
     const offStatus = window.oscode.onAiStatus(setStatus);
     const offModelOutput = window.oscode.onAiModelOutput(
       (output: AiModelOutput) => {
@@ -744,13 +753,40 @@ export function AiPanel({
       setLiveActions(next);
     });
     const offPipeline = window.oscode.onAiPipelineState(setPipelineState);
+    const offComplete = window.oscode.onAiChatComplete((completedChatId) => {
+      void refreshAgentState()
+        .then((next) => {
+          if (completedChatId !== chatIdRef.current) return;
+          const chat = next.chats.find((item) => item.id === completedChatId);
+          if (!chat) return;
+          const cleanMessages = cleanStoredMessages(chat.messages);
+          messagesRef.current = cleanMessages;
+          setMessages(cleanMessages);
+          setContextSummary(chat.contextSummary);
+          setBusy(false);
+          busyRef.current = false;
+          setLiveModelOutput({ chatId: "", reasoning: "", answer: "" });
+        })
+        .catch(() => undefined);
+    });
     return () => {
       offStatus();
       offModelOutput();
       offAction();
       offPipeline();
+      offComplete();
     };
   }, []);
+  useEffect(() => {
+    if (
+      chatId &&
+      pipelineState.activeChatId === chatId &&
+      pipelineState.state !== "idle"
+    ) {
+      busyRef.current = true;
+      setBusy(true);
+    }
+  }, [chatId, pipelineState.activeChatId, pipelineState.state]);
   useEffect(() => {
     if (!modelsReady || tierPickerInitialized.current) return;
     tierPickerInitialized.current = true;
@@ -1106,10 +1142,10 @@ export function AiPanel({
   const saveConversation = async (
     nextMessages: AiChatMessage[],
     nextSummary: string,
+    targetChatId = chatIdRef.current,
   ) => {
-    const currentChatId = chatIdRef.current;
-    if (!currentChatId) return;
-    await window.oscode.saveAiChat(currentChatId, nextMessages, nextSummary);
+    if (!targetChatId) return;
+    await window.oscode.saveAiChat(targetChatId, nextMessages, nextSummary);
     await refreshAgentState();
   };
 
@@ -1289,8 +1325,8 @@ export function AiPanel({
     },
     capabilityOverride?: typeof capabilityRef.current,
   ) => {
-    const currentChatId = chatIdRef.current;
-    if ((!text.trim() && !continuation) || busyRef.current || !currentChatId)
+    const executionChatId = chatIdRef.current;
+    if ((!text.trim() && !continuation) || busyRef.current || !executionChatId)
       return;
     const requestEpoch = ++requestEpochRef.current;
     if (!continuation) {
@@ -1319,7 +1355,7 @@ export function AiPanel({
     setBusy(true);
     busyRef.current = true;
     setLiveModelOutput({
-      chatId: currentChatId,
+      chatId: executionChatId,
       reasoning: "",
       answer: "",
     });
@@ -1328,10 +1364,10 @@ export function AiPanel({
     try {
       const activeCapabilities = capabilityOverride || capabilityRef.current;
       const requestSummary = continuation?.contextSummary ?? contextSummary;
-      await ensureCapabilityPermissions(currentChatId, activeCapabilities);
-      await saveConversation(next, requestSummary);
+      await ensureCapabilityPermissions(executionChatId, activeCapabilities);
+      await saveConversation(next, requestSummary, executionChatId);
       const response = await window.oscode.aiChat({
-        chatId: currentChatId,
+        chatId: executionChatId,
         engine,
         model,
         executable,
@@ -1348,6 +1384,7 @@ export function AiPanel({
         thinkingEnabled,
         contextSummary: requestSummary,
         goal: activeGoal?.text || "",
+        activeFile: activeFile || "",
       });
       if (requestEpoch !== requestEpochRef.current) {
         failed = true;
@@ -1371,20 +1408,28 @@ export function AiPanel({
       };
       const retained = response.retainedMessages || next;
       const completed = [...retained, assistant];
-      messagesRef.current = completed;
-      setMessages(completed);
+      if (chatIdRef.current === executionChatId) {
+        messagesRef.current = completed;
+        setMessages(completed);
+      }
       liveActionsRef.current = [];
       setLiveActions([]);
       if (response.changedFiles.length) await onChanged(response.changedFiles);
       if (response.changedFiles.length) await refreshHistory(true);
-      setPendingEdits(response.pendingEdits);
-      setPermissionRequest(response.permissionRequest || null);
-      permissionContinuation.current = response.permissionRequest
-        ? { messages: completed, contextSummary: response.contextSummary }
-        : null;
-      setContextSummary(response.contextSummary);
-      setUsage(response.usage);
-      await saveConversation(completed, response.contextSummary);
+      if (chatIdRef.current === executionChatId) {
+        setPendingEdits(response.pendingEdits);
+        setPermissionRequest(response.permissionRequest || null);
+        permissionContinuation.current = response.permissionRequest
+          ? { messages: completed, contextSummary: response.contextSummary }
+          : null;
+        setContextSummary(response.contextSummary);
+        setUsage(response.usage);
+      }
+      await saveConversation(
+        completed,
+        response.contextSummary,
+        executionChatId,
+      );
       if (
         !response.permissionRequest &&
         temporaryPermissionIds.current.length
@@ -1454,7 +1499,7 @@ export function AiPanel({
               : [
                   {
                     id: globalThis.crypto.randomUUID(),
-                    chatId: currentChatId,
+                    chatId: executionChatId,
                     kind: "result" as const,
                     status: "failed" as const,
                     title: "Request stopped",
@@ -1469,14 +1514,18 @@ export function AiPanel({
               ? "osCode"
               : "Custom Model",
         };
-        const completed = [...messagesRef.current, failureMessage];
-        messagesRef.current = completed;
-        setMessages(completed);
+        const completed = [...next, failureMessage];
+        if (chatIdRef.current === executionChatId) {
+          messagesRef.current = completed;
+          setMessages(completed);
+        }
         liveActionsRef.current = [];
         setLiveActions([]);
-        await saveConversation(completed, contextSummary).catch(
-          () => undefined,
-        );
+        await saveConversation(
+          completed,
+          continuation?.contextSummary ?? contextSummary,
+          executionChatId,
+        ).catch(() => undefined);
         onNotice(message);
         onAttentionChange?.(
           {
@@ -1542,6 +1591,7 @@ export function AiPanel({
         thinkingEnabled,
         contextSummary: chat.contextSummary,
         goal,
+        activeFile: activeFile || "",
       });
       const assistant: AiChatMessage = {
         id: globalThis.crypto.randomUUID(),
@@ -1882,6 +1932,7 @@ export function AiPanel({
     <aside
       className={`ai-panel${expanded ? " expanded" : ""}`}
       aria-label="Local AI chat"
+      hidden={!visible}
       style={expanded ? undefined : { width }}
     >
       <div className="ai-head">
@@ -3401,7 +3452,9 @@ export function AiPanel({
             aria-expanded={tierPickerOpen}
             aria-controls="ai-model-size-picker"
             onClick={() => {
-              setTierPickerOpen((current) => !current);
+              const next = !tierPickerOpen;
+              setTierPickerOpen(next);
+              if (next) setPermissionsDrawerOpen(false);
               setCustomListOpen(false);
             }}
           >
@@ -3495,7 +3548,14 @@ export function AiPanel({
             className="ai-capability-toggle"
             aria-expanded={permissionsDrawerOpen}
             aria-controls="ai-capability-controls"
-            onClick={() => setPermissionsDrawerOpen((current) => !current)}
+            onClick={() => {
+              const next = !permissionsDrawerOpen;
+              setPermissionsDrawerOpen(next);
+              if (next) {
+                setTierPickerOpen(false);
+                setCustomListOpen(false);
+              }
+            }}
           >
             <span>
               <FeatherIcon icon="shield" size="16" />

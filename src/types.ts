@@ -4,6 +4,14 @@ export type TreeEntry = {
   kind: "file" | "directory";
   children?: TreeEntry[];
 };
+export type ProjectItemOperationResult = {
+  tree: TreeEntry[];
+  item: TreeEntry;
+  sourcePath: string;
+  newPath: string;
+  name: string;
+  kind: TreeEntry["kind"];
+};
 export type EditorPreferences = {
   version: 16;
   theme: "dark" | "blue-dark" | "blue-light";
@@ -86,6 +94,7 @@ export type AiPipelineState = {
   label: string;
   position: number;
   activeProject: string;
+  activeChatId: string;
 };
 export type AiModelOutput = {
   chatId: string;
@@ -303,6 +312,7 @@ export type PythonRuntime = {
   path: string;
   installed: boolean;
   scope?: "app" | "app-project" | "project" | "system";
+  manager?: "uv" | "venv" | "conda" | "system";
 };
 export type PythonPackage = {
   name: string;
@@ -313,6 +323,7 @@ export type PythonPackageState = {
   interpreter: string;
   environment: string;
   location: "" | "app" | "project";
+  manager?: "venv" | "conda";
   packages: PythonPackage[];
   error?: string;
 };
@@ -404,6 +415,18 @@ declare global {
         path: string,
         name: string,
       ): Promise<{ tree: TreeEntry[]; newPath: string; name: string }>;
+      duplicateProjectItem(
+        path: string,
+        content?: string,
+      ): Promise<ProjectItemOperationResult>;
+      chooseProjectDirectory(path: string): Promise<string | null>;
+      transferProjectItem(
+        source: string,
+        destinationDirectory: string,
+        mode: "copy" | "move",
+      ): Promise<ProjectItemOperationResult>;
+      copyProjectPath(path: string, relative?: boolean): Promise<string>;
+      revealProjectItem(path: string): Promise<boolean>;
       trashProjectItem(
         path: string,
         hasUnsavedChanges?: boolean,
@@ -520,6 +543,7 @@ declare global {
         thinkingEnabled: boolean;
         contextSummary: string;
         goal: string;
+        activeFile: string;
       }): Promise<AiChatResponse>;
       resolveAiEdits(ids: string[], approve: boolean): Promise<string[]>;
       listAiHistory(): Promise<AiHistoryEntry[]>;
@@ -530,7 +554,9 @@ declare global {
       showAgentBrowser(): Promise<AgentBrowserSnapshot | null>;
       stopCurrentActivity(): Promise<boolean>;
       onAgentActivity(cb: (activity: AgentActivity) => void): () => void;
+      aiPipelineState(): Promise<AiPipelineState>;
       onAiPipelineState(cb: (state: AiPipelineState) => void): () => void;
+      onAiChatComplete(cb: (chatId: string) => void): () => void;
       onAiStatus(cb: (status: string) => void): () => void;
       onAiModelOutput(cb: (output: AiModelOutput) => void): () => void;
       onAiAction(cb: (action: AiActionEntry) => void): () => void;
@@ -551,6 +577,10 @@ declare global {
         content: string,
         source?: "manual" | "autosave" | "agent" | "restore",
       ): Promise<boolean>;
+      saveFileAs(
+        path: string,
+        content?: string,
+      ): Promise<{ tree: TreeEntry[]; newPath: string; name: string } | null>;
       listSaveHistory(path: string): Promise<SaveHistoryEntry[]>;
       restoreSaveHistory(path: string, id: string): Promise<string>;
       onProjectFileChanged(cb: (change: ProjectFileChange) => void): () => void;

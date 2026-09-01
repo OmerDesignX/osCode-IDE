@@ -26,8 +26,11 @@ import { pathToFileURL } from "node:url";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as pty from "node-pty";
 import type {
+  AiChatMessage,
+  AiChatResponse,
   AiEngine,
   AiModel,
+  AiPipelineState,
   GitCommit,
   GitState,
   TreeEntry,
@@ -71,6 +74,16 @@ import {
   validateProjectMedia,
   type ProjectMediaKind,
 } from "./media-preview.js";
+import {
+  duplicateProjectEntry,
+  transferProjectEntry,
+  validateProjectItemName,
+} from "./project-files.js";
+import {
+  discoverProjectPythonEnvironments,
+  parseCondaEnvironmentPrefixes,
+  pythonEnvironmentForInterpreter,
+} from "./python-project-environments.js";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -115,8 +128,10 @@ let aiExecutionOwner: WebContents | null = null;
 let aiExecutionTail: Promise<void> = Promise.resolve();
 type AiPipelineEntry = {
   id: number;
-  sender: WebContents;
+  senderId: number;
+  projectRoot: string;
   projectName: string;
+  chatId: string;
   state: "waiting" | "running";
 };
 let aiPipelineSequence = 0;
@@ -153,6 +168,17 @@ function broadcastToRenderers(channel: string, ...args: unknown[]) {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send(channel, ...args);
+  }
+}
+function broadcastToAiProject(
+  targetRoot: string,
+  channel: string,
+  ...args: unknown[]
+) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+    const contextRoot = windowContexts.get(window.webContents.id)?.projectRoot;
+    if (contextRoot === targetRoot) window.webContents.send(channel, ...args);
   }
 }
 function broadcastToOtherRenderers(
@@ -237,6 +263,13 @@ function startProjectWatcher(sender: WebContents, root: string) {
       if (!filename || sender.isDestroyed()) return;
       const relative = String(filename).replace(/\\/g, "/");
       if (
+        /(^|\/)pyvenv\.cfg$/i.test(relative) ||
+        /(^|\/)conda-meta\/history$/i.test(relative)
+      ) {
+        sender.send("python:environment-changed");
+        return;
+      }
+      if (
         !relative ||
         relative
           .split("/")
@@ -247,6 +280,12 @@ function startProjectWatcher(sender: WebContents, root: string) {
               ".venv",
               "venv",
               "env",
+              "virtualenv",
+              ".virtualenv",
+              ".conda",
+              "conda-env",
+              ".tox",
+              ".nox",
               "__pycache__",
               "node_modules",
               "build",
@@ -292,72 +331,127 @@ function withSenderAiProject<T>(event: IpcMainInvokeEvent, operation: () => T) {
   const context = activateSender(event);
   return aiProjectContexts.run(context?.projectRoot || "", operation);
 }
-function publishAiPipelineStates() {
+function aiPipelineStateFor(senderId: number): AiPipelineState {
   const running = aiPipelineEntries.find((entry) => entry.state === "running");
   const waiting = aiPipelineEntries.filter(
     (entry) => entry.state === "waiting",
   );
+  const senderRoot = windowContexts.get(senderId)?.projectRoot || "";
+  const ownRunning =
+    running &&
+    (running.senderId === senderId ||
+      (senderRoot !== "" && running.projectRoot === senderRoot))
+      ? running
+      : undefined;
+  if (ownRunning)
+    return {
+      state: "running",
+      label: `AI is working in ${ownRunning.projectName}`,
+      position: 0,
+      activeProject: ownRunning.projectName,
+      activeChatId: ownRunning.chatId,
+    };
+  const ownRequest = waiting.find(
+    (entry) =>
+      entry.senderId === senderId ||
+      (senderRoot !== "" && entry.projectRoot === senderRoot),
+  );
+  if (ownRequest) {
+    const position = waiting.indexOf(ownRequest) + 1;
+    return {
+      state: "waiting",
+      label: running
+        ? `Waiting for AI in ${running.projectName} to finish · position ${position}`
+        : `Waiting for the shared AI pipeline · position ${position}`,
+      position,
+      activeProject: running?.projectName || "",
+      activeChatId: ownRequest.chatId,
+    };
+  }
+  return {
+    state: "idle",
+    label: "",
+    position: 0,
+    activeProject: running?.projectName || "",
+    activeChatId: "",
+  };
+}
+function publishAiPipelineStates() {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
-    const senderId = window.webContents.id;
-    if (running?.sender.id === senderId) {
-      window.webContents.send("ai:pipeline-state", {
-        state: "running",
-        label: `AI is working in ${running.projectName}`,
-        position: 0,
-        activeProject: running.projectName,
-      });
-      continue;
-    }
-    const ownRequest = waiting.find((entry) => entry.sender.id === senderId);
-    if (ownRequest) {
-      const position = waiting.indexOf(ownRequest) + 1;
-      window.webContents.send("ai:pipeline-state", {
-        state: "waiting",
-        label: running
-          ? `Waiting for AI in ${running.projectName} to finish · position ${position}`
-          : `Waiting for the shared AI pipeline · position ${position}`,
-        position,
-        activeProject: running?.projectName || "",
-      });
-      continue;
-    }
-    window.webContents.send("ai:pipeline-state", {
-      state: "idle",
-      label: "",
-      position: 0,
-      activeProject: running?.projectName || "",
-    });
+    window.webContents.send(
+      "ai:pipeline-state",
+      aiPipelineStateFor(window.webContents.id),
+    );
   }
+}
+async function persistAiResponse(request: unknown, response: AiChatResponse) {
+  if (!request || typeof request !== "object") return;
+  const input = request as {
+    chatId?: unknown;
+    messages?: unknown;
+  };
+  const chatId =
+    typeof input.chatId === "string" ? input.chatId.trim().slice(0, 100) : "";
+  if (!chatId) return;
+  const retained = Array.isArray(response.retainedMessages)
+    ? response.retainedMessages
+    : Array.isArray(input.messages)
+      ? (input.messages as AiChatMessage[])
+      : [];
+  const assistant: AiChatMessage = {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    content: response.content,
+    thinking: response.thinking,
+    actions: response.actions,
+    createdAt: new Date().toISOString(),
+  };
+  await aiService.saveChat(
+    chatId,
+    [...retained, assistant],
+    response.contextSummary,
+  );
 }
 function queueAiRequest(event: IpcMainInvokeEvent, request: unknown) {
   const context = activateSender(event);
   const requestedRoot = context?.projectRoot || "";
   const projectName = requestedRoot ? path.basename(requestedRoot) : "project";
+  const chatId =
+    request &&
+    typeof request === "object" &&
+    typeof (request as { chatId?: unknown }).chatId === "string"
+      ? (request as { chatId: string }).chatId.slice(0, 100)
+      : "";
   const entry: AiPipelineEntry = {
     id: ++aiPipelineSequence,
-    sender: event.sender,
+    senderId: event.sender.id,
+    projectRoot: requestedRoot,
     projectName,
+    chatId,
     state: "waiting",
   };
   aiPipelineEntries.push(entry);
   publishAiPipelineStates();
   const run = aiExecutionTail.then(async () => {
     try {
-      if (event.sender.isDestroyed())
-        throw new Error("The window closed before its AI request could start");
       entry.state = "running";
       aiProjectRoot = requestedRoot;
-      aiExecutionOwner = event.sender;
+      aiExecutionOwner = event.sender.isDestroyed() ? null : event.sender;
       const ownerWindow = BrowserWindow.fromWebContents(event.sender);
       if (ownerWindow && !ownerWindow.isDestroyed()) mainWindow = ownerWindow;
       publishAiPipelineStates();
-      return await aiProjectContexts.run(requestedRoot, () =>
+      const response = await aiProjectContexts.run(requestedRoot, () =>
         aiService.chat(request),
       );
+      await persistAiResponse(request, response).catch((error) =>
+        console.error("Could not persist the completed AI response", error),
+      );
+      broadcastToAiProject(requestedRoot, "ai:chat-complete", chatId);
+      return response;
     } finally {
       aiProjectRoot = "";
-      if (aiExecutionOwner === event.sender) aiExecutionOwner = null;
+      if (aiExecutionOwner?.id === entry.senderId) aiExecutionOwner = null;
       const focused = BrowserWindow.getFocusedWindow();
       if (focused && !focused.isDestroyed()) {
         mainWindow = focused;
@@ -539,10 +633,27 @@ const ignored = new Set([
   ".next",
   "__pycache__",
 ]);
+const ignoredEnvironmentDirectories = new Set([
+  "env",
+  ".env",
+  "virtualenv",
+  ".virtualenv",
+  ".conda",
+  "conda-env",
+  ".tox",
+  ".nox",
+]);
 async function tree(dir: string): Promise<TreeEntry[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   return entries
-    .filter((e) => !ignored.has(e.name) && !e.isSymbolicLink())
+    .filter(
+      (entry) =>
+        !ignored.has(entry.name) &&
+        !(
+          entry.isDirectory() && ignoredEnvironmentDirectories.has(entry.name)
+        ) &&
+        !entry.isSymbolicLink(),
+    )
     .sort(
       (a, b) =>
         Number(b.isDirectory()) - Number(a.isDirectory()) ||
@@ -577,7 +688,13 @@ async function searchProject(queryValue: unknown) {
     const entries = await fs.readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
       if (results.length >= 250 || visited >= 2_500) break;
-      if (ignored.has(entry.name) || entry.isSymbolicLink()) continue;
+      if (
+        ignored.has(entry.name) ||
+        (entry.isDirectory() &&
+          ignoredEnvironmentDirectories.has(entry.name)) ||
+        entry.isSymbolicLink()
+      )
+        continue;
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         await visit(full);
@@ -725,16 +842,7 @@ async function projectPrivateDirectory(parts: string[], create: boolean) {
   return current;
 }
 function projectItemName(input: string) {
-  const name = input.trim();
-  if (
-    !name ||
-    name === "." ||
-    name === ".." ||
-    /[<>:"/\\|?*\u0000-\u001f]/.test(name) ||
-    /[. ]$/.test(name)
-  )
-    throw new Error("Use a simple cross-platform file or folder name");
-  return name;
+  return validateProjectItemName(input);
 }
 let resolvedGitExecutable = "";
 async function gitExecutable() {
@@ -954,6 +1062,7 @@ type PythonRuntimeRecord = {
   path: string;
   installed: boolean;
   scope?: "app" | "app-project" | "project" | "system";
+  manager?: "uv" | "venv" | "conda" | "system";
 };
 type PythonPackageRecord = {
   name: string;
@@ -1073,6 +1182,7 @@ async function customPythonList(): Promise<PythonRuntimeRecord[]> {
         path: executable,
         installed: true,
         scope: "system",
+        manager: "system",
       });
     } catch {
       /* ignore interpreters that were moved or removed */
@@ -1139,6 +1249,7 @@ async function containedPythonList() {
             path: inspected.path,
             installed: true,
             scope: "app",
+            manager: "uv",
           });
       } catch {
         /* ignore helper executables and incomplete downloads */
@@ -1146,6 +1257,99 @@ async function containedPythonList() {
     }
   }
   return results;
+}
+async function commandPythonRuntime(
+  command: string,
+  prefixArgs: string[] = [],
+): Promise<PythonRuntimeRecord | null> {
+  const marker = "__OSCODE_COMMAND_PYTHON__";
+  try {
+    const { stdout } = await exec(
+      command,
+      [
+        ...prefixArgs,
+        "-c",
+        `import sys;print(${JSON.stringify(marker)}+sys.executable)`,
+      ],
+      {
+        timeout: 5_000,
+        env: pythonRuntimeEnvironment(app.getPath("userData")),
+      },
+    );
+    const executable = stdout
+      .split(/\r?\n/)
+      .find((line) => line.startsWith(marker))
+      ?.slice(marker.length)
+      .trim();
+    if (!executable || !path.isAbsolute(executable)) return null;
+    const inspected = await inspectPython(executable);
+    return {
+      version: inspected.fullVersion.split(".").slice(0, 2).join("."),
+      path: inspected.path,
+      installed: true,
+      scope: "system",
+      manager: "system",
+    };
+  } catch {
+    return null;
+  }
+}
+async function condaPythonList(): Promise<PythonRuntimeRecord[]> {
+  const commands = ["conda", "mamba", "micromamba"];
+  let prefixes: string[] = [];
+  let manager = "conda";
+  for (const command of commands) {
+    try {
+      const { stdout } = await exec(command, ["env", "list", "--json"], {
+        timeout: 7_500,
+        env: pythonRuntimeEnvironment(app.getPath("userData")),
+      });
+      prefixes = parseCondaEnvironmentPrefixes(stdout);
+      if (prefixes.length) {
+        manager = command;
+        break;
+      }
+    } catch {
+      /* try the next compatible Conda command */
+    }
+  }
+  const runtimes = await Promise.all(
+    prefixes.slice(0, 32).map(async (prefix) => {
+      const candidates =
+        process.platform === "win32"
+          ? [
+              path.join(prefix, "python.exe"),
+              path.join(prefix, "Scripts", "python.exe"),
+            ]
+          : [
+              path.join(prefix, "bin", "python"),
+              path.join(prefix, "bin", "python3"),
+            ];
+      for (const candidate of candidates) {
+        try {
+          const inspected = await inspectPython(candidate);
+          return {
+            version: `Conda ${path.basename(prefix)} · ${inspected.fullVersion}`,
+            path: inspected.path,
+            installed: true,
+            scope: "system" as const,
+            manager: "conda" as const,
+          };
+        } catch {
+          /* continue through the platform's environment layouts */
+        }
+      }
+      return null;
+    }),
+  );
+  return runtimes
+    .filter(
+      (runtime): runtime is NonNullable<typeof runtime> => runtime !== null,
+    )
+    .map((runtime) => ({
+      ...runtime,
+      version: `${runtime.version} · ${manager}`,
+    }));
 }
 async function uvExecutable() {
   const name = process.platform === "win32" ? "uv.exe" : "uv";
@@ -1191,16 +1395,14 @@ async function ownedProjectPythonEnvironment(
 ) {
   if (!project) throw new Error("Open a project first");
   const inspected = await inspectPython(interpreter);
-  const binaryDirectory = path.dirname(inspected.path);
-  if (
-    !["scripts", "bin"].includes(path.basename(binaryDirectory).toLowerCase())
-  )
+  const detected = await pythonEnvironmentForInterpreter(inspected.path);
+  if (!detected)
     throw new Error("Select a project environment before installing packages");
-  const [root, environment, appEnvironment] = await Promise.all([
+  const [root, appEnvironment] = await Promise.all([
     fs.realpath(project),
-    fs.realpath(path.dirname(binaryDirectory)),
     appProjectEnvironmentRoot(project),
   ]);
+  const environment = detected.environment;
   const relative = path.relative(root, environment);
   const insideProject =
     !relative.startsWith("..") && !path.isAbsolute(relative);
@@ -1214,27 +1416,14 @@ async function ownedProjectPythonEnvironment(
     inspected,
     environment,
     location: insideProject ? ("project" as const) : ("app" as const),
+    manager: detected.kind,
   };
 }
 async function projectEnvironmentInterpreters(project = projectRoot) {
   if (!project) return [];
-  const root = await fs.realpath(project);
-  const executable =
-    process.platform === "win32" ? "Scripts/python.exe" : "bin/python";
-  const candidates = [
-    path.join(root, ".venv", executable),
-    path.join(root, "venv", executable),
-    path.join(root, "env", executable),
-  ];
-  const namedRoot = path.join(root, ".oscode", "envs");
-  const named = await fs
-    .readdir(namedRoot, { withFileTypes: true })
-    .catch(() => []);
-  for (const entry of named
-    .filter((item) => item.isDirectory())
-    .sort((left, right) => left.name.localeCompare(right.name)))
-    candidates.push(path.join(namedRoot, entry.name, executable));
-  return candidates;
+  return (await discoverProjectPythonEnvironments(project)).map(
+    (candidate) => candidate.interpreter,
+  );
 }
 async function existingProjectPythonEnvironment(
   interpreter = "",
@@ -1248,9 +1437,10 @@ async function existingProjectPythonEnvironment(
       // where a project's packages should be installed.
     }
   }
-  const candidates = [await appProjectEnvironmentInterpreter(project)];
-  if (!interpreter)
-    candidates.push(...(await projectEnvironmentInterpreters(project)));
+  const candidates = [
+    ...(await projectEnvironmentInterpreters(project)),
+    await appProjectEnvironmentInterpreter(project),
+  ];
   for (const candidate of candidates) {
     try {
       return await ownedProjectPythonEnvironment(candidate, project);
@@ -1269,6 +1459,17 @@ async function rememberProjectPython(
   await savePythonSelections(
     setPythonSelection(await readPythonSelections(), root, interpreter),
   );
+}
+function projectPythonEnvironmentVariables(
+  environment: string,
+  manager: "venv" | "conda",
+) {
+  return {
+    UV_PROJECT_ENVIRONMENT: environment,
+    ...(manager === "conda"
+      ? { CONDA_PREFIX: environment }
+      : { VIRTUAL_ENV: environment }),
+  };
 }
 async function createProjectPythonEnvironment(
   baseInterpreter: string,
@@ -1329,6 +1530,24 @@ async function preferredProjectPythonInterpreter(project = projectRoot) {
   const selected = (await readPythonSelections())[root];
   if (selected) {
     try {
+      return (await ownedProjectPythonEnvironment(selected, project)).inspected
+        .path;
+    } catch {
+      // A saved base interpreter should not hide a project environment that
+      // appeared later (for example one created by PyCharm or Poetry).
+    }
+  }
+  for (const candidate of await projectEnvironmentInterpreters(project)) {
+    try {
+      const detected = await ownedProjectPythonEnvironment(candidate, project);
+      await rememberProjectPython(detected.inspected.path, project);
+      return detected.inspected.path;
+    } catch {
+      /* continue through every validated project environment */
+    }
+  }
+  if (selected) {
+    try {
       return (await inspectPython(selected)).path;
     } catch {
       // Fall back to the bundled runtime if the saved interpreter moved.
@@ -1350,7 +1569,7 @@ async function installProjectPythonPackages(
   const packages = requestedPackages.map(validPythonPackageSpec);
   const baseInterpreter =
     interpreter || (await preferredProjectPythonInterpreter(project));
-  const { inspected, environment, created } =
+  const { inspected, environment, manager, created } =
     await ensureProjectPythonEnvironment(baseInterpreter, project);
   await fs.mkdir(uvCacheRoot(), { recursive: true });
   const result = await exec(
@@ -1360,8 +1579,7 @@ async function installProjectPythonPackages(
       cwd: project,
       timeout: 10 * 60_000,
       env: uvEnvironment({
-        VIRTUAL_ENV: environment,
-        UV_PROJECT_ENVIRONMENT: environment,
+        ...projectPythonEnvironmentVariables(environment, manager),
       }),
       maxBuffer: 4 * 1024 * 1024,
     },
@@ -1483,6 +1701,15 @@ function createWindow(show = true, restoreLastProject = true) {
   );
   window.on("close", (event) => {
     const context = windowContexts.get(webContentsId);
+    if (
+      process.platform === "darwin" &&
+      !quittingAfterCleanup &&
+      !context?.allowClose
+    ) {
+      event.preventDefault();
+      window.hide();
+      return;
+    }
     if (quittingAfterCleanup || context?.allowClose || !context?.dirty) return;
     event.preventDefault();
     if (!context || context.confirmOpen) return;
@@ -1518,7 +1745,6 @@ function createWindow(show = true, restoreLastProject = true) {
       runningScriptOwner = null;
       runningDebug = false;
     }
-    if (aiExecutionOwner?.id === ownerId) void aiService.stop();
     if (mainWindow === window)
       mainWindow = BrowserWindow.getAllWindows()[0] || null;
   });
@@ -1542,6 +1768,18 @@ async function runSmokeTest(window: BrowserWindow) {
   );
   try {
     await fs.mkdir(smokeProject, { recursive: true });
+    const smokeEnvironment = path.join(smokeProject, ".venv");
+    await fs.rm(smokeEnvironment, { recursive: true, force: true });
+    const smokePythons = await containedPythonList();
+    const smokePython =
+      smokePythons.get("3.12")?.path || [...smokePythons.values()][0]?.path;
+    if (!smokePython)
+      throw new Error("Bundled Python was unavailable for environment smoke");
+    await exec(smokePython, ["-m", "venv", "--without-pip", smokeEnvironment], {
+      cwd: smokeProject,
+      timeout: 60_000,
+      env: pythonRuntimeEnvironment(app.getPath("userData")),
+    });
     await fs.writeFile(
       path.join(smokeProject, "smoke.py"),
       "message = 'smoke_ready'\nprint(message)\n",
@@ -1735,6 +1973,12 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.savePreferences === 'function' &&
         typeof window.oscode?.listSaveHistory === 'function' &&
         typeof window.oscode?.restoreSaveHistory === 'function' &&
+        typeof window.oscode?.duplicateProjectItem === 'function' &&
+        typeof window.oscode?.chooseProjectDirectory === 'function' &&
+        typeof window.oscode?.transferProjectItem === 'function' &&
+        typeof window.oscode?.copyProjectPath === 'function' &&
+        typeof window.oscode?.revealProjectItem === 'function' &&
+        typeof window.oscode?.saveFileAs === 'function' &&
         typeof window.oscode?.listMcpServers === 'function' &&
         typeof window.oscode?.saveMcpServer === 'function' &&
         typeof window.oscode?.removeMcpServer === 'function' &&
@@ -1772,7 +2016,9 @@ async function runSmokeTest(window: BrowserWindow) {
         () => !document.querySelector('.notification-row.update-prompt'),
         'remember automatic update choice'
       );
-      const aiHiddenAtBoot = !document.querySelector('.ai-panel');
+      const aiPanelAtBoot = document.querySelector('.ai-panel');
+      const aiHiddenAtBoot =
+        !aiPanelAtBoot || aiPanelAtBoot.hidden === true;
       const pythonControlsBeforeFile = Boolean(
         document.querySelector('[aria-label="Python interpreter"]')
       );
@@ -1807,10 +2053,88 @@ async function runSmokeTest(window: BrowserWindow) {
         );
       }
       file.click();
+      const projectPythonEnvironmentReady = Boolean(await waitFor(
+        () => {
+          const selector = document.querySelector('[aria-label="Python interpreter"]');
+          return selector?.value
+            .split(String.fromCharCode(92))
+            .join('/')
+            .includes('/.venv/')
+            ? selector
+            : null;
+        },
+        'automatic project Python environment selection'
+      ));
       const editor = await waitFor(
         () => document.querySelector('.local-editor-host[data-oscode-ready="true"]'),
         'local Monaco editor'
       );
+      file.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 220,
+        clientY: 260
+      }));
+      let fileMenu = await waitFor(
+        () => document.querySelector('.project-context-menu'),
+        'explorer file context menu'
+      );
+      const fileMenuLabels = [...fileMenu.querySelectorAll('button')].map(
+        button => button.textContent.trim()
+      );
+      const fileContextMenuReady = [
+        'Open',
+        'Open to the Side',
+        'Save As…',
+        'Duplicate',
+        'Move To…',
+        'Copy Relative Path',
+        'Reveal in File Manager',
+        'Move to Trash'
+      ].every(label => fileMenuLabels.some(item => item.startsWith(label)));
+      const fileMenuBounds = fileMenu.getBoundingClientRect();
+      const fileContextMenuGeometryReady =
+        fileMenuBounds.width >= 260 &&
+        parseFloat(getComputedStyle(fileMenu).borderRadius) >= 16 &&
+        parseFloat(getComputedStyle(fileMenu).paddingLeft) >= 8;
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true
+      }));
+      await waitFor(
+        () => !document.querySelector('.project-context-menu'),
+        'explorer context menu close'
+      );
+      const smokeTab = [...document.querySelectorAll('.tab')].find(
+        tab => tab.querySelector('.tab-select')?.textContent.trim() === 'smoke.py'
+      );
+      smokeTab.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 520,
+        clientY: 120
+      }));
+      fileMenu = await waitFor(
+        () => document.querySelector('.project-context-menu'),
+        'editor tab context menu'
+      );
+      const tabMenuLabels = [...fileMenu.querySelectorAll('button')].map(
+        button => button.textContent.trim()
+      );
+      const tabContextMenuReady = [
+        'Save',
+        'Save As…',
+        'Revert from Disk',
+        'Split Editor',
+        'Compare with…',
+        'Close Other Editors',
+        'Close Editors to the Right',
+        'Close All Editors'
+      ].every(label => tabMenuLabels.some(item => item.startsWith(label)));
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true
+      }));
       const swiftFile = [...document.querySelectorAll('.tree-row')].find(
         item => item.textContent.trim() === 'SmokeView.swift'
       );
@@ -2021,7 +2345,10 @@ async function runSmokeTest(window: BrowserWindow) {
         advancedRuntimeDock.getBoundingClientRect().width >= 600 &&
         parseFloat(advancedRuntimeContentStyle.paddingLeft) >= 24 &&
         parseFloat(advancedRuntimeSectionStyle.paddingLeft) >= 20 &&
-        advancedRuntimeActions.length === 2 &&
+        advancedRuntimeActions.length === 3 &&
+        advancedRuntimeActions.some(button =>
+          button.textContent.includes('Rescan project')
+        ) &&
         advancedRuntimeActions.every(button => {
           const rect = button.getBoundingClientRect();
           return (
@@ -2241,6 +2568,20 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedPermissionLabelRect = permissionToggle
         .querySelector(':scope > span > .ai-footer-label')
         .getBoundingClientRect();
+      const expandedModelToggleRect = modelToggle.getBoundingClientRect();
+      const expandedPermissionToggleRect = permissionToggle.getBoundingClientRect();
+      const expandedModelTitleStyle = getComputedStyle(
+        modelToggle.querySelector('.ai-footer-label b')
+      );
+      const expandedModelStatusStyle = getComputedStyle(
+        modelToggle.querySelector('.ai-footer-label small')
+      );
+      const expandedPermissionTitleStyle = getComputedStyle(
+        permissionToggle.querySelector('.ai-footer-label b')
+      );
+      const expandedPermissionStatusStyle = getComputedStyle(
+        permissionToggle.querySelector('.ai-footer-label small')
+      );
       const modelIconGap =
         expandedModelLabelRect.left - expandedModelIconRect.right;
       const permissionIconGap =
@@ -2273,6 +2614,30 @@ async function runSmokeTest(window: BrowserWindow) {
         .querySelector('[aria-label="AI settings"]')
         .getBoundingClientRect();
       const expandedExitRect = expandToggle.getBoundingClientRect();
+      const expandedComposerGap =
+        expandedComposerRect.top - expandedFooterRect.bottom;
+      const aiExpandedFooterControls = {
+        modelHeight: expandedModelToggleRect.height,
+        permissionHeight: expandedPermissionToggleRect.height,
+        modelTitleSize: parseFloat(expandedModelTitleStyle.fontSize),
+        modelStatusSize: parseFloat(expandedModelStatusStyle.fontSize),
+        permissionTitleSize: parseFloat(expandedPermissionTitleStyle.fontSize),
+        permissionStatusSize: parseFloat(expandedPermissionStatusStyle.fontSize),
+        composerGap: expandedComposerGap
+      };
+      const aiExpandedFooterControlsReady =
+        expandedModelToggleRect.height >= 63 &&
+        expandedPermissionToggleRect.height >= 63 &&
+        Math.abs(
+          expandedModelToggleRect.height - expandedPermissionToggleRect.height
+        ) <= 1 &&
+        expandedModelLabelRect.height >= 32 &&
+        expandedPermissionLabelRect.height >= 32 &&
+        aiExpandedFooterControls.modelTitleSize >= 15 &&
+        aiExpandedFooterControls.modelStatusSize >= 13 &&
+        aiExpandedFooterControls.permissionTitleSize >= 15 &&
+        aiExpandedFooterControls.permissionStatusSize >= 13 &&
+        expandedComposerGap >= 18;
       const layoutProbe = document.createElement('article');
       layoutProbe.className = 'ai-message assistant';
       layoutProbe.innerHTML =
@@ -2289,6 +2654,33 @@ async function runSmokeTest(window: BrowserWindow) {
         expandedContextStyle.backgroundColor === 'rgba(0, 0, 0, 0)' &&
         Math.abs(expandedExitRect.left - aiSettingsActionRect.right) <= 12 &&
         Math.abs(expandedExitRect.top - aiSettingsActionRect.top) <= 2;
+      modelToggle.click();
+      const expandedModelOption = await waitFor(
+        () => aiPanel.querySelector('.ai-tier-picker > button'),
+        'expanded model controls'
+      );
+      const expandedModelOptionHeight =
+        expandedModelOption.getBoundingClientRect().height;
+      permissionToggle.click();
+      const expandedPermissionOption = await waitFor(
+        () =>
+          aiPanel.querySelector('.ai-capability-bar > button') &&
+          !aiPanel.querySelector('.ai-tier-picker')
+            ? aiPanel.querySelector('.ai-capability-bar > button')
+            : null,
+        'exclusive expanded permission controls'
+      );
+      const expandedPermissionOptionHeight =
+        expandedPermissionOption.getBoundingClientRect().height;
+      const aiExpandedSelectorMenusReady =
+        expandedModelOptionHeight >= 55 &&
+        expandedPermissionOptionHeight >= 55 &&
+        !aiPanel.querySelector('.ai-tier-picker');
+      permissionToggle.click();
+      await waitFor(
+        () => !aiPanel.querySelector('.ai-capability-bar'),
+        'expanded permission controls close'
+      );
       expandToggle.click();
       await waitFor(
         () => !aiPanel.classList.contains('expanded'),
@@ -2532,7 +2924,7 @@ async function runSmokeTest(window: BrowserWindow) {
         explorerToolbarReady: (() => {
           const toolbar = document.querySelector('.explorer-toolbar');
           const buttons = [...(toolbar?.querySelectorAll('button') || [])];
-          if (!toolbar || buttons.length !== 7) return false;
+          if (!toolbar || buttons.length !== 9) return false;
           const bounds = toolbar.getBoundingClientRect();
           return (
             getComputedStyle(toolbar).overflowX !== 'auto' &&
@@ -2549,6 +2941,9 @@ async function runSmokeTest(window: BrowserWindow) {
           fileTabCloseHitReady && fileTabCloseReady
         ),
         fileTabPillHighlightReady,
+        fileContextMenuReady,
+        fileContextMenuGeometryReady,
+        tabContextMenuReady,
         editorCommandsReady: (() => {
           const bar = document.querySelector('.editor-command-bar');
           const buttons = [...(bar?.querySelectorAll('button') || [])];
@@ -2599,12 +2994,16 @@ async function runSmokeTest(window: BrowserWindow) {
         advancedRuntimeLayoutReady,
         mcpReady,
         settingsReady: Boolean(settingsDock),
+        utilityPanelWidths: {
+          advanced: advancedPanelWidth,
+          settings: settingsPanelWidth,
+          aiSettings: aiSettingsPanelWidth
+        },
         utilityPanelGeometryReady:
-          advancedPanelWidth >= 480 &&
-          settingsPanelWidth >= 480 &&
+          advancedPanelWidth >= 320 &&
+          settingsPanelWidth >= 320 &&
           aiSettingsPanelWidth >= 480 &&
-          Math.abs(advancedPanelWidth - settingsPanelWidth) <= 2 &&
-          Math.abs(settingsPanelWidth - aiSettingsPanelWidth) <= 2,
+          Math.abs(advancedPanelWidth - settingsPanelWidth) <= 2,
         closeIconHitTargetsReady:
           advancedCloseHitReady &&
           settingsCloseHitReady &&
@@ -2627,6 +3026,9 @@ async function runSmokeTest(window: BrowserWindow) {
         aiSelectorGeometryReady,
         aiFooterSelectorSpacing,
         aiFooterSelectorSpacingReady,
+        aiExpandedFooterControls,
+        aiExpandedFooterControlsReady,
+        aiExpandedSelectorMenusReady,
         aiExpandedLayoutReady,
         aiTextFieldsBorderless,
         aiContextReady: Boolean(aiContextReady),
@@ -2634,6 +3036,7 @@ async function runSmokeTest(window: BrowserWindow) {
         lightThemeReady: Boolean(lightThemeReady),
         terminalPanelHeight,
         pythonPackageManagerReady,
+        projectPythonEnvironmentReady,
         pythonPackageInputReady,
         pythonPackageAddReady,
         pythonPackageListReady,
@@ -3022,7 +3425,6 @@ async function runSmokeTest(window: BrowserWindow) {
       result.brandReady !== true ||
       result.bridgeReady !== true ||
       result.autoUpdatePromptReady !== true ||
-      result.pythonControlsBeforeFile !== false ||
       result.projectReady !== true ||
       Number(result.sidebarWidth) < 510 ||
       Number(result.sidebarWidth) > 530 ||
@@ -3030,6 +3432,9 @@ async function runSmokeTest(window: BrowserWindow) {
       result.editorReady !== true ||
       result.fileTabCloseReady !== true ||
       result.fileTabPillHighlightReady !== true ||
+      result.fileContextMenuReady !== true ||
+      result.fileContextMenuGeometryReady !== true ||
+      result.tabContextMenuReady !== true ||
       result.editorCommandsReady !== true ||
       result.markdownReady !== true ||
       result.imageMediaReady !== true ||
@@ -3070,6 +3475,8 @@ async function runSmokeTest(window: BrowserWindow) {
       result.aiPopupsExclusive !== true ||
       result.aiSelectorGeometryReady !== true ||
       result.aiFooterSelectorSpacingReady !== true ||
+      result.aiExpandedFooterControlsReady !== true ||
+      result.aiExpandedSelectorMenusReady !== true ||
       result.aiExpandedLayoutReady !== true ||
       result.aiTextFieldsBorderless !== true ||
       result.aiContextReady !== true ||
@@ -3083,6 +3490,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.horizontalMenuScrollReady !== true ||
       result.lightThemeReady !== true ||
       result.pythonPackageManagerReady !== true ||
+      result.projectPythonEnvironmentReady !== true ||
       result.pythonPackageInputReady !== true ||
       result.pythonPackageAddReady !== true ||
       result.pythonPackageListReady !== true ||
@@ -3149,7 +3557,13 @@ function createApplicationMenu() {
           {
             label: app.name,
             submenu: [
-              { role: "about" as const },
+              { label: `About ${app.name}`, click: about },
+              { type: "separator" as const },
+              {
+                label: "Settings…",
+                accelerator: "CmdOrCtrl+,",
+                click: send("open-settings"),
+              },
               { type: "separator" as const },
               { role: "services" as const },
               { type: "separator" as const },
@@ -3168,7 +3582,7 @@ function createApplicationMenu() {
         {
           id: "file-new-window",
           label: "New Window",
-          accelerator: "CmdOrCtrl+Shift+N",
+          accelerator: "CmdOrCtrl+Alt+N",
           click: () => createWindow(true, false),
         },
         { type: "separator" },
@@ -3182,14 +3596,83 @@ function createApplicationMenu() {
           accelerator: "CmdOrCtrl+N",
           click: send("new-file"),
         },
+        {
+          label: "New Folder",
+          accelerator: "CmdOrCtrl+Shift+N",
+          click: send("new-folder"),
+        },
         { type: "separator" },
         {
           label: "Save",
           accelerator: "CmdOrCtrl+S",
           click: send("save"),
         },
+        {
+          label: "Save As…",
+          accelerator: "CmdOrCtrl+Shift+S",
+          click: send("save-as"),
+        },
+        {
+          label: "Save All",
+          accelerator: "CmdOrCtrl+Alt+S",
+          click: send("save-all"),
+        },
+        {
+          label: "Revert File",
+          click: send("revert-file"),
+        },
         { type: "separator" },
-        process.platform === "darwin" ? { role: "close" } : { role: "quit" },
+        {
+          label: "Rename Selected Item",
+          accelerator: "F2",
+          click: send("rename-selected"),
+        },
+        {
+          label: "Duplicate Selected Item",
+          click: send("duplicate-selected"),
+        },
+        {
+          label: "Copy Selected Item To…",
+          click: send("copy-selected"),
+        },
+        {
+          label: "Move Selected Item To…",
+          click: send("move-selected"),
+        },
+        {
+          label: "Move Selected Item to Trash",
+          accelerator:
+            process.platform === "darwin" ? "Cmd+Backspace" : "Delete",
+          click: send("trash-selected"),
+        },
+        { type: "separator" },
+        {
+          label: "Reveal Selected Item in File Manager",
+          click: send("reveal-selected"),
+        },
+        {
+          label: "Copy Full Path",
+          click: send("copy-path"),
+        },
+        {
+          label: "Copy Relative Path",
+          accelerator: "CmdOrCtrl+Alt+C",
+          click: send("copy-relative-path"),
+        },
+        { type: "separator" },
+        {
+          label: "Close Editor",
+          accelerator: "CmdOrCtrl+W",
+          click: send("close-editor"),
+        },
+        {
+          label: "Close All Editors",
+          accelerator: "CmdOrCtrl+Shift+W",
+          click: send("close-all-editors"),
+        },
+        ...(process.platform === "darwin"
+          ? []
+          : [{ type: "separator" as const }, { role: "quit" as const }]),
       ],
     },
     {
@@ -3202,16 +3685,111 @@ function createApplicationMenu() {
         { role: "copy" },
         { role: "paste" },
         { role: "selectAll" },
+        { type: "separator" },
+        {
+          label: "Find",
+          accelerator: "CmdOrCtrl+F",
+          click: send("find"),
+        },
+        {
+          label: "Replace",
+          accelerator: process.platform === "darwin" ? "Cmd+Alt+F" : "Ctrl+H",
+          click: send("replace"),
+        },
+        {
+          label: "Find in Files",
+          accelerator: "CmdOrCtrl+Shift+F",
+          click: send("find-in-files"),
+        },
+      ],
+    },
+    {
+      label: "Selection",
+      submenu: [
+        {
+          label: "Format Document",
+          accelerator:
+            process.platform === "darwin" ? "Shift+Alt+F" : "Shift+Alt+F",
+          click: send("format-document"),
+        },
+        {
+          label: "Toggle Line Comment",
+          accelerator: "CmdOrCtrl+/",
+          click: send("toggle-line-comment"),
+        },
+        { type: "separator" },
+        {
+          label: "Duplicate Line or Selection",
+          accelerator: "Shift+Alt+Down",
+          click: send("duplicate-line"),
+        },
+        {
+          label: "Delete Line",
+          accelerator: "CmdOrCtrl+Shift+K",
+          click: send("delete-line"),
+        },
+        {
+          label: "Move Line Up",
+          accelerator: "Alt+Up",
+          click: send("move-line-up"),
+        },
+        {
+          label: "Move Line Down",
+          accelerator: "Alt+Down",
+          click: send("move-line-down"),
+        },
+      ],
+    },
+    {
+      label: "Go",
+      submenu: [
+        {
+          label: "Go to Line…",
+          accelerator: "CmdOrCtrl+G",
+          click: send("go-to-line"),
+        },
+        { type: "separator" },
+        {
+          label: "Next Editor",
+          accelerator: "CmdOrCtrl+PageDown",
+          click: send("next-editor"),
+        },
+        {
+          label: "Previous Editor",
+          accelerator: "CmdOrCtrl+PageUp",
+          click: send("previous-editor"),
+        },
       ],
     },
     {
       label: "View",
       submenu: [
         {
+          label: "Toggle Files",
+          accelerator: "CmdOrCtrl+B",
+          click: send("toggle-sidebar"),
+        },
+        {
+          label: "Toggle AI Coder",
+          accelerator: "CmdOrCtrl+Shift+I",
+          click: send("toggle-ai"),
+        },
+        {
           label: "Toggle Terminal",
           accelerator: "CmdOrCtrl+`",
           click: send("toggle-terminal"),
         },
+        { type: "separator" },
+        {
+          label: "Split Editor",
+          accelerator: "CmdOrCtrl+\\",
+          click: send("split-editor"),
+        },
+        {
+          label: "Compare File…",
+          click: send("compare-file"),
+        },
+        { type: "separator" },
         {
           label: "Toggle Theme",
           accelerator: "CmdOrCtrl+Shift+L",
@@ -3240,6 +3818,12 @@ function createApplicationMenu() {
     {
       label: "Window",
       submenu: [
+        {
+          label: "Close Window",
+          accelerator: "CmdOrCtrl+Alt+W",
+          click: () => mainWindow?.close(),
+        },
+        { type: "separator" },
         { role: "minimize" },
         { role: "zoom" },
         ...(process.platform === "darwin"
@@ -3503,6 +4087,10 @@ function registerIpc() {
     appUpdateService.installReadyUpdate(),
   );
   ipcMain.handle("ai:list-models", () => aiService.listModels());
+  ipcMain.handle("ai:pipeline-current", (event) => {
+    activateSender(event);
+    return aiPipelineStateFor(event.sender.id);
+  });
   ipcMain.handle("ai:hardware-profile", () => aiService.hardwareProfile());
   ipcMain.handle("ai:install-cuda-support", () =>
     aiService.installCudaSupport(),
@@ -3734,9 +4322,13 @@ function registerIpc() {
   ipcMain.handle("ai:revert-history", (event, id: unknown) =>
     withSenderAiProject(event, () => aiService.revertHistory(id)),
   );
-  ipcMain.handle("ai:stop", (event) =>
-    aiExecutionOwner?.id === event.sender.id ? aiService.stop() : false,
-  );
+  ipcMain.handle("ai:stop", (event) => {
+    const senderRoot = windowContexts.get(event.sender.id)?.projectRoot || "";
+    return aiExecutionOwner?.id === event.sender.id ||
+      (senderRoot !== "" && senderRoot === aiProjectRoot)
+      ? aiService.stop()
+      : false;
+  });
   ipcMain.handle("agent:stop-control", () => agentControlService.stop());
   ipcMain.handle("agent:browser-snapshot", () =>
     agentControlService.browserSnapshot(),
@@ -3814,7 +4406,8 @@ function registerIpc() {
   });
   ipcMain.handle(
     "project:create-item",
-    async (_e, directory: string, requestedName: string, kind: string) => {
+    async (event, directory: string, requestedName: string, kind: string) => {
+      activateSender(event);
       if (kind !== "file" && kind !== "folder")
         throw new Error("Unsupported project item type");
       const parent = await safeProjectPath(directory);
@@ -3841,7 +4434,8 @@ function registerIpc() {
   );
   ipcMain.handle(
     "project:rename-item",
-    async (_e, target: string, requestedName: string) => {
+    async (event, target: string, requestedName: string) => {
+      activateSender(event);
       const current = await safeProjectPath(target);
       const root = await fs.realpath(projectRoot);
       if (current === root)
@@ -3857,8 +4451,99 @@ function registerIpc() {
     },
   );
   ipcMain.handle(
+    "project:duplicate-item",
+    async (event, target: string, rawContent: unknown) => {
+      const context = activateSender(event);
+      if (!context?.projectRoot) throw new Error("Open a project first");
+      const content =
+        typeof rawContent === "string"
+          ? validateTextContent(rawContent)
+          : undefined;
+      const result = await duplicateProjectEntry(
+        context.projectRoot,
+        target,
+        content,
+      );
+      return {
+        ...result,
+        tree: await tree(context.projectRoot),
+        item: {
+          name: result.name,
+          path: result.newPath,
+          kind: result.kind,
+        },
+      };
+    },
+  );
+  ipcMain.handle("project:choose-directory", async (event, target: string) => {
+    const context = activateSender(event);
+    if (!context?.projectRoot) throw new Error("Open a project first");
+    const current = await safeProjectPath(target);
+    const stat = await fs.stat(current);
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(owner || undefined, {
+      title: "Choose a project folder",
+      defaultPath: stat.isDirectory() ? current : path.dirname(current),
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const directory = await safeProjectPath(result.filePaths[0]);
+    if (!(await fs.stat(directory)).isDirectory())
+      throw new Error("Choose a folder inside the current project");
+    return directory;
+  });
+  ipcMain.handle(
+    "project:transfer-item",
+    async (
+      event,
+      source: string,
+      destinationDirectory: string,
+      rawMode: unknown,
+    ) => {
+      const context = activateSender(event);
+      if (!context?.projectRoot) throw new Error("Open a project first");
+      const mode = rawMode === "move" ? "move" : "copy";
+      const result = await transferProjectEntry(
+        context.projectRoot,
+        source,
+        destinationDirectory,
+        mode,
+      );
+      return {
+        ...result,
+        tree: await tree(context.projectRoot),
+        item: {
+          name: result.name,
+          path: result.newPath,
+          kind: result.kind,
+        },
+      };
+    },
+  );
+  ipcMain.handle(
+    "project:copy-path",
+    async (event, target: string, relative: unknown) => {
+      const context = activateSender(event);
+      if (!context?.projectRoot) throw new Error("Open a project first");
+      const current = await safeProjectPath(target);
+      const text =
+        relative === true
+          ? path.relative(context.projectRoot, current).replace(/\\/g, "/")
+          : current;
+      clipboard.writeText(text);
+      return text;
+    },
+  );
+  ipcMain.handle("project:reveal-item", async (event, target: string) => {
+    activateSender(event);
+    const current = await safeProjectPath(target);
+    shell.showItemInFolder(current);
+    return true;
+  });
+  ipcMain.handle(
     "project:trash-item",
-    async (_e, target: string, rawUnsaved: unknown) => {
+    async (event, target: string, rawUnsaved: unknown) => {
+      activateSender(event);
       const current = await safeProjectPath(target);
       const root = await fs.realpath(projectRoot);
       if (current === root)
@@ -3977,6 +4662,55 @@ function registerIpc() {
         await saveHistoryStore.record(root, relative, before, source);
       await fs.writeFile(file, next, "utf8");
       return true;
+    },
+  );
+  ipcMain.handle(
+    "file:save-as",
+    async (event, target: string, content: unknown) => {
+      const context = activateSender(event);
+      if (!context?.projectRoot) throw new Error("Open a project first");
+      const source = await safeProjectPath(target);
+      if (!(await fs.stat(source)).isFile())
+        throw new Error("Only regular text files can be saved as a new file");
+      const next =
+        typeof content === "string" ? validateTextContent(content) : undefined;
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const result = await dialog.showSaveDialog(owner || undefined, {
+        title: "Save File As",
+        defaultPath: source,
+        buttonLabel: "Save As",
+        properties: ["showOverwriteConfirmation", "createDirectory"],
+      });
+      if (result.canceled || !result.filePath) return null;
+      const root = await fs.realpath(context.projectRoot);
+      const parent = await fs.realpath(path.dirname(result.filePath));
+      const relativeParent = path.relative(root, parent);
+      if (relativeParent.startsWith("..") || path.isAbsolute(relativeParent))
+        throw new Error("Save As must remain inside the current project");
+      const name = projectItemName(path.basename(result.filePath));
+      const destination = path.join(parent, name);
+      const existing = await fs.lstat(destination).catch(() => null);
+      if (existing?.isSymbolicLink())
+        throw new Error("Linked files cannot be replaced");
+      if (existing && !existing.isFile())
+        throw new Error("A folder already uses that name");
+      if (existing && next !== undefined) {
+        const before = decodeTextFile(await fs.readFile(destination));
+        if (before !== next) {
+          const relative = path.relative(root, destination).replace(/\\/g, "/");
+          await saveHistoryStore.record(root, relative, before, "manual");
+        }
+      }
+      if (destination !== source) {
+        if (next === undefined) await fs.copyFile(source, destination);
+        else await fs.writeFile(destination, next, "utf8");
+      } else if (next !== undefined)
+        await fs.writeFile(destination, next, "utf8");
+      return {
+        tree: await tree(root),
+        newPath: destination,
+        name,
+      };
     },
   );
   ipcMain.handle("file:history-list", async (event, target: unknown) => {
@@ -4293,13 +5027,16 @@ function registerIpc() {
       if (interpreter) {
         const inspected = await inspectPython(interpreter);
         const binaryDir = path.dirname(inspected.path);
-        const parent = path.dirname(binaryDir);
-        const looksLikeVenv = ["scripts", "bin"].includes(
-          path.basename(binaryDir).toLowerCase(),
-        );
-        if (looksLikeVenv) {
-          terminalEnv.VIRTUAL_ENV = parent;
-          terminalEnv.UV_PROJECT_ENVIRONMENT = parent;
+        const detected = await pythonEnvironmentForInterpreter(inspected.path);
+        if (detected) {
+          if (detected.kind === "conda") {
+            terminalEnv.CONDA_PREFIX = detected.environment;
+            delete terminalEnv.VIRTUAL_ENV;
+          } else {
+            terminalEnv.VIRTUAL_ENV = detected.environment;
+            delete terminalEnv.CONDA_PREFIX;
+          }
+          terminalEnv.UV_PROJECT_ENVIRONMENT = detected.environment;
           delete terminalEnv.PYTHONHOME;
           terminalEnv[pathKey] =
             `${binaryDir}${path.delimiter}${terminalEnv[pathKey] || ""}`;
@@ -4382,6 +5119,7 @@ function registerIpc() {
             path: stdout.trim(),
             installed: true,
             scope: "system" as const,
+            manager: "system" as const,
           };
         } catch {
           try {
@@ -4400,6 +5138,7 @@ function registerIpc() {
               path: stdout.trim(),
               installed: true,
               scope: "app" as const,
+              manager: "uv" as const,
             };
           } catch {
             return {
@@ -4407,12 +5146,27 @@ function registerIpc() {
               path: "",
               installed: false,
               scope: "app" as const,
+              manager: "uv" as const,
             };
           }
         }
       }),
     );
-    const custom = await customPythonList();
+    const [custom, genericSystem, conda] = await Promise.all([
+      customPythonList(),
+      Promise.all([
+        commandPythonRuntime("python3"),
+        commandPythonRuntime("python"),
+      ]),
+      condaPythonList(),
+    ]);
+    const additional = [
+      ...custom,
+      ...genericSystem.filter(
+        (runtime): runtime is PythonRuntimeRecord => runtime !== null,
+      ),
+      ...conda,
+    ];
     const knownPaths = new Set(
       discovered
         .filter((item) => item.path)
@@ -4421,7 +5175,7 @@ function registerIpc() {
         ),
     );
     discovered.unshift(
-      ...custom.filter(
+      ...additional.filter(
         (item) =>
           !knownPaths.has(
             process.platform === "win32" ? item.path.toLowerCase() : item.path,
@@ -4458,17 +5212,30 @@ function registerIpc() {
             version:
               owned.location === "app"
                 ? `App environment · ${inspected.fullVersion}`
-                : `Project ${environmentName} · ${inspected.fullVersion}`,
+                : `Project ${environmentName} · ${
+                    owned.manager === "conda" ? "Conda · " : ""
+                  }${inspected.fullVersion}`,
             path: inspected.path,
             installed: true,
             scope: owned.location === "app" ? "app-project" : "project",
+            manager: owned.location === "app" ? "uv" : owned.manager,
           });
         } catch {
           /* ignore incomplete environment */
         }
       }
     }
-    return [...projectRuntimes, ...discovered];
+    const unique = new Map<string, PythonRuntimeRecord>();
+    for (const runtime of [...projectRuntimes, ...discovered]) {
+      const key =
+        runtime.path.length > 0
+          ? process.platform === "win32"
+            ? runtime.path.toLowerCase()
+            : runtime.path
+          : `missing:${runtime.version}`;
+      if (!unique.has(key)) unique.set(key, runtime);
+    }
+    return [...unique.values()];
   });
   ipcMain.handle("python:get-selection", async (event) => {
     activateSender(event);
@@ -4517,6 +5284,7 @@ function registerIpc() {
       path: executable,
       installed: true,
       scope: "system" as const,
+      manager: "system" as const,
     };
     const existing = await customPythonList();
     const normalized =
@@ -4581,6 +5349,7 @@ function registerIpc() {
           path: created.path,
           installed: true,
           scope: "project" as const,
+          manager: "venv" as const,
         };
       } catch (error) {
         await fs.rm(destination, { recursive: true, force: true });
@@ -4632,8 +5401,10 @@ function registerIpc() {
         cwd: projectRoot,
         timeout: 60_000,
         env: uvEnvironment({
-          VIRTUAL_ENV: selected.environment,
-          UV_PROJECT_ENVIRONMENT: selected.environment,
+          ...projectPythonEnvironmentVariables(
+            selected.environment,
+            selected.manager,
+          ),
         }),
         maxBuffer: 4 * 1024 * 1024,
       },
@@ -4669,6 +5440,7 @@ function registerIpc() {
       interpreter: selected.inspected.path,
       environment: selected.environment,
       location: selected.location,
+      manager: selected.manager,
       packages,
     };
   });
@@ -4687,8 +5459,10 @@ function registerIpc() {
           cwd: projectRoot,
           timeout: 10 * 60_000,
           env: uvEnvironment({
-            VIRTUAL_ENV: selected.environment,
-            UV_PROJECT_ENVIRONMENT: selected.environment,
+            ...projectPythonEnvironmentVariables(
+              selected.environment,
+              selected.manager,
+            ),
           }),
           maxBuffer: 4 * 1024 * 1024,
         },
@@ -4761,9 +5535,14 @@ function registerIpc() {
         const pathKey = process.platform === "win32" ? "Path" : "PATH";
         runEnvironment = {
           ...runEnvironment,
-          VIRTUAL_ENV: owned.environment,
+          ...(owned.manager === "conda"
+            ? { CONDA_PREFIX: owned.environment }
+            : { VIRTUAL_ENV: owned.environment }),
+          UV_PROJECT_ENVIRONMENT: owned.environment,
           [pathKey]: `${binaryDirectory}${path.delimiter}${runEnvironment[pathKey] || ""}`,
         };
+        if (owned.manager === "conda") delete runEnvironment.VIRTUAL_ENV;
+        else delete runEnvironment.CONDA_PREFIX;
         delete runEnvironment.PYTHONHOME;
       } catch {
         // A system interpreter runs directly without virtual-environment vars.
@@ -4932,16 +5711,12 @@ app.whenReady().then(async () => {
       return python;
     },
     status: (message) => broadcastToRenderers("ai:status", message),
-    modelOutput: (output) => {
-      if (aiExecutionOwner && !aiExecutionOwner.isDestroyed())
-        aiExecutionOwner.send("ai:model-output", output);
-    },
+    modelOutput: (output) =>
+      broadcastToAiProject(currentAiProjectRoot(), "ai:model-output", output),
     checkpoint: (root, relative, before) =>
       saveHistoryStore.record(root, relative, before, "agent").then(() => {}),
-    action: (action) => {
-      if (aiExecutionOwner && !aiExecutionOwner.isDestroyed())
-        aiExecutionOwner.send("ai:action", action);
-    },
+    action: (action) =>
+      broadcastToAiProject(currentAiProjectRoot(), "ai:action", action),
     activity: (activity) => broadcastToRenderers("agent:activity", activity),
     platformioState: () => platformioService.state(currentAiProjectRoot()),
     platformioInstall: async () => {
@@ -5047,6 +5822,7 @@ app.on("before-quit", (event) => {
     terminals.size === 0 &&
     !agentControlService?.isActive()
   ) {
+    quittingAfterCleanup = true;
     void disposeAiServiceSafely();
     return;
   }
@@ -5057,5 +5833,10 @@ app.on("before-quit", (event) => {
     .finally(() => app.quit());
 });
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
 });
