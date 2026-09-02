@@ -13849,12 +13849,14 @@ button > svg * {
   display: none !important;
 }
 
-/* The compact model and permission circles form one quiet, contiguous rail. */
+/* Keep the compact model and permission circles left-aligned, with enough
+   breathing room that their independent hit targets never read as one pill. */
 .ai-panel:not(.expanded) .ai-footer-controls {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: stretch;
-  gap: 0;
+  gap: 10px;
+  padding-inline: 14px;
 }
 
 /* Full-window controls begin at the reading column's left edge, matching
@@ -13974,7 +13976,7 @@ button > svg * {
 
 .ai-chat-tab > .ai-chat-tab-more:hover,
 .ai-chat-tab > .ai-chat-tab-more:focus-visible {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: transparent;
   color: var(--accent);
 }
 
@@ -13987,7 +13989,8 @@ button > svg * {
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 18px;
-  background: color-mix(in srgb, var(--panel) 96%, black 4%);
+  background: var(--overlay-surface, #2b2e2f);
+  color: var(--text, #f0f1f1);
   box-shadow: 0 18px 44px rgb(0 0 0 / 28%);
 }
 

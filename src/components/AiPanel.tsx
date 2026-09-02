@@ -1161,9 +1161,21 @@ export function AiPanel({
   }, [agentState.chats]);
   useEffect(() => {
     if (!openChatId) return;
-    const chat = agentState.chats.find((item) => item.id === openChatId);
-    if (!chat || chat.id === chatIdRef.current) return;
-    chooseChat(chat);
+    let cancelled = false;
+    void (async () => {
+      let chat = agentState.chats.find((item) => item.id === openChatId);
+      if (!chat) {
+        const next = await window.oscode.aiAgentState();
+        if (cancelled) return;
+        chat = next.chats.find((item) => item.id === openChatId);
+        if (chat) setAgentState(next);
+      }
+      if (!chat || chat.id === chatIdRef.current) return;
+      chooseChat(chat, false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [openChatId, agentState.chats]);
 
   const chooseLocal = async (
@@ -2314,7 +2326,7 @@ export function AiPanel({
               <FeatherIcon icon="x" size="16" /> Close chat
             </button>
           </div>,
-          document.body,
+          document.querySelector(".app") || document.body,
         )}
 
       {pipelineState.state === "waiting" && !anotherChatIsRunning && (

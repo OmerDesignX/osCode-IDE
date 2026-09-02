@@ -2522,6 +2522,9 @@ async function runSmokeTest(window: BrowserWindow) {
         .querySelector(':scope > svg:first-child')
         .getBoundingClientRect();
       const permissionToggleRect = permissionToggle.getBoundingClientRect();
+      const compactFooterRect = aiPanel
+        .querySelector('.ai-footer-controls')
+        .getBoundingClientRect();
       const permissionIconRect = permissionToggle
         .querySelector(':scope > span > svg')
         .getBoundingClientRect();
@@ -2653,6 +2656,7 @@ async function runSmokeTest(window: BrowserWindow) {
         modelIconGap,
         permissionIconGap,
         compactFooterControlGap,
+        compactFooterLeftInset: modelToggleRect.left - compactFooterRect.left,
         compactModelInset: modelIconRect.left - modelToggleRect.left,
         compactPermissionInset:
           permissionIconRect.left - permissionToggleRect.left
@@ -2664,7 +2668,10 @@ async function runSmokeTest(window: BrowserWindow) {
         permissionIconGap >= 7 &&
         permissionIconGap <= 11 &&
         Math.abs(modelIconGap - permissionIconGap) <= 1 &&
-        compactFooterControlGap <= 1;
+        compactFooterControlGap >= 8 &&
+        compactFooterControlGap <= 12 &&
+        modelToggleRect.left - compactFooterRect.left >= 12 &&
+        modelToggleRect.left - compactFooterRect.left <= 16;
       const aiFooterAutoHideReady =
         expandedModelToggleRect.width >= 300 &&
         expandedPermissionToggleRect.width >= 300 &&

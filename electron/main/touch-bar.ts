@@ -5,10 +5,6 @@ import {
   type NativeImage,
 } from "electron";
 
-const accent = "#89cff0";
-const dark = "#24292c";
-const danger = "#d76b7a";
-
 type OsCodeTouchBarState = {
   editable: boolean;
   dirty: boolean;
@@ -16,6 +12,13 @@ type OsCodeTouchBarState = {
   running: boolean;
   terminalOpen: boolean;
   aiOpen: boolean;
+};
+
+type TouchBarAction = {
+  label: string;
+  icon: NativeImage;
+  action: string;
+  enabled: boolean;
 };
 
 export type TouchBarController = {
@@ -61,83 +64,80 @@ export function installOsCodeTouchBar(
     find: touchBarIcon("NSTouchBarSearchTemplate"),
     files: touchBarIcon("NSTouchBarSidebarTemplate"),
     settings: touchBarIcon("NSTouchBarGetInfoTemplate"),
-    terminal: touchBarIcon("NSTouchBarQuickLookTemplate"),
+    terminal: touchBarIcon("NSTouchBarTextBoxTemplate"),
     ai: touchBarIcon("NSTouchBarComposeTemplate"),
   };
-  const save = new TouchBar.TouchBarButton({
-    label: "Save",
-    icon: icons.save,
-    iconPosition: "left",
-    accessibilityLabel: "Save the current file",
-    backgroundColor: dark,
-    click: () => send("save"),
-  });
-  const runStop = new TouchBar.TouchBarButton({
-    label: "Run",
-    icon: icons.run,
-    iconPosition: "left",
-    accessibilityLabel: "Run the current Python file",
-    backgroundColor: accent,
-    click: () => send(state.running ? "stop" : "run"),
-  });
-  const terminal = new TouchBar.TouchBarButton({
-    label: "Terminal",
-    icon: icons.terminal,
-    iconPosition: "left",
-    accessibilityLabel: "Show or hide the terminal",
-    backgroundColor: dark,
-    click: () => send("toggle-terminal"),
-  });
-  const ai = new TouchBar.TouchBarButton({
-    label: "AI Chat",
-    icon: icons.ai,
-    iconPosition: "left",
-    accessibilityLabel: "Show or hide AI Chat",
-    backgroundColor: dark,
-    click: () => send("toggle-ai"),
-  });
-  const secondaryActions = [
-    { label: "Undo", icon: icons.undo, action: "editor-undo" },
-    { label: "Redo", icon: icons.redo, action: "editor-redo" },
-    { label: "Find", icon: icons.find, action: "find" },
-    { label: "Files", icon: icons.files, action: "toggle-sidebar" },
-    { label: "Settings", icon: icons.settings, action: "open-settings" },
-  ];
-  const secondary = new TouchBar.TouchBarScrubber({
-    items: secondaryActions.map(({ label, icon }) => ({ label, icon })),
+  let actions: TouchBarAction[] = [];
+  const actionStrip = new TouchBar.TouchBarScrubber({
+    items: [],
     mode: "free",
     continuous: false,
     showArrowButtons: true,
     selectedStyle: "background",
-    highlight: (index) => {
-      const item = secondaryActions[index];
-      if (item) send(item.action);
+    select: (index) => {
+      const item = actions[index];
+      if (item?.enabled) send(item.action);
     },
+    highlight: () => undefined,
   });
   const bar = new TouchBar({
-    items: [
-      secondary,
-      save,
-      runStop,
-      new TouchBar.TouchBarSpacer({ size: "flexible" }),
-      terminal,
-      ai,
-    ],
+    items: [actionStrip],
   });
   window.setTouchBar(bar);
 
   const render = () => {
-    save.enabled = state.editable;
-    save.backgroundColor = state.dirty ? accent : dark;
-    runStop.enabled = state.running || state.canRun;
-    runStop.label = state.running ? "Stop" : "Run";
-    runStop.icon = state.running ? icons.stop : icons.run;
-    runStop.accessibilityLabel = state.running
-      ? "Stop the running Python process"
-      : "Run the current Python file";
-    runStop.backgroundColor = state.running ? danger : accent;
-    terminal.backgroundColor = state.terminalOpen ? accent : dark;
-    ai.backgroundColor = state.aiOpen ? accent : dark;
+    actions = [
+      {
+        label: "Undo",
+        icon: icons.undo,
+        action: "editor-undo",
+        enabled: state.editable,
+      },
+      {
+        label: "Redo",
+        icon: icons.redo,
+        action: "editor-redo",
+        enabled: state.editable,
+      },
+      {
+        label: state.dirty ? "Save •" : "Save",
+        icon: icons.save,
+        action: "save",
+        enabled: state.editable,
+      },
+      {
+        label: state.running ? "Stop" : "Run",
+        icon: state.running ? icons.stop : icons.run,
+        action: state.running ? "stop" : "run",
+        enabled: state.running || state.canRun,
+      },
+      { label: "Find", icon: icons.find, action: "find", enabled: true },
+      {
+        label: "Files",
+        icon: icons.files,
+        action: "toggle-sidebar",
+        enabled: true,
+      },
+      {
+        label: state.terminalOpen ? "Terminal •" : "Terminal",
+        icon: icons.terminal,
+        action: "toggle-terminal",
+        enabled: true,
+      },
+      {
+        label: state.aiOpen ? "AI Chat •" : "AI Chat",
+        icon: icons.ai,
+        action: "toggle-ai",
+        enabled: true,
+      },
+      {
+        label: "Settings",
+        icon: icons.settings,
+        action: "open-settings",
+        enabled: true,
+      },
+    ];
+    actionStrip.items = actions.map(({ label, icon }) => ({ label, icon }));
   };
   render();
 

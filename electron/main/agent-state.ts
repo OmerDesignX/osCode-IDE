@@ -262,6 +262,19 @@ export class AgentStateStore {
       this.legacyStatePath,
     );
     if (!value || typeof value !== "object") return emptyState();
+    const referencedChatIds = new Set<string>();
+    for (const items of [
+      value.goals,
+      value.queue,
+      value.schedules,
+    ] as unknown[]) {
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        const chatId = text((item as { chatId?: unknown }).chatId, 100);
+        if (chatId) referencedChatIds.add(chatId);
+      }
+    }
     const parsedChats: StoredChat[] = [];
     if (Array.isArray(value.chats)) {
       for (const item of value.chats.slice(-100)) {
@@ -301,7 +314,8 @@ export class AgentStateStore {
           updatedAt: text(input.updatedAt, 40) || now,
           ...(storageLabel ? { storageLabel } : {}),
         };
-        if (hasUserInput(chat.messages)) parsedChats.push(chat);
+        if (hasUserInput(chat.messages) || referencedChatIds.has(chat.id))
+          parsedChats.push(chat);
       }
     }
     return {
@@ -436,6 +450,18 @@ export class AgentStateStore {
     return this.createChat(projectRoot, cleanTitle);
   }
 
+  private materializeDraft(state: AiAgentState, chatId: string) {
+    const persisted = state.chats.find((item) => item.id === chatId);
+    if (persisted) return persisted;
+    for (const [key, draft] of this.draftChats) {
+      if (draft.id !== chatId) continue;
+      state.chats.push(draft);
+      this.draftChats.delete(key);
+      return draft;
+    }
+    return null;
+  }
+
   saveChat(
     id: string,
     projectRoot: string,
@@ -558,7 +584,7 @@ export class AgentStateStore {
 
   setGoal(chatId: string, goalText: string, automatic: boolean) {
     return this.update((state) => {
-      if (!state.chats.some((item) => item.id === chatId))
+      if (!this.materializeDraft(state, chatId))
         throw new Error("Chat was not found");
       state.goals = state.goals.filter(
         (item) => item.chatId !== chatId || item.status === "complete",
@@ -595,7 +621,7 @@ export class AgentStateStore {
 
   addQueue(chatId: string, prompt: string, runAt?: string, automatic = false) {
     return this.update((state) => {
-      if (!state.chats.some((item) => item.id === chatId))
+      if (!this.materializeDraft(state, chatId))
         throw new Error("Chat was not found");
       const item: AiQueueItem = {
         id: crypto.randomUUID(),
@@ -648,7 +674,7 @@ export class AgentStateStore {
     automatic = false,
   ) {
     return this.update((state) => {
-      if (!state.chats.some((item) => item.id === chatId))
+      if (!this.materializeDraft(state, chatId))
         throw new Error("Chat was not found");
       const when = new Date(nextRunAt);
       if (!Number.isFinite(when.getTime()))
