@@ -393,6 +393,7 @@ declare global {
         count: number,
         kind: AiAttentionKind,
       ): Promise<boolean>;
+      setTouchBarState(state: Record<string, unknown>): Promise<boolean>;
       confirmDiscardChanges(detail: string): Promise<boolean>;
       openProject(): Promise<{
         root: string;

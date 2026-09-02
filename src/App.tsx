@@ -691,6 +691,19 @@ export function App() {
       menuActions.current[action]?.(),
     );
   }, []);
+  useEffect(() => {
+    if (window.oscode.platform !== "darwin") return;
+    void window.oscode.setTouchBarState({
+      editable: Boolean(active && !active.media),
+      dirty: Boolean(dirty),
+      canRun: Boolean(
+        active?.name.toLowerCase().endsWith(".py") && runtime && !running,
+      ),
+      running,
+      terminalOpen,
+      aiOpen: aiVisible,
+    });
+  }, [active, aiVisible, dirty, running, runtime, terminalOpen]);
   useEffect(
     () =>
       window.oscode.onPreferencesChanged((preferences) => {
@@ -2656,6 +2669,16 @@ export function App() {
       if (entry) void copyEntryPath(entry, true);
       else setNotice("Select a project item to copy its relative path");
     },
+    "editor-undo": () => {
+      editorRef.current?.trigger("touch-bar", "undo", null);
+      editorRef.current?.focus();
+    },
+    "editor-redo": () => {
+      editorRef.current?.trigger("touch-bar", "redo", null);
+      editorRef.current?.focus();
+    },
+    run: () => void run(),
+    stop: stopPythonProcess,
     find: () => runEditorAction("actions.find"),
     replace: () => runEditorAction("editor.action.startFindReplaceAction"),
     "find-in-files": () => {
