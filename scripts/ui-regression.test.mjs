@@ -1443,7 +1443,12 @@ test("settings, permissions, models, and Advanced share one cross-platform contr
     "/* Cross-platform panel hierarchy",
   );
   assert.ok(hierarchyStart >= 0);
-  const hierarchy = styles.slice(hierarchyStart);
+  const hierarchyEnd = styles.indexOf(
+    "/* Final 1.0.1 size decisions",
+    hierarchyStart,
+  );
+  assert.ok(hierarchyEnd > hierarchyStart);
+  const hierarchy = styles.slice(hierarchyStart, hierarchyEnd);
 
   assert.match(
     hierarchy,

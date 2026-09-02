@@ -2026,7 +2026,9 @@ async function runSmokeTest(window: BrowserWindow) {
       );
       const aiPanelAtBoot = document.querySelector('.ai-panel');
       const aiHiddenAtBoot =
-        !aiPanelAtBoot || aiPanelAtBoot.hidden === true;
+        !aiPanelAtBoot ||
+        (aiPanelAtBoot.hidden === true &&
+          getComputedStyle(aiPanelAtBoot).display === 'none');
       const pythonControlsBeforeFile = Boolean(
         document.querySelector('[aria-label="Python interpreter"]')
       );
@@ -2523,6 +2525,9 @@ async function runSmokeTest(window: BrowserWindow) {
       const permissionIconRect = permissionToggle
         .querySelector(':scope > span > svg')
         .getBoundingClientRect();
+      const compactFooterControlGap = Math.abs(
+        permissionToggleRect.left - modelToggleRect.right
+      );
       modelToggle.click();
       const modelGeometrySnapshot = await waitFor(
         () => {
@@ -2647,6 +2652,7 @@ async function runSmokeTest(window: BrowserWindow) {
       const aiFooterSelectorSpacing = {
         modelIconGap,
         permissionIconGap,
+        compactFooterControlGap,
         compactModelInset: modelIconRect.left - modelToggleRect.left,
         compactPermissionInset:
           permissionIconRect.left - permissionToggleRect.left
@@ -2657,7 +2663,8 @@ async function runSmokeTest(window: BrowserWindow) {
         modelIconGap <= 11 &&
         permissionIconGap >= 7 &&
         permissionIconGap <= 11 &&
-        Math.abs(modelIconGap - permissionIconGap) <= 1;
+        Math.abs(modelIconGap - permissionIconGap) <= 1 &&
+        compactFooterControlGap <= 1;
       const aiFooterAutoHideReady =
         expandedModelToggleRect.width >= 300 &&
         expandedPermissionToggleRect.width >= 300 &&
@@ -2679,6 +2686,26 @@ async function runSmokeTest(window: BrowserWindow) {
         .querySelector('[aria-label="AI settings"]')
         .getBoundingClientRect();
       const expandedExitRect = expandToggle.getBoundingClientRect();
+      const expandedFirstControlRect = aiPanel
+        .querySelector('.ai-bottom-model')
+        .getBoundingClientRect();
+      const expandedHeaderIconsCentered = [
+        ...aiPanel.querySelectorAll('.ai-head-actions .icon-button')
+      ].every(button => {
+        const buttonRect = button.getBoundingClientRect();
+        const iconRect = button.querySelector('svg')?.getBoundingClientRect();
+        if (!iconRect?.width || !iconRect?.height) return false;
+        return (
+          Math.abs(
+            iconRect.left + iconRect.width / 2 -
+              (buttonRect.left + buttonRect.width / 2)
+          ) <= 1 &&
+          Math.abs(
+            iconRect.top + iconRect.height / 2 -
+              (buttonRect.top + buttonRect.height / 2)
+          ) <= 1
+        );
+      });
       const expandedComposerGap =
         expandedComposerRect.top - expandedFooterRect.bottom;
       const aiExpandedFooterControls = {
@@ -2717,6 +2744,8 @@ async function runSmokeTest(window: BrowserWindow) {
         expandedMessageRect.width >= 480 &&
         expandedContextRect.top - expandedComposerRect.bottom >= 8 &&
         expandedContextStyle.backgroundColor === 'rgba(0, 0, 0, 0)' &&
+        Math.abs(expandedFirstControlRect.left - expandedFooterRect.left) <= 2 &&
+        expandedHeaderIconsCentered &&
         Math.abs(expandedExitRect.left - aiSettingsActionRect.right) <= 12 &&
         Math.abs(expandedExitRect.top - aiSettingsActionRect.top) <= 2;
       modelToggle.click();
@@ -2750,6 +2779,23 @@ async function runSmokeTest(window: BrowserWindow) {
       await waitFor(
         () => !aiPanel.classList.contains('expanded'),
         'exit full-window AI chat'
+      );
+      chatButton.click();
+      const aiHiddenByChatToggle = await waitFor(
+        () =>
+          aiPanel.hidden === true &&
+          getComputedStyle(aiPanel).display === 'none',
+        'AI panel hidden by Chat toggle'
+      );
+      chatButton.click();
+      const aiShownByChatToggle = await waitFor(
+        () =>
+          aiPanel.hidden === false &&
+          getComputedStyle(aiPanel).display !== 'none',
+        'AI panel restored by Chat toggle'
+      );
+      const aiChatToggleReady = Boolean(
+        aiHiddenByChatToggle && aiShownByChatToggle
       );
       const layoutSelect = [...settingsDock.querySelectorAll('label')].find(
         item => item.querySelector('span')?.textContent.trim() === 'Project and AI layout'
@@ -3084,6 +3130,7 @@ async function runSmokeTest(window: BrowserWindow) {
           Boolean(aiSwapReady) &&
           (await window.oscode.listAiModels()).length >= 0,
         aiHiddenAtBoot,
+        aiChatToggleReady,
         newChatRendererReady,
         aiPermissionsClosedAtBoot,
         aiCapabilitiesDefaultOff,
@@ -3530,6 +3577,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.platformioReady !== true ||
       result.aiPanelReady !== true ||
       result.aiHiddenAtBoot !== true ||
+      result.aiChatToggleReady !== true ||
       result.newChatRendererReady !== true ||
       result.aiPermissionsClosedAtBoot !== true ||
       result.aiCapabilitiesDefaultOff !== true ||

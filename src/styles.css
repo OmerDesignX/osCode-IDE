@@ -13840,3 +13840,52 @@ button > svg * {
 .app .ai-message-content :where(h3, h4) {
   font-size: 16px !important;
 }
+
+/* 1.0.4 AI column and footer alignment.
+   Keep the chat renderer mounted while hidden so background work continues,
+   but make the column and its resize handle leave the flex layout completely. */
+.ai-panel[hidden],
+.ai-resizer[hidden] {
+  display: none !important;
+}
+
+/* The compact model and permission circles form one quiet, contiguous rail. */
+.ai-panel:not(.expanded) .ai-footer-controls {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* Full-window controls begin at the reading column's left edge, matching
+   osChat, while retaining the existing hover-to-expand behaviour. */
+.ai-panel.expanded .ai-footer-controls {
+  justify-content: flex-start;
+}
+
+/* Every full-window header action owns an equal circle and centres its glyph
+   geometrically. The exit action remains directly beside AI settings. */
+.ai-panel.expanded .ai-head-actions {
+  align-items: center;
+}
+
+.ai-panel.expanded .ai-head-actions .icon-button,
+.ai-panel.expanded .ai-head-actions .ai-expand-toggle {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50% !important;
+}
+
+.ai-panel.expanded .ai-head-actions .icon-button > svg,
+.ai-panel.expanded .ai-head-actions .ai-expand-toggle > svg {
+  display: block;
+  margin: 0;
+  justify-self: center;
+  align-self: center;
+}
