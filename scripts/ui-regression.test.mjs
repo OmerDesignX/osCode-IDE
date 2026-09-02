@@ -46,6 +46,10 @@ const agentControl = await fs.readFile(
   new URL("../electron/main/agent-control.ts", import.meta.url),
   "utf8",
 );
+const agentState = await fs.readFile(
+  new URL("../electron/main/agent-state.ts", import.meta.url),
+  "utf8",
+);
 const main = await fs.readFile(
   new URL("../electron/main/index.ts", import.meta.url),
   "utf8",
@@ -119,6 +123,9 @@ test("AI work survives chat hiding, window hiding, and renderer reattachment", (
 
 test("new-chat creation is idempotent and widget protocols stay out of search previews", () => {
   assert.match(ai, /createAiChat\(undefined, true\)/);
+  assert.match(agentState, /\[draft, \.\.\.persistedChats\]/);
+  assert.match(main, /newChatRendererReady/);
+  assert.match(main, /active New chat draft/);
   assert.match(chatSearchPreview, /oschat-\(\?:artifact\|widget\)/);
   assert.match(chatSearchPreview, /Interactive result/);
 });
@@ -831,12 +838,36 @@ test("AI chat shows a steerable queue and can expand to the full window", () => 
   );
   assert.match(main, /aiExpandedLayoutReady/);
   assert.match(main, /aiFooterSelectorSpacingReady/);
+  assert.match(main, /aiFooterAutoHideReady/);
   assert.match(main, /aiExpandedFooterControlsReady/);
   assert.match(main, /aiExpandedSelectorMenusReady/);
   assert.match(
     main,
     /Math\.abs\(expandedExitRect\.left - aiSettingsActionRect\.right\) <= 12/,
   );
+});
+
+test("chat footer controls auto-hide to dark icon circles and expand accessibly", () => {
+  assert.match(styles, /--ai-footer-rest-fill:/);
+  assert.match(
+    styles,
+    /@media \(hover: hover\) and \(pointer: fine\) and \(min-width: 521px\)/,
+  );
+  assert.match(
+    styles,
+    /\.ai-bottom-model:is\(:hover, :focus-within, :has\(\[aria-expanded="true"\]\)\)/,
+  );
+  assert.match(
+    styles,
+    /\.ai-footer-controls[\s\S]*?\.ai-footer-label,[\s\S]*?opacity: 0;[\s\S]*?visibility: hidden;/,
+  );
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
+});
+
+test("the last completed answer can be regenerated without duplicating earlier turns", () => {
+  assert.match(ai, /const retryLastResponse = async/);
+  assert.match(ai, /current\.slice\(0, userIndex\)/);
+  assert.match(ai, /Retry response/);
 });
 
 test("accelerated llama.cpp lets memory fitting choose GPU layers", () => {
@@ -1377,7 +1408,7 @@ test("model and permission controls share a comfortable footer above the chat co
   );
   assert.match(
     main,
-    /aiSelectorGeometryReady[\s\S]*Math\.abs\(modelToggleRect\.width - permissionToggleRect\.width\) <= 2[\s\S]*Math\.abs\(modelOptionMetrics\.width - permissionOptionRect\.width\) <= 2/,
+    /aiSelectorGeometryReady[\s\S]*Math\.abs\(modelToggleRect\.width - permissionToggleRect\.width\) <= 2[\s\S]*Math\.abs\(modelOptionMetrics\.height - permissionOptionRect\.height\) <= 1/,
   );
   assert.match(main, /result\.aiSelectorGeometryReady !== true/);
   assert.match(
@@ -1597,6 +1628,14 @@ test("security activity expands into timestamped notifications", () => {
   assert.match(app, /setNotificationsOpen\(true\)/);
   assert.match(app, /createdAt: Date\.now\(\)/);
   assert.match(styles, /\.top-status\[role="button"\]/);
+});
+
+test("transient notifications dismiss themselves after ten seconds", () => {
+  assert.match(app, /const NOTICE_AUTO_DISMISS_MS = 10_000/);
+  assert.match(
+    app,
+    /window\.setTimeout\([\s\S]*?setNotice\(""\)[\s\S]*?NOTICE_AUTO_DISMISS_MS/,
+  );
 });
 
 test("agent work is shown live and retained as a privacy-aware chat timeline", () => {

@@ -73,6 +73,7 @@ type ProjectContextAction = {
   separatorBefore?: boolean;
   run: () => unknown | Promise<unknown>;
 };
+const NOTICE_AUTO_DISMISS_MS = 10_000;
 
 function scrollHorizontalMenu(event: WheelEvent) {
   const origin = event.target;
@@ -899,7 +900,10 @@ export function App() {
       ...current.slice(-39),
       { id: crypto.randomUUID(), message: notice, createdAt: Date.now() },
     ]);
-    const timeout = window.setTimeout(() => setNotice(""), 4200);
+    const timeout = window.setTimeout(
+      () => setNotice(""),
+      NOTICE_AUTO_DISMISS_MS,
+    );
     return () => window.clearTimeout(timeout);
   }, [notice]);
   useEffect(() => {

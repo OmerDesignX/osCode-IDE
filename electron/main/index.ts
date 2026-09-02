@@ -153,6 +153,7 @@ let runningDebug = false;
 let quittingAfterCleanup = false;
 let rendererHasUnsavedChanges = false;
 let closeConfirmationOpen = false;
+let pendingMacInstallerPath = "";
 let spellcheckEnabled = true;
 let aiDisposePromise: Promise<void> | null = null;
 function sendToRenderer(channel: string, ...args: unknown[]) {
@@ -2431,6 +2432,39 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('.ai-panel'),
         'AI panel after Chat is enabled'
       );
+      aiPanel.querySelector('[aria-label="Chats and tasks"]').click();
+      const chatWorkspace = await waitFor(
+        () => document.querySelector('.ai-agent-popover'),
+        'Chats and tasks panel'
+      );
+      const newChatButton = [...chatWorkspace.querySelectorAll('button')].find(
+        item => item.textContent.trim() === 'New chat'
+      );
+      if (!newChatButton) throw new Error('Missing New chat button');
+      newChatButton.click();
+      const activeDraftChoice = await waitFor(
+        () => chatWorkspace.querySelector('.ai-chat-choice.active'),
+        'active New chat draft'
+      );
+      const newChatState = await window.oscode.aiAgentState();
+      const visibleDraft = newChatState.chats.find(
+        chat =>
+          chat.title === 'New chat' &&
+          !chat.messages.some(message => message.role === 'user')
+      );
+      const repeatedDraft = await window.oscode.createAiChat(undefined, true);
+      const newChatRendererReady = Boolean(
+        visibleDraft &&
+        repeatedDraft.id === visibleDraft.id &&
+        activeDraftChoice.textContent.includes('New chat')
+      );
+      chatWorkspace
+        .querySelector('[aria-label="Close Chats and tasks"]')
+        .click();
+      await waitFor(
+        () => !document.querySelector('.ai-agent-popover'),
+        'Chats and tasks panel close'
+      );
       const permissionToggle = aiPanel.querySelector('.ai-capability-toggle');
       const aiPermissionsClosedAtBoot =
         permissionToggle?.getAttribute('aria-expanded') === 'false' &&
@@ -2471,6 +2505,8 @@ async function runSmokeTest(window: BrowserWindow) {
         () => !aiPanel.querySelector('.ai-capability-bar'),
         'permission controls close after explicit click'
       );
+      aiPanel.querySelector('.ai-composer textarea')?.focus();
+      await new Promise(resolve => setTimeout(resolve, 220));
       const modelToggle = aiPanel.querySelector('.ai-tier-toggle');
       const modelToggleRect = modelToggle.getBoundingClientRect();
       const modelIconRect = modelToggle
@@ -2529,7 +2565,6 @@ async function runSmokeTest(window: BrowserWindow) {
         Math.abs(modelToggleRect.height - permissionToggleRect.height) <= 1 &&
         selectorGeometry.modelToggle.radius >= modelToggleRect.height / 2 - 2 &&
         selectorGeometry.permissionToggle.radius >= permissionToggleRect.height / 2 - 2 &&
-        Math.abs(modelOptionMetrics.width - permissionOptionRect.width) <= 2 &&
         Math.abs(modelOptionMetrics.height - permissionOptionRect.height) <= 1 &&
         selectorGeometry.modelOption.radius >= modelOptionMetrics.height / 2 - 2 &&
         selectorGeometry.permissionOption.radius >= permissionOptionRect.height / 2 - 2 &&
@@ -2556,20 +2591,36 @@ async function runSmokeTest(window: BrowserWindow) {
         () => aiPanel.classList.contains('expanded'),
         'full-window AI chat'
       );
+      modelToggle.focus();
+      await waitFor(
+        () =>
+          modelToggle.getBoundingClientRect().width >= 300 &&
+          permissionToggle.getBoundingClientRect().width <= 66,
+        'expanded model footer control'
+      );
       const expandedModelIconRect = modelToggle
         .querySelector(':scope > svg:first-child')
         .getBoundingClientRect();
       const expandedModelLabelRect = modelToggle
         .querySelector(':scope > .ai-footer-label')
         .getBoundingClientRect();
+      const expandedModelToggleRect = modelToggle.getBoundingClientRect();
+      const restingPermissionToggleRect = permissionToggle.getBoundingClientRect();
+      permissionToggle.focus();
+      await waitFor(
+        () =>
+          permissionToggle.getBoundingClientRect().width >= 300 &&
+          modelToggle.getBoundingClientRect().width <= 66,
+        'expanded permission footer control'
+      );
       const expandedPermissionIconRect = permissionToggle
         .querySelector(':scope > span > svg')
         .getBoundingClientRect();
       const expandedPermissionLabelRect = permissionToggle
         .querySelector(':scope > span > .ai-footer-label')
         .getBoundingClientRect();
-      const expandedModelToggleRect = modelToggle.getBoundingClientRect();
       const expandedPermissionToggleRect = permissionToggle.getBoundingClientRect();
+      const restingModelToggleRect = modelToggle.getBoundingClientRect();
       const expandedModelTitleStyle = getComputedStyle(
         modelToggle.querySelector('.ai-footer-label b')
       );
@@ -2600,6 +2651,13 @@ async function runSmokeTest(window: BrowserWindow) {
         permissionIconGap >= 7 &&
         permissionIconGap <= 11 &&
         Math.abs(modelIconGap - permissionIconGap) <= 1;
+      const aiFooterAutoHideReady =
+        expandedModelToggleRect.width >= 300 &&
+        expandedPermissionToggleRect.width >= 300 &&
+        restingModelToggleRect.width <= 66 &&
+        restingPermissionToggleRect.width <= 66 &&
+        expandedModelLabelRect.width >= 120 &&
+        expandedPermissionLabelRect.width >= 100;
       const expandedPanelRect = aiPanel.getBoundingClientRect();
       const expandedFooterRect = aiPanel
         .querySelector('.ai-footer-controls')
@@ -3019,6 +3077,7 @@ async function runSmokeTest(window: BrowserWindow) {
           Boolean(aiSwapReady) &&
           (await window.oscode.listAiModels()).length >= 0,
         aiHiddenAtBoot,
+        newChatRendererReady,
         aiPermissionsClosedAtBoot,
         aiCapabilitiesDefaultOff,
         aiPopupsExclusive: Boolean(aiPopupsExclusive),
@@ -3026,6 +3085,7 @@ async function runSmokeTest(window: BrowserWindow) {
         aiSelectorGeometryReady,
         aiFooterSelectorSpacing,
         aiFooterSelectorSpacingReady,
+        aiFooterAutoHideReady,
         aiExpandedFooterControls,
         aiExpandedFooterControlsReady,
         aiExpandedSelectorMenusReady,
@@ -3463,6 +3523,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.platformioReady !== true ||
       result.aiPanelReady !== true ||
       result.aiHiddenAtBoot !== true ||
+      result.newChatRendererReady !== true ||
       result.aiPermissionsClosedAtBoot !== true ||
       result.aiCapabilitiesDefaultOff !== true ||
       result.agentBrowserReady !== true ||
@@ -3475,6 +3536,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.aiPopupsExclusive !== true ||
       result.aiSelectorGeometryReady !== true ||
       result.aiFooterSelectorSpacingReady !== true ||
+      result.aiFooterAutoHideReady !== true ||
       result.aiExpandedFooterControlsReady !== true ||
       result.aiExpandedSelectorMenusReady !== true ||
       result.aiExpandedLayoutReady !== true ||
@@ -5652,7 +5714,11 @@ app.whenReady().then(async () => {
   }
   appUpdateService = new AppUpdateService(
     (status) => sendToRenderer("updates:status-changed", status),
-    () => app.quit(),
+    (installerPath) => {
+      if (process.platform === "darwin")
+        pendingMacInstallerPath = installerPath;
+      app.quit();
+    },
   );
   const developmentOrigin =
     !app.isPackaged && process.env.VITE_DEV_SERVER_URL
@@ -5799,7 +5865,6 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 app.on("before-quit", (event) => {
-  appUpdateService?.dispose();
   if (quittingAfterCleanup) {
     return;
   }
@@ -5812,7 +5877,11 @@ app.on("before-quit", (event) => {
       "Quitting osCode now will discard changes that have not been saved.",
     ).then(async (discard) => {
       closeConfirmationOpen = false;
-      if (!discard) return;
+      if (!discard) {
+        pendingMacInstallerPath = "";
+        appUpdateService?.cancelInstallHandoff();
+        return;
+      }
       rendererHasUnsavedChanges = false;
       for (const context of windowContexts.values()) context.allowClose = true;
       quittingAfterCleanup = true;
@@ -5836,6 +5905,13 @@ app.on("before-quit", (event) => {
   void stopProjectProcesses()
     .then(() => disposeAiServiceSafely())
     .finally(() => app.quit());
+});
+app.on("will-quit", () => {
+  appUpdateService?.dispose();
+  if (process.platform !== "darwin" || !pendingMacInstallerPath) return;
+  const installerPath = pendingMacInstallerPath;
+  pendingMacInstallerPath = "";
+  app.relaunch({ execPath: "/usr/bin/open", args: [installerPath] });
 });
 app.on("activate", () => {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();

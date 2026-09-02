@@ -5988,6 +5988,19 @@ json.dump({'content':out},sys.stdout)`;
       result = "",
     ) => publishAction(finishToolAction(action, status, result));
     const projectRoot = await fs.realpath(this.root());
+    if (
+      request.messages.some(
+        (message) =>
+          message.role === "user" &&
+          (message.content.trim() || message.attachments?.length),
+      )
+    )
+      await this.agentState.saveChat(
+        request.chatId,
+        projectRoot,
+        request.messages,
+        request.contextSummary,
+      );
     const requestedActiveFile = cleanText(input.activeFile || "", 2_000).trim();
     if (requestedActiveFile) {
       const candidate = path.isAbsolute(requestedActiveFile)

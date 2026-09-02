@@ -459,6 +459,11 @@ async function fixture({
     ...serviceOptions,
   });
   const chat = await service.createChat();
+  await service.saveChat(
+    chat.id,
+    [{ role: "user", content: "Test conversation" }],
+    "",
+  );
   if (grants) {
     await service.grantPermission(
       "project.read",

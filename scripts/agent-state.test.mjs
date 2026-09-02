@@ -127,7 +127,7 @@ test("conversation permissions do not cross chats and always stays project scope
   );
 });
 
-test("concurrent empty-chat requests resolve to one persisted chat", async (t) => {
+test("concurrent empty-chat requests share one transient draft until first input", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "oscode-empty-chat-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = new AgentStateStore(root);
@@ -136,7 +136,13 @@ test("concurrent empty-chat requests resolve to one persisted chat", async (t) =
     store.ensureEmptyChat("C:/project"),
   ]);
   assert.equal(first.id, second.id);
-  assert.equal((await store.state("C:/project")).chats.length, 1);
+  const liveDrafts = (await store.state("C:/project")).chats;
+  assert.equal(liveDrafts.length, 1);
+  assert.equal(liveDrafts[0].id, first.id);
+  assert.equal(
+    (await new AgentStateStore(root).state("C:/project")).chats.length,
+    0,
+  );
   await store.saveChat(
     first.id,
     "C:/project",
@@ -145,7 +151,17 @@ test("concurrent empty-chat requests resolve to one persisted chat", async (t) =
   );
   const next = await store.ensureEmptyChat("C:/project");
   assert.notEqual(next.id, first.id);
-  assert.equal((await store.state("C:/project")).chats.length, 2);
+  const liveChats = (await store.state("C:/project")).chats;
+  assert.deepEqual(
+    liveChats.map((chat) => chat.id),
+    [next.id, first.id],
+  );
+  assert.deepEqual(
+    (await new AgentStateStore(root).state("C:/project")).chats.map(
+      (chat) => chat.id,
+    ),
+    [first.id],
+  );
 });
 
 test("goals, queues, and schedules stay owned by their chat", async (t) => {
@@ -154,6 +170,18 @@ test("goals, queues, and schedules stay owned by their chat", async (t) => {
   const store = new AgentStateStore(root);
   const first = await store.createChat("C:/project");
   const second = await store.createChat("C:/project");
+  await store.saveChat(
+    first.id,
+    "C:/project",
+    [{ role: "user", content: "Finish the parser" }],
+    "",
+  );
+  await store.saveChat(
+    second.id,
+    "C:/project",
+    [{ role: "user", content: "Review the parser" }],
+    "",
+  );
   const goal = await store.setGoal(first.id, "Finish the parser", true);
   await store.addQueue(first.id, "Add tests", undefined, true);
   await store.addSchedule(
@@ -193,6 +221,12 @@ test("a queued chat message can be promoted without losing the stack", async (t)
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = new AgentStateStore(root);
   const chat = await store.createChat("C:/project");
+  await store.saveChat(
+    chat.id,
+    "C:/project",
+    [{ role: "user", content: "Explain the current code" }],
+    "",
+  );
   const first = await store.addQueue(chat.id, "Explain the current code");
   const second = await store.addQueue(chat.id, "Improve the error handling");
 

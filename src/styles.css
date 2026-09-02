@@ -2,6 +2,33 @@
   font-family: Manrope, sans-serif;
   color-scheme: dark;
 }
+
+/* Conversation response actions */
+.ai-response-retry-row {
+  width: min(100%, 900px);
+  display: flex;
+  justify-content: flex-start;
+  margin: -4px auto 18px;
+  padding-inline: 4px;
+}
+
+.ai-response-retry-row button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--control-hover-fill);
+  color: var(--muted);
+}
+
+.ai-response-retry-row button:hover {
+  background: var(--accent);
+  color: var(--onaccent);
+}
 * {
   box-sizing: border-box;
 }
@@ -8087,6 +8114,186 @@ textarea,
 
 .app .ai-message-content :where(h3, h4) {
   font-size: 16px !important;
+}
+
+/* Footer controls recede into the chat canvas until the user reaches for
+   them. On pointer devices the icon circles expand into their full labels;
+   touch users keep the complete, readable controls. */
+.ai-footer-controls {
+  --ai-footer-rest-fill: color-mix(in srgb, var(--chat-bg) 82%, var(--panel2));
+}
+
+.ai-footer-controls .ai-tier-toggle,
+.ai-footer-controls .ai-capability-toggle {
+  background: var(--ai-footer-rest-fill);
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 521px) {
+  .ai-footer-controls,
+  .ai-panel.expanded .ai-footer-controls {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 10px;
+  }
+
+  .ai-bottom-model,
+  .ai-footer-controls .ai-capability-drawer {
+    width: var(--ui-control-height);
+    min-width: var(--ui-control-height);
+    max-width: var(--ui-control-height);
+    flex: 0 0 auto;
+    transition:
+      width 180ms ease,
+      min-width 180ms ease,
+      max-width 180ms ease;
+  }
+
+  .ai-panel.expanded .ai-bottom-model,
+  .ai-panel.expanded .ai-footer-controls .ai-capability-drawer {
+    width: 64px;
+    min-width: 64px;
+    max-width: 64px;
+  }
+
+  .ai-footer-controls .ai-tier-toggle,
+  .ai-footer-controls .ai-capability-toggle {
+    overflow: hidden;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      padding 180ms ease;
+  }
+
+  .ai-footer-controls .ai-tier-toggle {
+    display: grid;
+    grid-template-columns: 18px 0 0;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .ai-footer-controls .ai-capability-toggle {
+    display: grid;
+    grid-template-columns: 18px 0;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .ai-footer-controls .ai-capability-toggle > span {
+    display: grid;
+    grid-template-columns: 18px 0;
+    gap: 0;
+  }
+
+  .ai-footer-controls .ai-footer-label,
+  .ai-footer-controls .ai-tier-toggle > svg:last-child,
+  .ai-footer-controls .ai-capability-toggle > svg {
+    width: 0;
+    min-width: 0;
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      width 150ms ease,
+      min-width 150ms ease,
+      max-width 150ms ease,
+      opacity 110ms ease;
+  }
+
+  .ai-bottom-model:is(:hover, :focus-within, :has([aria-expanded="true"])),
+  .ai-footer-controls
+    .ai-capability-drawer:is(
+      :hover,
+      :focus-within,
+      :has([aria-expanded="true"])
+    ) {
+    width: 260px;
+    min-width: 260px;
+    max-width: 260px;
+  }
+
+  .ai-panel.expanded
+    :is(.ai-bottom-model, .ai-footer-controls .ai-capability-drawer):is(
+      :hover,
+      :focus-within,
+      :has([aria-expanded="true"])
+    ) {
+    width: 320px;
+    min-width: 320px;
+    max-width: 320px;
+  }
+
+  .ai-bottom-model:is(:hover, :focus-within, :has([aria-expanded="true"]))
+    .ai-tier-toggle {
+    grid-template-columns: 18px minmax(0, 1fr) 16px;
+    justify-content: stretch;
+    gap: 9px;
+    padding-inline: 14px;
+  }
+
+  .ai-footer-controls
+    .ai-capability-drawer:is(
+      :hover,
+      :focus-within,
+      :has([aria-expanded="true"])
+    )
+    .ai-capability-toggle {
+    grid-template-columns: minmax(0, 1fr) 17px;
+    justify-content: stretch;
+    gap: 9px;
+    padding-inline: 14px;
+  }
+
+  .ai-footer-controls
+    .ai-capability-drawer:is(
+      :hover,
+      :focus-within,
+      :has([aria-expanded="true"])
+    )
+    .ai-capability-toggle
+    > span {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .ai-bottom-model:is(:hover, :focus-within, :has([aria-expanded="true"]))
+    :is(.ai-footer-label, .ai-tier-toggle > svg:last-child),
+  .ai-footer-controls
+    .ai-capability-drawer:is(
+      :hover,
+      :focus-within,
+      :has([aria-expanded="true"])
+    )
+    :is(.ai-footer-label, .ai-capability-toggle > svg) {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .ai-panel.expanded
+    :is(
+      .ai-bottom-model:hover .ai-tier-toggle,
+      .ai-bottom-model:focus-within .ai-tier-toggle,
+      .ai-bottom-model:has([aria-expanded="true"]) .ai-tier-toggle,
+      .ai-capability-drawer:hover .ai-capability-toggle,
+      .ai-capability-drawer:focus-within .ai-capability-toggle,
+      .ai-capability-drawer:has([aria-expanded="true"]) .ai-capability-toggle
+    ) {
+    padding-inline: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-footer-controls *,
+  .ai-footer-controls *::before,
+  .ai-footer-controls *::after {
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Qwen and other local models render through one restrained reading scale.

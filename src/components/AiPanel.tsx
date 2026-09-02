@@ -1247,6 +1247,7 @@ export function AiPanel({
       });
     if (!desired.length) return;
     const state = await window.oscode.aiAgentState();
+    if (!state.chats.some((item) => item.id === currentChatId)) return;
     let granted = false;
     for (const permission of desired) {
       const exists = state.permissions.some(
@@ -1364,8 +1365,8 @@ export function AiPanel({
     try {
       const activeCapabilities = capabilityOverride || capabilityRef.current;
       const requestSummary = continuation?.contextSummary ?? contextSummary;
-      await ensureCapabilityPermissions(executionChatId, activeCapabilities);
       await saveConversation(next, requestSummary, executionChatId);
+      await ensureCapabilityPermissions(executionChatId, activeCapabilities);
       const response = await window.oscode.aiChat({
         chatId: executionChatId,
         engine,
@@ -1764,6 +1765,31 @@ export function AiPanel({
       return true;
     }
     return false;
+  };
+
+  const retryLastResponse = async () => {
+    if (busyRef.current) return;
+    const current = messagesRef.current;
+    if (current.at(-1)?.role !== "assistant") return;
+    let userIndex = -1;
+    for (let index = current.length - 1; index >= 0; index -= 1) {
+      if (current[index].role === "user") {
+        userIndex = index;
+        break;
+      }
+    }
+    if (userIndex < 0) return;
+    const prompt = current[userIndex];
+    const prior = current.slice(0, userIndex);
+    messagesRef.current = prior;
+    setMessages(prior);
+    setPermissionRequest(null);
+    setPendingEdits([]);
+    permissionContinuation.current = null;
+    liveActionsRef.current = [];
+    setLiveActions([]);
+    setStatus("Regenerating response…");
+    await runPrompt(prompt.content, undefined, prompt.attachments || []);
   };
 
   const send = async (event: FormEvent) => {
@@ -3194,6 +3220,18 @@ export function AiPanel({
             )}
           </article>
         ))}
+        {!busy &&
+          !permissionRequest &&
+          pendingEdits.length === 0 &&
+          messages.at(-1)?.role === "assistant" &&
+          messages.some((message) => message.role === "user") && (
+            <div className="ai-response-retry-row">
+              <button type="button" onClick={() => void retryLastResponse()}>
+                <FeatherIcon icon="refresh-cw" size="14" />
+                Retry response
+              </button>
+            </div>
+          )}
         {busy &&
           liveModelOutput.chatId === chatId &&
           (liveModelOutput.reasoning || liveModelOutput.answer) && (
