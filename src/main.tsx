@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./advanced.css";
 import "./startup.css";
+import "./notifications.css";
 import osCodeIcon from "./assets/oscode-icon.png";
 
 type MonacoRequire = {

@@ -676,7 +676,7 @@ export function AiPanel({
     }
     let next = await window.oscode.aiAgentState();
     if (!next.chats.length) {
-      const created = await window.oscode.createAiChat();
+      const created = await window.oscode.createAiChat(undefined, true);
       next = await window.oscode.aiAgentState();
       chatIdRef.current = created.id;
       messagesRef.current = [];
@@ -1703,7 +1703,7 @@ export function AiPanel({
 
   const handleCommand = async (text: string) => {
     if (text === "/new") {
-      const chat = await window.oscode.createAiChat();
+      const chat = await window.oscode.createAiChat(undefined, true);
       await refreshAgentState();
       chooseChat(chat);
       return true;
@@ -2197,7 +2197,10 @@ export function AiPanel({
                   title={projectName ? "New chat" : "Open a project first"}
                   onClick={async () => {
                     try {
-                      const chat = await window.oscode.createAiChat();
+                      const chat = await window.oscode.createAiChat(
+                        undefined,
+                        true,
+                      );
                       await refreshAgentState();
                       chooseChat(chat, false);
                     } catch (error) {
@@ -2258,7 +2261,10 @@ export function AiPanel({
                               if (wasActive) {
                                 const fallback =
                                   next.chats.at(-1) ||
-                                  (await window.oscode.createAiChat());
+                                  (await window.oscode.createAiChat(
+                                    undefined,
+                                    true,
+                                  ));
                                 chooseChat(fallback, false);
                               }
                             }}

@@ -1,6 +1,6 @@
 {
   "name": "oscode",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A calm, cross-platform code editor",
   "desktopName": "studio.oscode.editor.desktop",
   "main": "dist-electron/main/index.js",

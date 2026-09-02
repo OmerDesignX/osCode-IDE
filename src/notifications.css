@@ -1,0 +1,221 @@
+/* 1.0.2 notification layout contract. Notifications are compact panel cards,
+   never horizontal toolbars. A message owns the full readable row and actions
+   move into a separate wrapping footer so they cannot squeeze body copy. */
+.notifications-popover {
+  width: min(500px, calc(100vw - 28px));
+  max-height: min(680px, calc(100vh - 88px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  background: var(--panel);
+}
+
+.notifications-popover > .notifications-header {
+  position: relative;
+  inset: auto;
+  z-index: 2;
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  padding: 16px 18px 16px 22px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+}
+
+.notifications-header h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.notifications-header .notification-actions {
+  min-width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+  overflow: visible;
+}
+
+.notifications-header .notification-actions > button:first-child {
+  width: auto;
+  min-width: 72px;
+  height: 42px;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius-pill);
+}
+
+.notification-list {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.notification-row,
+.notification-row.update-prompt,
+.notification-row:not(.update-prompt) {
+  width: 100%;
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 14px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 16px;
+  overflow: hidden;
+  border: 0 !important;
+  border-radius: 20px !important;
+  background: var(--control-hover-fill);
+  box-shadow: none !important;
+}
+
+.notification-row.notification-row-actions {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 14px;
+  padding: 18px;
+}
+
+.notification-content {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.notification-content p {
+  max-width: 100%;
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.notification-content time {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.notifications-popover .notification-choice,
+.notifications-popover .notification-choice.update-actions {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  overflow: visible !important;
+}
+
+.notifications-popover .notification-choice > button,
+.notifications-popover .notification-choice.update-actions > button {
+  width: auto;
+  min-width: 104px;
+  min-height: 42px;
+  height: 42px;
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border: 0 !important;
+  border-radius: var(--radius-pill) !important;
+  background: var(--panel2);
+  color: var(--text);
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: none !important;
+}
+
+.notifications-popover .notification-choice > button:hover:not(:disabled) {
+  background: var(--control-selected-fill);
+  color: var(--accent);
+}
+
+.notifications-popover .notification-choice > button.primary,
+.notifications-popover
+  .notification-choice
+  > button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--onaccent);
+}
+
+.notifications-popover .notification-dismiss {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+}
+
+.notifications-popover .notification-dismiss:hover:not(:disabled) {
+  background: var(--control-selected-fill);
+  color: var(--accent);
+}
+
+.notification-empty {
+  margin: 0;
+  padding: 22px 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .notifications-popover {
+    top: 64px;
+    right: 8px;
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 72px);
+    border-radius: 22px;
+  }
+
+  .notifications-popover > .notifications-header {
+    min-height: 70px;
+    padding: 12px 14px 12px 18px;
+  }
+
+  .notification-row.notification-row-actions {
+    padding: 16px;
+  }
+
+  .notifications-popover .notification-choice.update-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notifications-popover .notification-choice.update-actions > button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .notifications-popover .notification-choice.update-actions > button.primary {
+    grid-column: 1 / -1;
+  }
+}

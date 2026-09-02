@@ -10,8 +10,20 @@ const ai = await fs.readFile(
   new URL("../src/components/AiPanel.tsx", import.meta.url),
   "utf8",
 );
+const chatSearchPreview = await fs.readFile(
+  new URL("../src/chat-search-preview.ts", import.meta.url),
+  "utf8",
+);
 const styles = await fs.readFile(
   new URL("../src/styles.css", import.meta.url),
+  "utf8",
+);
+const notificationStyles = await fs.readFile(
+  new URL("../src/notifications.css", import.meta.url),
+  "utf8",
+);
+const rendererMain = await fs.readFile(
+  new URL("../src/main.tsx", import.meta.url),
   "utf8",
 );
 const terminal = await fs.readFile(
@@ -103,6 +115,24 @@ test("AI work survives chat hiding, window hiding, and renderer reattachment", (
   assert.match(app, /hidden=\{!aiVisible\}/);
   assert.match(app, /visible=\{aiVisible\}/);
   assert.match(ai, /hidden=\{!visible\}/);
+});
+
+test("new-chat creation is idempotent and widget protocols stay out of search previews", () => {
+  assert.match(ai, /createAiChat\(undefined, true\)/);
+  assert.match(chatSearchPreview, /oschat-\(\?:artifact\|widget\)/);
+  assert.match(chatSearchPreview, /Interactive result/);
+});
+
+test("Qwen answers use restrained semantic Playfair and Manrope typography", () => {
+  assert.match(aiMain, /use real ## section headings and ### subheadings/);
+  assert.match(
+    styles,
+    /Qwen and other local models render through one restrained reading scale[\s\S]*?\.app \.ai-message-content \{[\s\S]*?font-family: Manrope, sans-serif;[\s\S]*?font-size: 14px !important;/,
+  );
+  assert.match(
+    styles,
+    /\.app \.ai-message-content :where\(h1, h2, h3, h4\)[\s\S]*?font-family: "Playfair Display", Georgia, serif;[\s\S]*?\.app \.ai-message-content :where\(h1, h2\) \{[\s\S]*?font-size: 18px !important;[\s\S]*?\.app \.ai-message-content :where\(h3, h4\) \{[\s\S]*?font-size: 16px !important;/,
+  );
 });
 
 test("osCode anchors project work to the active editor file without trapping traversal", () => {
@@ -245,6 +275,13 @@ test("interactive chrome uses scoped pill and circular control geometry", () => 
   assert.match(
     styles,
     /\.editor-command-bar button,[\s\S]*\.markdown-toolbar button[\s\S]*border-radius: var\(--radius-pill\);/,
+  );
+});
+
+test("native dropdowns use the shared padded chevron", () => {
+  assert.match(
+    styles,
+    /Every native dropdown uses the same inset, stroked chevron[\s\S]*?\.app select \{[\s\S]*?padding-inline-end: 52px !important;[\s\S]*?appearance: none !important;[\s\S]*?%3Cpath d='m6 9 6 6 6-6'\/[\s\S]*?background-position: calc\(100% - 18px\) center !important;[\s\S]*?background-size: 18px 18px !important;/,
   );
 });
 
@@ -1687,5 +1724,29 @@ test("terminal sessions and auxiliary panels keep the revised workspace hierarch
   assert.match(
     styles,
     /\.ai-model-popover,[\s\S]*\.ai-permission-popover\s*\{[\s\S]*border-radius: 20px;[\s\S]*background: var\(--overlay-surface\)/,
+  );
+});
+
+test("notifications keep readable copy separate from wrapping actions", () => {
+  assert.match(rendererMain, /import "\.\/notifications\.css";/);
+  assert.match(app, /className="notification-list"/);
+  assert.match(app, /className="notification-content"/);
+  assert.match(app, /notification-row-actions/);
+  assert.match(app, /className="notification-choice update-actions"/);
+  assert.doesNotMatch(
+    app,
+    /notification-choice update-actions horizontal-menu-scroll/,
+  );
+  assert.match(
+    notificationStyles,
+    /\.notification-row\.notification-row-actions\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\);/,
+  );
+  assert.match(
+    notificationStyles,
+    /\.notification-content\s*\{[\s\S]*overflow-wrap: break-word;[\s\S]*word-break: normal;/,
+  );
+  assert.match(
+    notificationStyles,
+    /\.notification-choice\.update-actions\s*\{[\s\S]*flex-wrap: wrap;/,
   );
 });

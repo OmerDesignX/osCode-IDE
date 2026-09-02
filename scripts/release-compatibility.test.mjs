@@ -375,11 +375,16 @@ test("manual release build preserves the verified native package pipeline", () =
   const manifest = JSON.parse(read("package.json"));
   assert.equal(manifest.dependencies["electron-updater"], undefined);
   assert.equal(manifest.build.publish, undefined);
-  assert.match(read("electron/main/updater.ts"), /releases\/tags/);
-  assert.match(read("electron/main/updater.ts"), /sha256:/i);
-  assert.match(read("electron/main/updater.ts"), /installReadyUpdate/);
-  assert.match(read("electron/main/updater.ts"), /downloadAvailable/);
-  assert.match(read("electron/main/updater.ts"), /ready-update\.json/);
+  const updater = read("electron/main/updater.ts");
+  assert.match(updater, /releases\/tags/);
+  assert.match(updater, /sha256:/i);
+  assert.match(updater, /installReadyUpdate/);
+  assert.match(updater, /downloadAvailable/);
+  assert.match(updater, /ready-update\.json/);
+  assert.match(updater, /await shell\.openPath\(file\)/);
+  assert.match(updater, /if \(launchError\) throw new Error\(launchError\)/);
+  assert.match(updater, /setTimeout\(this\.quitAfterInstallerLaunch, 150\)/);
+  assert.doesNotMatch(updater, /\bspawn\(/);
   assert.doesNotMatch(
     read("electron/main/index.ts"),
     /before-quit[\s\S]{0,1800}installReadyUpdate/,
@@ -406,6 +411,10 @@ test("manual release build preserves the verified native package pipeline", () =
     /smokeMode\s*\? processKeyProtector\(userData\)/,
   );
   const main = read("electron/main/index.ts");
+  assert.match(
+    main,
+    /new AppUpdateService\([\s\S]{0,220}\(\) => app\.quit\(\)/,
+  );
   assert.match(main, /if \(!smokeMode\)[\s\S]*archiveLegacySecureStore/);
   assert.match(
     main,

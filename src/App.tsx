@@ -12,6 +12,7 @@ import { MarkdownPreview } from "./components/MarkdownPreview";
 import { MediaPreview } from "./components/MediaPreview";
 import { PlatformioPanel } from "./components/PlatformioPanel";
 import osCodeIcon from "./assets/oscode-icon.png";
+import { chatSearchPreview } from "./chat-search-preview";
 import type {
   AiEditMode,
   AiEngine,
@@ -1125,7 +1126,9 @@ export function App() {
           return {
             id: chat.id,
             title: chat.title,
-            preview: (match?.content || "Chat title match").slice(0, 180),
+            preview: chatSearchPreview(
+              match?.content || "Chat title match",
+            ).slice(0, 180),
           };
         });
       setGlobalSearchResults({ code: code.slice(0, 80), chats });
@@ -3354,13 +3357,15 @@ export function App() {
         </div>
       </header>
       {notificationsOpen && (
-        <div className="notifications-popover" aria-label="Notifications">
-          <div>
+        <div
+          className="notifications-popover"
+          role="dialog"
+          aria-modal="false"
+          aria-label="Notifications"
+        >
+          <div className="notifications-header">
             <h2>Notifications</h2>
-            <span
-              className="notification-actions horizontal-menu-scroll"
-              data-horizontal-menu
-            >
+            <span className="notification-actions">
               <button
                 onClick={() =>
                   setNotifications((current) =>
@@ -3382,104 +3387,104 @@ export function App() {
               </button>
             </span>
           </div>
-          {notifications.length ? (
-            notifications
-              .slice()
-              .reverse()
-              .map((item) => (
-                <div
-                  className={`notification-row ${item.kind === "auto-update-prompt" ? "update-prompt" : ""}`}
-                  key={item.id}
-                >
-                  <span>
-                    {item.message}
-                    <time dateTime={new Date(item.createdAt).toISOString()}>
-                      {new Date(item.createdAt).toLocaleString()}
-                    </time>
-                  </span>
-                  {item.kind === "auto-update-prompt" ? (
-                    <div className="notification-choice">
-                      <button
-                        onClick={() => void chooseAutomaticUpdates(false)}
-                      >
-                        Don't show again
-                      </button>
-                      <button
-                        className="primary"
-                        onClick={() => void chooseAutomaticUpdates(true)}
-                      >
-                        Turn on
-                      </button>
+          <div className="notification-list">
+            {notifications.length ? (
+              notifications
+                .slice()
+                .reverse()
+                .map((item) => (
+                  <div
+                    className={`notification-row ${item.kind === "auto-update-prompt" ? "update-prompt" : ""} ${["auto-update-prompt", "app-update", "ai-attention"].includes(item.kind || "") ? "notification-row-actions" : ""}`}
+                    key={item.id}
+                  >
+                    <div className="notification-content">
+                      <p>{item.message}</p>
+                      <time dateTime={new Date(item.createdAt).toISOString()}>
+                        {new Date(item.createdAt).toLocaleString()}
+                      </time>
                     </div>
-                  ) : item.kind === "app-update" ? (
-                    <div
-                      className="notification-choice update-actions horizontal-menu-scroll"
-                      data-horizontal-menu
-                    >
+                    {item.kind === "auto-update-prompt" ? (
+                      <div className="notification-choice">
+                        <button
+                          onClick={() => void chooseAutomaticUpdates(false)}
+                        >
+                          Don't show again
+                        </button>
+                        <button
+                          className="primary"
+                          onClick={() => void chooseAutomaticUpdates(true)}
+                        >
+                          Turn on
+                        </button>
+                      </div>
+                    ) : item.kind === "app-update" ? (
+                      <div className="notification-choice update-actions">
+                        <button
+                          onClick={() =>
+                            setNotifications((current) =>
+                              current.filter((entry) => entry.id !== item.id),
+                            )
+                          }
+                        >
+                          Later
+                        </button>
+                        <button onClick={dismissUpdateReminder}>
+                          Don't show again
+                        </button>
+                        <button
+                          className="primary"
+                          disabled={[
+                            "checking",
+                            "downloading",
+                            "installing",
+                          ].includes(updateStatus.state)}
+                          onClick={() => void runAppUpdateAction()}
+                        >
+                          {updateActionLabel}
+                        </button>
+                      </div>
+                    ) : item.kind === "ai-attention" ? (
+                      <div className="notification-choice">
+                        <button
+                          onClick={() => {
+                            setAiVisible(true);
+                            setNotificationsOpen(false);
+                            if (aiAttention?.kind !== "permission")
+                              handleAiAttentionChange(null);
+                          }}
+                        >
+                          Open chat
+                        </button>
+                        {aiAttention?.kind === "permission" &&
+                          permissionCompletionReady && (
+                            <button
+                              className="primary"
+                              disabled={permissionCompleting}
+                              onClick={() => void completeComputerPermission()}
+                            >
+                              {permissionCompleting ? "Checking…" : "Completed"}
+                            </button>
+                          )}
+                      </div>
+                    ) : (
                       <button
+                        className="notification-dismiss"
+                        aria-label="Dismiss notification"
                         onClick={() =>
                           setNotifications((current) =>
                             current.filter((entry) => entry.id !== item.id),
                           )
                         }
                       >
-                        Later
+                        <FeatherIcon icon="x" size="15" />
                       </button>
-                      <button onClick={dismissUpdateReminder}>
-                        Don't show again
-                      </button>
-                      <button
-                        className="primary"
-                        disabled={[
-                          "checking",
-                          "downloading",
-                          "installing",
-                        ].includes(updateStatus.state)}
-                        onClick={() => void runAppUpdateAction()}
-                      >
-                        {updateActionLabel}
-                      </button>
-                    </div>
-                  ) : item.kind === "ai-attention" ? (
-                    <div className="notification-choice">
-                      <button
-                        onClick={() => {
-                          setAiVisible(true);
-                          setNotificationsOpen(false);
-                          if (aiAttention?.kind !== "permission")
-                            handleAiAttentionChange(null);
-                        }}
-                      >
-                        Open chat
-                      </button>
-                      {aiAttention?.kind === "permission" &&
-                        permissionCompletionReady && (
-                          <button
-                            className="primary"
-                            disabled={permissionCompleting}
-                            onClick={() => void completeComputerPermission()}
-                          >
-                            {permissionCompleting ? "Checking…" : "Completed"}
-                          </button>
-                        )}
-                    </div>
-                  ) : (
-                    <button
-                      aria-label="Dismiss notification"
-                      onClick={() =>
-                        setNotifications((current) =>
-                          current.filter((entry) => entry.id !== item.id),
-                        )
-                      }
-                    >
-                      <FeatherIcon icon="x" size="15" />
-                    </button>
-                  )}
-                </div>
-              ))
-          ) : (
-            <p>No notifications.</p>
-          )}
+                    )}
+                  </div>
+                ))
+            ) : (
+              <p className="notification-empty">No notifications.</p>
+            )}
+          </div>
         </div>
       )}
       {projectContextMenu && (

@@ -4101,8 +4101,12 @@ function registerIpc() {
   ipcMain.handle("ai:agent-state", (event) =>
     withSenderAiProject(event, () => aiService.getAgentState()),
   );
-  ipcMain.handle("ai:create-chat", (event, title: unknown) =>
-    withSenderAiProject(event, () => aiService.createChat(title)),
+  ipcMain.handle(
+    "ai:create-chat",
+    (event, title: unknown, reuseEmpty: unknown) =>
+      withSenderAiProject(event, () =>
+        aiService.createChat(title, reuseEmpty === true),
+      ),
   );
   ipcMain.handle(
     "ai:save-chat",
@@ -5646,8 +5650,9 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  appUpdateService = new AppUpdateService((status) =>
-    sendToRenderer("updates:status-changed", status),
+  appUpdateService = new AppUpdateService(
+    (status) => sendToRenderer("updates:status-changed", status),
+    () => app.quit(),
   );
   const developmentOrigin =
     !app.isPackaged && process.env.VITE_DEV_SERVER_URL

@@ -8066,6 +8066,92 @@ textarea,
   box-shadow: none !important;
 }
 
+/* Final rich-text contract: later responsive chat rules must not enlarge model
+   prose or replace semantic heading typography. */
+.app .ai-message-content,
+.app .ai-message-content :where(p, li, ul, ol, blockquote, table) {
+  font-family: Manrope, sans-serif;
+  font-size: 14px !important;
+  line-height: 1.68;
+}
+
+.app .ai-message-content :where(h1, h2, h3, h4) {
+  font-family: "Playfair Display", Georgia, serif !important;
+  font-weight: 600;
+  line-height: 1.28;
+}
+
+.app .ai-message-content :where(h1, h2) {
+  font-size: 18px !important;
+}
+
+.app .ai-message-content :where(h3, h4) {
+  font-size: 16px !important;
+}
+
+/* Qwen and other local models render through one restrained reading scale.
+   Playfair is reserved for semantic headings; Manrope owns prose and UI copy. */
+.app .ai-message-content {
+  color: var(--text);
+  font-family: Manrope, sans-serif;
+  font-size: 14px !important;
+  line-height: 1.68;
+}
+
+.app .ai-message-content :where(p, ul, ol, blockquote, table) {
+  margin-block: 9px;
+}
+
+.app .ai-message-content :where(ul, ol) {
+  padding-inline-start: 22px;
+}
+
+.app .ai-message-content :where(li + li) {
+  margin-top: 4px;
+}
+
+.app .ai-message-content :where(h1, h2, h3, h4) {
+  margin: 16px 0 7px;
+  color: var(--text);
+  font-family: "Playfair Display", Georgia, serif;
+  font-weight: 600;
+  line-height: 1.28;
+  letter-spacing: -0.01em;
+}
+
+.app .ai-message-content :where(h1, h2) {
+  font-size: 18px !important;
+}
+
+.app .ai-message-content :where(h3, h4) {
+  font-size: 16px !important;
+}
+
+.app .ai-message-content > :first-child {
+  margin-top: 0;
+}
+
+.app .ai-message-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* Every native dropdown uses the same inset, stroked chevron as the custom
+   model and permission selectors. The icon remains 18px from the pill edge,
+   with enough inline padding to keep long values and the chevron separate. */
+.app select {
+  padding-inline-end: 52px !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2389cff0' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+  background-position: calc(100% - 18px) center !important;
+  background-repeat: no-repeat !important;
+  background-size: 18px 18px !important;
+}
+
+[dir="rtl"] .app select {
+  background-position: 18px center !important;
+}
+
 /* Explorer and editor-tab commands use one opaque, padded menu surface. */
 .project-context-menu {
   position: fixed;
@@ -13523,4 +13609,27 @@ button > svg * {
   border: 0 !important;
   outline: 0 !important;
   box-shadow: none !important;
+}
+
+/* Keep this as the final rich-text rule so responsive layouts cannot inflate
+   local-model answers after the shared typography contract is applied. */
+.app .ai-message-content,
+.app .ai-message-content :where(p, li, ul, ol, blockquote, table) {
+  font-family: Manrope, sans-serif;
+  font-size: 14px !important;
+  line-height: 1.68;
+}
+
+.app .ai-message-content :where(h1, h2, h3, h4) {
+  font-family: "Playfair Display", Georgia, serif !important;
+  font-weight: 600;
+  line-height: 1.28;
+}
+
+.app .ai-message-content :where(h1, h2) {
+  font-size: 18px !important;
+}
+
+.app .ai-message-content :where(h3, h4) {
+  font-size: 16px !important;
 }
