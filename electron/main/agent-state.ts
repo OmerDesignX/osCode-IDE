@@ -293,6 +293,7 @@ export class AgentStateStore {
         const chat: StoredChat = {
           id,
           title: text(input.title, 120) || "New chat",
+          favorite: input.favorite === true,
           projectRoot,
           messages: chatMessages,
           contextSummary,
@@ -416,6 +417,7 @@ export class AgentStateStore {
     const chat: AiChatThread = {
       id: crypto.randomUUID(),
       title: text(title, 120) || "New chat",
+      favorite: false,
       projectRoot,
       messages: [],
       contextSummary: "",
@@ -462,6 +464,7 @@ export class AgentStateStore {
             : {
                 id,
                 title: "New chat",
+                favorite: false,
                 projectRoot,
                 messages: [],
                 contextSummary: "",
@@ -480,6 +483,35 @@ export class AgentStateStore {
           first.content.replace(/\s+/g, " ").trim().slice(0, 60) ||
           first.attachments?.[0]?.name ||
           "Attachment";
+      return chat;
+    });
+  }
+
+  updateChatMetadata(
+    id: string,
+    projectRoot: string,
+    metadata: { title?: unknown; favorite?: unknown },
+  ) {
+    const key = projectKey(projectRoot);
+    const draft = this.draftChats.get(key);
+    if (draft?.id === id) {
+      if (metadata.title !== undefined)
+        draft.title = text(metadata.title, 120).trim() || "New chat";
+      if (metadata.favorite !== undefined)
+        draft.favorite = metadata.favorite === true;
+      draft.updatedAt = new Date().toISOString();
+      return Promise.resolve(draft);
+    }
+    return this.update((state) => {
+      const chat = state.chats.find(
+        (item) => item.id === id && item.projectRoot === projectRoot,
+      );
+      if (!chat) throw new Error("Chat was not found");
+      if (metadata.title !== undefined)
+        chat.title = text(metadata.title, 120).trim() || "New chat";
+      if (metadata.favorite !== undefined)
+        chat.favorite = metadata.favorite === true;
+      chat.updatedAt = new Date().toISOString();
       return chat;
     });
   }

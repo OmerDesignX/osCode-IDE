@@ -106,6 +106,8 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("ai:create-chat", title, reuseEmpty),
   saveAiChat: (id: string, messages: unknown, contextSummary: string) =>
     ipcRenderer.invoke("ai:save-chat", id, messages, contextSummary),
+  updateAiChatMetadata: (id: string, metadata: unknown) =>
+    ipcRenderer.invoke("ai:update-chat-metadata", id, metadata),
   deleteAiChat: (id: string) => ipcRenderer.invoke("ai:delete-chat", id),
   setAiGoal: (chatId: string, text: string, automatic = false) =>
     ipcRenderer.invoke("ai:set-goal", chatId, text, automatic),

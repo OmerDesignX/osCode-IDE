@@ -4240,6 +4240,13 @@ function registerIpc() {
     withSenderAiProject(event, () => aiService.deleteChat(id)),
   );
   ipcMain.handle(
+    "ai:update-chat-metadata",
+    (event, id: unknown, metadata: unknown) =>
+      withSenderAiProject(event, () =>
+        aiService.updateChatMetadata(id, metadata),
+      ),
+  );
+  ipcMain.handle(
     "ai:set-goal",
     (event, chatId: unknown, text: unknown, automatic: unknown) =>
       withSenderAiProject(event, () =>

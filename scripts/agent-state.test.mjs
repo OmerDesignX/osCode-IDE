@@ -18,6 +18,7 @@ test("agent chats, goals, queue, schedules, and permission scopes persist locall
     [{ role: "user", content: "Build a parser" }],
     "",
   );
+  await store.updateChatMetadata(chat.id, project, { favorite: true });
   const goal = await store.setGoal(chat.id, "Build a parser", true);
   const queued = await store.addQueue(chat.id, "Add tests");
   const schedule = await store.addSchedule(
@@ -45,6 +46,7 @@ test("agent chats, goals, queue, schedules, and permission scopes persist locall
   assert.equal(await store.collectDue(project), 1);
   const state = await store.state(project);
   assert.equal(state.chats[0].title, "Build a parser");
+  assert.equal(state.chats[0].favorite, true);
   assert.equal(state.goals[0].id, goal.id);
   assert.equal(
     state.queue.some((item) => item.id === queued.id),

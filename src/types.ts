@@ -198,6 +198,7 @@ export type AiChatMessage = {
 export type AiChatThread = {
   id: string;
   title: string;
+  favorite?: boolean;
   projectRoot: string;
   messages: AiChatMessage[];
   contextSummary: string;
@@ -480,6 +481,10 @@ declare global {
         id: string,
         messages: AiChatMessage[],
         contextSummary: string,
+      ): Promise<AiChatThread>;
+      updateAiChatMetadata(
+        id: string,
+        metadata: { title?: string; favorite?: boolean },
       ): Promise<AiChatThread>;
       deleteAiChat(id: string): Promise<boolean>;
       setAiGoal(

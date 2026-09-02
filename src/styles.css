@@ -13841,7 +13841,7 @@ button > svg * {
   font-size: 16px !important;
 }
 
-/* 1.0.4 AI column and footer alignment.
+/* 1.0.5 AI column and footer alignment.
    Keep the chat renderer mounted while hidden so background work continues,
    but make the column and its resize handle leave the flex layout completely. */
 .ai-panel[hidden],
@@ -13888,4 +13888,128 @@ button > svg * {
   margin: 0;
   justify-self: center;
   align-self: center;
+}
+
+/* Persistent chat tabs mirror the editor file-tab language and remain a
+   quiet horizontal rail. The component omits this strip for a single chat. */
+.ai-chat-tab-strip {
+  position: relative;
+  z-index: 4;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 14px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+}
+
+.ai-chat-tab {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  min-width: 150px;
+  max-width: 280px;
+  height: 44px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel2) 72%, var(--bg));
+  color: var(--muted);
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.ai-chat-tab:hover,
+.ai-chat-tab:focus-within {
+  background: color-mix(in srgb, var(--panel2) 84%, var(--accent) 16%);
+  color: var(--text);
+}
+
+.ai-chat-tab.active {
+  background: color-mix(in srgb, var(--panel2) 78%, var(--accent) 22%);
+  color: var(--accent);
+}
+
+.ai-chat-tab > button {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.ai-chat-tab > button:first-child {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 7px 0 16px;
+  text-align: left;
+}
+
+.ai-chat-tab > button:first-child > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font:
+    650 14px/1.2 Manrope,
+    sans-serif;
+}
+
+.ai-chat-tab > .ai-chat-tab-more {
+  flex: 0 0 38px;
+  width: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0 8px 0 3px;
+  border-radius: 50%;
+}
+
+.ai-chat-tab > .ai-chat-tab-more:hover,
+.ai-chat-tab > .ai-chat-tab-more:focus-visible {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.ai-chat-tab-menu {
+  position: fixed;
+  z-index: 260;
+  width: 190px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel) 96%, black 4%);
+  box-shadow: 0 18px 44px rgb(0 0 0 / 28%);
+}
+
+.ai-chat-tab-menu > button {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font:
+    600 13px/1 Manrope,
+    sans-serif;
+  text-align: left;
+}
+
+.ai-chat-tab-menu > button:hover,
+.ai-chat-tab-menu > button:focus-visible {
+  outline: 0;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel2));
+  color: var(--accent);
 }

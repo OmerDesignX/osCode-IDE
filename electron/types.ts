@@ -191,6 +191,7 @@ export type AiChatMessage = {
 export type AiChatThread = {
   id: string;
   title: string;
+  favorite?: boolean;
   projectRoot: string;
   messages: AiChatMessage[];
   contextSummary: string;

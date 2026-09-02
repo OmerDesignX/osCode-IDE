@@ -785,7 +785,10 @@ test("AI chat shows a steerable queue and can expand to the full window", () => 
   assert.match(ai, /Queued message returned to the composer/);
   assert.match(ai, /composerInputRef\.current/);
   assert.match(ai, /prioritizeAiQueue\(item\.id\)/);
-  assert.match(ai, /if \(busyRef\.current\) \{[\s\S]*scheduleQueueRun\(250\)/);
+  assert.match(
+    ai,
+    /aiPipelineState\(\)[\s\S]*if \(busyRef\.current \|\| currentPipeline\.state !== "idle"\) \{[\s\S]*scheduleQueueRun\(250\)/,
+  );
   assert.match(
     ai,
     /finally \{[\s\S]*busyRef\.current = false;[\s\S]*scheduleQueueRun\(\)/,

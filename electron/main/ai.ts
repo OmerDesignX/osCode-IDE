@@ -7007,6 +7007,17 @@ json.dump({'content':out},sys.stdout)`;
         .catch(() => undefined);
     return removed;
   }
+  async updateChatMetadata(rawId: unknown, rawMetadata: unknown) {
+    const metadata =
+      rawMetadata && typeof rawMetadata === "object"
+        ? (rawMetadata as Record<string, unknown>)
+        : {};
+    return this.agentState.updateChatMetadata(
+      cleanText(rawId, 100),
+      await fs.realpath(this.root()),
+      metadata,
+    );
+  }
   setGoal(rawChatId: unknown, rawText: unknown, automatic: unknown) {
     return this.agentState.setGoal(
       cleanText(rawChatId, 100),

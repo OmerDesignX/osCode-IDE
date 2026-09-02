@@ -19,6 +19,14 @@ test("osCode exposes native contextual Touch Bar editor controls", () => {
   assert.match(touchBar, /state\.running \? "stop" : "run"/);
   assert.match(touchBar, /backgroundColor = state\.dirty \? accent : dark/);
   assert.match(touchBar, /accessibilityLabel/);
+  assert.match(touchBar, /nativeImage\.createFromNamedImage/);
+  assert.match(touchBar, /iconPosition: "left"/);
+  assert.match(touchBar, /new TouchBar\.TouchBarScrubber/);
+  assert.match(touchBar, /mode: "free"/);
+  assert.match(touchBar, /showArrowButtons: true/);
+  assert.match(touchBar, /highlight: \(index\)/);
+  for (const action of ["find", "toggle-sidebar", "open-settings"])
+    assert.match(touchBar, new RegExp(`action: "${action}"`));
   assert.match(main, /installOsCodeTouchBar\(window\)/);
   assert.match(main, /ipcMain\.handle\("app:set-touch-bar-state"/);
   assert.match(preload, /setTouchBarState:[\s\S]*app:set-touch-bar-state/);

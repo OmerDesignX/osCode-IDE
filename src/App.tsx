@@ -6375,6 +6375,7 @@ export function App() {
               width={aiPanelWidth}
               side={aiPanelSide}
               projectName={project?.name || ""}
+              projectKey={project?.root || project?.name || ""}
               activeFile={active && !active.media ? active.path : ""}
               visible={aiVisible}
               openChatId={requestedAiChat}
