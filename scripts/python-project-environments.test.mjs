@@ -38,6 +38,20 @@ test("discovers common and nested PyCharm or monorepo virtual environments", asy
   assert.equal(found[0].kind, "venv");
 });
 
+test("discovers PyCharm environments with only a versioned Python executable", async (t) => {
+  const root = await fixture(t);
+  const environment = path.join(root, ".venv");
+  await fs.mkdir(path.join(environment, "bin"), { recursive: true });
+  await fs.writeFile(path.join(environment, "pyvenv.cfg"), "home = /python\n");
+  await fs.writeFile(path.join(environment, "bin", "python3.12"), "python\n");
+  const found = await discoverProjectPythonEnvironments(root, "darwin");
+  assert.equal(found.length, 1);
+  assert.equal(
+    found[0].interpreter,
+    path.join(await fs.realpath(environment), "bin", "python3.12"),
+  );
+});
+
 test("discovers project-local Conda environments on Windows", async (t) => {
   const root = await fixture(t);
   const environment = path.join(root, ".conda");

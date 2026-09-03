@@ -1698,10 +1698,13 @@ test("responsive workspace controls reflow instead of clipping", () => {
   assert.match(styles, /@container git-panel \(max-width: 360px\)/);
   assert.match(styles, /container-name: editor-area/);
   assert.match(styles, /container-name: project-sidebar/);
-  assert.match(app, /<div className="explorer-toolbar">/);
-  assert.doesNotMatch(
+  assert.match(
     app,
-    /className="explorer-toolbar horizontal-menu-scroll"/,
+    /className="explorer-toolbar horizontal-menu-scroll"[\s\S]*aria-label="Project file actions"/,
+  );
+  assert.match(
+    styles,
+    /\.explorer-toolbar \{[\s\S]*overflow-x: auto;[\s\S]*overflow-y: hidden;/,
   );
   assert.match(
     styles,
@@ -1709,7 +1712,19 @@ test("responsive workspace controls reflow instead of clipping", () => {
   );
   assert.match(
     main,
-    /explorerToolbarReady:[\s\S]*buttons\.length !== 9[\s\S]*toolbar\.scrollWidth <= toolbar\.clientWidth \+ 1/,
+    /explorerToolbarReady:[\s\S]*buttons\.length !== 9[\s\S]*overflowX === 'auto'[\s\S]*narrowLayoutScrollable[\s\S]*narrowLayoutScrolls/,
+  );
+  assert.match(
+    main,
+    /const projectTreeIgnored = new Set\(\["\.git", "node_modules", "__pycache__"\]\)/,
+  );
+  assert.match(
+    main,
+    /relativePath\.toLocaleLowerCase\(\)\.includes\(needle\)[\s\S]*"File name match"/,
+  );
+  assert.match(
+    main,
+    /ipcMain\.handle\("python:get-selection"[\s\S]{0,220}preferredProjectPythonInterpreter\(projectRoot\)/,
   );
   assert.match(
     styles,

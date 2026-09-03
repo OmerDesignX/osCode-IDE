@@ -158,6 +158,35 @@ let closeConfirmationOpen = false;
 let pendingMacInstallerPath = "";
 let spellcheckEnabled = true;
 let aiDisposePromise: Promise<void> | null = null;
+
+const macInstallerHandoffScript = [
+  'parent_pid="$1"',
+  'installer_path="$2"',
+  "attempt=0",
+  'while /bin/kill -0 "$parent_pid" 2>/dev/null && [ "$attempt" -lt 240 ]; do',
+  "  /bin/sleep 0.25",
+  "  attempt=$((attempt + 1))",
+  "done",
+  // Finder can briefly retain the bundle after Electron exits on Intel Macs.
+  "/bin/sleep 2",
+  'exec /usr/bin/open "$installer_path"',
+].join("\n");
+
+function openMacInstallerAfterExit(installerPath: string) {
+  const handoff = spawn(
+    "/bin/sh",
+    [
+      "-c",
+      macInstallerHandoffScript,
+      "oscode-update-handoff",
+      String(process.pid),
+      installerPath,
+    ],
+    { cwd: "/", detached: true, stdio: "ignore" },
+  );
+  handoff.once("error", () => undefined);
+  handoff.unref();
+}
 function sendToRenderer(channel: string, ...args: unknown[]) {
   if (
     !mainWindow ||
@@ -557,6 +586,15 @@ function disposeAiServiceSafely() {
   return aiDisposePromise;
 }
 
+async function finishQuitCleanup() {
+  try {
+    await stopProjectProcesses();
+  } catch {
+    // Continue quitting even if a child process already disappeared.
+  }
+  await disposeAiServiceSafely();
+}
+
 async function disposeTerminal(id: string) {
   const pending = terminalDisposals.get(id);
   if (pending) {
@@ -625,7 +663,8 @@ async function confirmDiscardChanges(detail: string) {
   return result.response === 1;
 }
 
-const ignored = new Set([
+const projectTreeIgnored = new Set([".git", "node_modules", "__pycache__"]);
+const projectSearchIgnored = new Set([
   ".git",
   ".oscode",
   ".venv",
@@ -650,12 +689,7 @@ async function tree(dir: string): Promise<TreeEntry[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   return entries
     .filter(
-      (entry) =>
-        !ignored.has(entry.name) &&
-        !(
-          entry.isDirectory() && ignoredEnvironmentDirectories.has(entry.name)
-        ) &&
-        !entry.isSymbolicLink(),
+      (entry) => !projectTreeIgnored.has(entry.name) && !entry.isSymbolicLink(),
     )
     .sort(
       (a, b) =>
@@ -685,14 +719,28 @@ async function searchProject(queryValue: unknown) {
     line: number;
     preview: string;
   }> = [];
+  const resultKeys = new Set<string>();
+  const addResult = (
+    full: string,
+    relativePath: string,
+    line: number,
+    preview: string,
+  ) => {
+    const key = `${full}:${line}`;
+    if (resultKeys.has(key) || results.length >= 250) return;
+    resultKeys.add(key);
+    results.push({ path: full, relativePath, line, preview });
+  };
   let visited = 0;
   const visit = async (directory: string) => {
     if (results.length >= 250 || visited >= 2_500) return;
-    const entries = await fs.readdir(directory, { withFileTypes: true });
+    const entries = await fs
+      .readdir(directory, { withFileTypes: true })
+      .catch(() => [] as import("node:fs").Dirent[]);
     for (const entry of entries) {
       if (results.length >= 250 || visited >= 2_500) break;
       if (
-        ignored.has(entry.name) ||
+        projectSearchIgnored.has(entry.name) ||
         (entry.isDirectory() &&
           ignoredEnvironmentDirectories.has(entry.name)) ||
         entry.isSymbolicLink()
@@ -705,6 +753,9 @@ async function searchProject(queryValue: unknown) {
       }
       if (!entry.isFile()) continue;
       visited += 1;
+      const relativePath = path.relative(projectRoot, full).replace(/\\/g, "/");
+      if (relativePath.toLocaleLowerCase().includes(needle))
+        addResult(full, relativePath, 1, "File name match");
       const stat = await fs.stat(full).catch(() => null);
       if (!stat || stat.size > 2_000_000) continue;
       let content = "";
@@ -720,12 +771,12 @@ async function searchProject(queryValue: unknown) {
         index += 1
       ) {
         if (!lines[index].toLocaleLowerCase().includes(needle)) continue;
-        results.push({
-          path: full,
-          relativePath: path.relative(projectRoot, full).replace(/\\/g, "/"),
-          line: index + 1,
-          preview: lines[index].trim().slice(0, 240),
-        });
+        addResult(
+          full,
+          relativePath,
+          index + 1,
+          lines[index].trim().slice(0, 240),
+        );
       }
     }
   };
@@ -3044,13 +3095,25 @@ async function runSmokeTest(window: BrowserWindow) {
           const buttons = [...(toolbar?.querySelectorAll('button') || [])];
           if (!toolbar || buttons.length !== 9) return false;
           const bounds = toolbar.getBoundingClientRect();
-          return (
-            getComputedStyle(toolbar).overflowX !== 'auto' &&
+          const wideLayoutReady =
             toolbar.scrollWidth <= toolbar.clientWidth + 1 &&
             buttons.every(button => {
               const box = button.getBoundingClientRect();
               return box.left >= bounds.left && box.right <= bounds.right + 1;
-            })
+            });
+          const previousWidth = toolbar.style.width;
+          toolbar.style.width = '220px';
+          const narrowLayoutScrollable =
+            toolbar.scrollWidth > toolbar.clientWidth + 1;
+          toolbar.scrollLeft = toolbar.scrollWidth;
+          const narrowLayoutScrolls = toolbar.scrollLeft > 0;
+          toolbar.style.width = previousWidth;
+          toolbar.scrollLeft = 0;
+          return (
+            getComputedStyle(toolbar).overflowX === 'auto' &&
+            wideLayoutReady &&
+            narrowLayoutScrollable &&
+            narrowLayoutScrolls
           );
         })(),
         aiPanelWidth: aiPanel.getBoundingClientRect().width,
@@ -5379,16 +5442,7 @@ function registerIpc() {
   ipcMain.handle("python:get-selection", async (event) => {
     activateSender(event);
     if (!projectRoot) return "";
-    const root = await fs.realpath(projectRoot);
-    const selections = await readPythonSelections();
-    const selected = selections[root];
-    if (!selected) return "";
-    try {
-      return (await inspectPython(selected)).path;
-    } catch {
-      await savePythonSelections(setPythonSelection(selections, root, ""));
-      return "";
-    }
+    return preferredProjectPythonInterpreter(projectRoot);
   });
   ipcMain.handle("python:set-selection", async (event, interpreter: string) => {
     activateSender(event);
@@ -5821,6 +5875,9 @@ app.whenReady().then(async () => {
   aiService = new LocalAiService({
     userData: app.getPath("userData"),
     modelsRoot: path.join(app.getPath("userData"), "models"),
+    sharedModelsRoots: [
+      path.join(path.dirname(app.getPath("userData")), "oschat", "models"),
+    ],
     secureStore,
     llamaRoot: app.isPackaged
       ? path.join(process.resourcesPath, "llama")
@@ -5958,33 +6015,21 @@ app.on("before-quit", (event) => {
       rendererHasUnsavedChanges = false;
       for (const context of windowContexts.values()) context.allowClose = true;
       quittingAfterCleanup = true;
-      await stopProjectProcesses();
-      await disposeAiServiceSafely();
+      await finishQuitCleanup();
       app.quit();
     });
     return;
   }
-  if (
-    !runningScript &&
-    terminals.size === 0 &&
-    !agentControlService?.isActive()
-  ) {
-    quittingAfterCleanup = true;
-    void disposeAiServiceSafely();
-    return;
-  }
   event.preventDefault();
   quittingAfterCleanup = true;
-  void stopProjectProcesses()
-    .then(() => disposeAiServiceSafely())
-    .finally(() => app.quit());
+  void finishQuitCleanup().finally(() => app.quit());
 });
 app.on("will-quit", () => {
   appUpdateService?.dispose();
   if (process.platform !== "darwin" || !pendingMacInstallerPath) return;
   const installerPath = pendingMacInstallerPath;
   pendingMacInstallerPath = "";
-  app.relaunch({ execPath: "/usr/bin/open", args: [installerPath] });
+  openMacInstallerAfterExit(installerPath);
 });
 app.on("activate", () => {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();

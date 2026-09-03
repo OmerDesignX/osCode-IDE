@@ -65,7 +65,25 @@ async function candidateForEnvironment(
 ): Promise<ProjectPythonEnvironmentCandidate | null> {
   const kind = await environmentKind(environment);
   if (!kind) return null;
-  for (const relative of interpreterRelatives(platform)) {
+  const relatives = interpreterRelatives(platform);
+  const executableDirectory = path.join(
+    environment,
+    platform === "win32" ? "Scripts" : "bin",
+  );
+  const discovered = await fs
+    .readdir(executableDirectory, { withFileTypes: true })
+    .catch(() => [] as import("node:fs").Dirent[]);
+  for (const entry of discovered) {
+    const matches =
+      platform === "win32"
+        ? /^python(?:3(?:\.\d+)?)?\.exe$/i.test(entry.name)
+        : /^python(?:3(?:\.\d+)?)?$/.test(entry.name);
+    if (matches)
+      relatives.push(
+        path.join(platform === "win32" ? "Scripts" : "bin", entry.name),
+      );
+  }
+  for (const relative of [...new Set(relatives)]) {
     const interpreter = path.join(environment, relative);
     if ((await fs.stat(interpreter).catch(() => null))?.isFile()) {
       const projectRelative = path

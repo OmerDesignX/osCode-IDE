@@ -1115,6 +1115,29 @@ export function App() {
       setNotice(errorMessage(error, "Project search failed"));
     }
   };
+  useEffect(() => {
+    if (!projectSearchOpen) return;
+    const query = projectSearch.trim();
+    if (!query) {
+      setProjectSearchResults([]);
+      return;
+    }
+    let current = true;
+    const timeout = window.setTimeout(() => {
+      void window.oscode
+        .searchProject(query)
+        .then((results) => {
+          if (current) setProjectSearchResults(results);
+        })
+        .catch((error) => {
+          if (current) setNotice(errorMessage(error, "Project search failed"));
+        });
+    }, 180);
+    return () => {
+      current = false;
+      window.clearTimeout(timeout);
+    };
+  }, [project?.root, projectSearch, projectSearchOpen]);
   const searchEverything = async (rawQuery: string) => {
     const query = rawQuery.trim();
     if (!query || !project) {
@@ -3787,7 +3810,11 @@ export function App() {
                 </div>
                 {project && (
                   <>
-                    <div className="explorer-toolbar">
+                    <div
+                      className="explorer-toolbar horizontal-menu-scroll"
+                      role="toolbar"
+                      aria-label="Project file actions"
+                    >
                       <IconButton
                         icon="file-plus"
                         label="New file"

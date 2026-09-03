@@ -295,11 +295,20 @@ select {
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
-  overflow: visible;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+.explorer-toolbar::-webkit-scrollbar {
+  display: none;
 }
 .explorer-toolbar .icon-button {
   width: 34px;
+  min-width: 34px;
   height: 34px;
+  flex: 0 0 34px;
   padding: 0;
   justify-content: center;
 }
@@ -307,7 +316,7 @@ select {
   display: none;
 }
 .explorer-toolbar .icon-button:last-child {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 @container project-sidebar (max-width: 280px) {
@@ -316,6 +325,7 @@ select {
     min-width: 28px;
     height: 28px;
     min-height: 28px;
+    flex-basis: 28px;
   }
 }
 .project-composer {
