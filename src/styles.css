@@ -375,6 +375,26 @@ select {
 .project-composer button:disabled {
   opacity: 0.4;
 }
+.welcome-project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+.welcome-project-actions > button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--panel2);
+  color: var(--text);
+}
+.welcome-project-actions > button:hover {
+  background: var(--control-selected-fill);
+}
 .tree {
   flex: 1;
   min-height: 0;
@@ -14025,4 +14045,75 @@ button > svg * {
   outline: 0;
   background: color-mix(in srgb, var(--accent) 18%, var(--panel2));
   color: var(--accent);
+}
+
+/* Keep the live transport controls fixed inside the composer. */
+.ai-composer:has(.ai-composer-stop-button),
+.ai-panel.expanded .ai-composer:has(.ai-composer-stop-button) {
+  grid-template-columns: 44px minmax(0, 1fr) 44px 44px 1px 44px;
+}
+
+.ai-composer-stop-divider {
+  width: 1px;
+  height: 30px;
+  align-self: center;
+  justify-self: center;
+  background: var(--line);
+}
+
+.ai-composer > .ai-composer-stop-button,
+.ai-composer > .ai-composer-stop-button:hover:not(:disabled),
+.ai-composer > .ai-composer-stop-button:focus-visible {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--panel2) 88%, var(--bg));
+  color: var(--text);
+  box-shadow: none;
+}
+
+.ai-composer > .ai-composer-stop-button:hover:not(:disabled),
+.ai-composer > .ai-composer-stop-button:focus-visible {
+  background: color-mix(in srgb, var(--panel2) 78%, var(--accent) 15%);
+  color: var(--accent);
+}
+
+.ai-action-output {
+  margin-top: 9px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel2) 88%, var(--bg));
+}
+
+.ai-action-output summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  color: var(--muted);
+  font:
+    650 11px/1.25 Manrope,
+    sans-serif;
+}
+
+.ai-action-output pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 0 10px 10px;
+  color: var(--text);
+  font:
+    11px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

@@ -177,6 +177,7 @@ export type AiActionEntry = {
   status: AiActionStatus;
   title: string;
   detail?: string;
+  output?: string;
   tool?: string;
   query?: string;
   url?: string;
@@ -397,6 +398,11 @@ declare global {
       setTouchBarState(state: Record<string, unknown>): Promise<boolean>;
       confirmDiscardChanges(detail: string): Promise<boolean>;
       openProject(): Promise<{
+        root: string;
+        name: string;
+        tree: TreeEntry[];
+      } | null>;
+      createProject(): Promise<{
         root: string;
         name: string;
         tree: TreeEntry[];

@@ -121,6 +121,32 @@ test("AI work survives chat hiding, window hiding, and renderer reattachment", (
   assert.match(ai, /hidden=\{!visible\}/);
 });
 
+test("project creation and live AI progress remain accessible", () => {
+  assert.match(
+    preload,
+    /createProject: \(\) => ipcRenderer\.invoke\("project:create"\)/,
+  );
+  assert.match(main, /ipcMain\.handle\("project:create"/);
+  assert.match(main, /title: "Create project folder"/);
+  assert.match(app, /Create project folder/);
+  assert.match(ai, /const liveContextUsed = Math\.min/);
+  assert.match(ai, /reasoning: current\.reasoning\.trim\(\)/);
+  assert.match(ai, /<ActionTimeline actions=\{liveActions\} compact \/>/);
+  assert.match(ai, /className="ai-composer-stop-divider"/);
+  assert.match(ai, /className="ai-composer-stop-button"/);
+  assert.match(ai, /className="ai-action-output"/);
+  assert.match(ai, /open=\{messageIndex === messages\.length - 1\}/);
+  assert.match(aiMain, /const thinkingTranscript = \(\) =>/);
+  assert.match(
+    aiMain,
+    /output: publicToolOutput\(action\.tool, result, status\)/,
+  );
+  assert.match(
+    styles,
+    /Keep the live transport controls fixed inside the composer/,
+  );
+});
+
 test("new-chat creation is idempotent and widget protocols stay out of search previews", () => {
   assert.match(ai, /createAiChat\(undefined, true\)/);
   assert.match(agentState, /\[draft, \.\.\.persistedChats\]/);
@@ -1374,7 +1400,7 @@ test("model and permission controls share a comfortable footer above the chat co
   );
   assert.match(main, /'permission controls after explicit click'/);
   assert.match(main, /result\.aiPermissionsClosedAtBoot !== true/);
-  assert.match(ai, /className="ai-stop-button"/);
+  assert.match(ai, /className="ai-composer-stop-button"/);
   assert.match(ai, /window\.oscode\.stopAi\(\)/);
   assert.match(styles, /Comfortable AI footer/);
   assert.match(

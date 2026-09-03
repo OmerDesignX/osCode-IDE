@@ -1010,6 +1010,22 @@ export function App() {
       projectPickerOpen.current = false;
     }
   };
+  const createProject = async () => {
+    if (projectPickerOpen.current) return;
+    projectPickerOpen.current = true;
+    try {
+      if (!(await confirmProjectChange("Creating another project"))) return;
+      const created = await window.oscode.createProject();
+      if (created) {
+        await activateProject(created);
+        setNotice(`Created ${created.name}`);
+      }
+    } catch (e) {
+      setNotice(errorMessage(e, "Project folder could not be created"));
+    } finally {
+      projectPickerOpen.current = false;
+    }
+  };
   const openProjectPath = async () => {
     if (!pathInput.trim()) return;
     try {
@@ -2621,6 +2637,7 @@ export function App() {
   })();
   menuActions.current = {
     "open-project": () => void openProject(),
+    "create-project": () => void createProject(),
     "new-file": () => {
       if (project) beginProjectOperation("file");
       else setNotice("Open a project before creating a file");
@@ -5266,10 +5283,16 @@ export function App() {
                       "افتح مشروعاً وابدأ الكتابة.",
                     )}
                   </p>
-                  <button className="primary" onClick={openProject}>
-                    <FeatherIcon icon="folder" size="15" />
-                    {tr("Open a project", "فتح مشروع")}
-                  </button>
+                  <div className="welcome-project-actions">
+                    <button className="primary" onClick={openProject}>
+                      <FeatherIcon icon="folder" size="15" />
+                      {tr("Open a project", "فتح مشروع")}
+                    </button>
+                    <button onClick={createProject}>
+                      <FeatherIcon icon="folder-plus" size="15" />
+                      {tr("Create project folder", "إنشاء مجلد مشروع")}
+                    </button>
+                  </div>
                   <div className="shortcuts">
                     <span>
                       <kbd>{shortcutModifier}</kbd> <kbd>O</kbd> open

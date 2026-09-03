@@ -1064,9 +1064,52 @@ export function finishToolAction(
     ...action,
     status,
     detail,
+    output: publicToolOutput(action.tool, result, status),
     websites: websites?.length ? websites : undefined,
     completedAt: status === "waiting" ? undefined : new Date().toISOString(),
   } satisfies AiActionEntry;
+}
+
+function publicToolOutput(
+  tool: string | undefined,
+  result: string,
+  status: "completed" | "waiting" | "failed",
+) {
+  if (!result.trim() || status === "waiting") return undefined;
+  if (
+    !tool ||
+    /^(?:computer_|browser_|web_fetch|webmcp_|mcp_)/.test(tool) ||
+    /^(?:read_file|read_files|search_files|git_diff|git_show)$/.test(tool)
+  )
+    return undefined;
+  let output = result;
+  if (tool === "run_command") {
+    try {
+      const parsed = JSON.parse(result) as {
+        stdout?: unknown;
+        stderr?: unknown;
+        exitCode?: unknown;
+        url?: unknown;
+      };
+      output = [parsed.stdout, parsed.stderr]
+        .filter((value): value is string => typeof value === "string")
+        .join("\n")
+        .trim();
+      if (!output)
+        output = parsed.url
+          ? `Ready at ${String(parsed.url)}`
+          : `Exit code ${String(parsed.exitCode ?? "unknown")}`;
+    } catch {
+      // Fall back to the bounded public result below.
+    }
+  }
+  return (
+    output
+      .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+      .trim()
+      .slice(-6000) || undefined
+  );
 }
 
 function platformioCompilerDigest(result: string) {
@@ -6241,6 +6284,14 @@ json.dump({'content':out},sys.stdout)`;
     let stalledProjectSteps = 0;
     let progressGuardMessage = "";
     let forcedAgentPhase: "write" | "verify" | "finish" | null = null;
+    const thinkingSteps: string[] = [];
+    const rememberThinking = (value?: string) => {
+      const next = value?.trim();
+      if (!next || thinkingSteps.at(-1) === next) return;
+      thinkingSteps.push(next);
+    };
+    const thinkingTranscript = () =>
+      thinkingSteps.join("\n\n---\n\n").slice(-40_000) || undefined;
     const implementationRequest =
       request.editMode !== "read-only" && requiresProjectMutation(workRequest);
     const platformioVerificationRequested =
@@ -6385,6 +6436,7 @@ json.dump({'content':out},sys.stdout)`;
           this.pendingPermissionCalls.set(request.chatId, continued);
           return {
             content: `Permission is needed to ${this.permissionTitle(requiredPermission.kind).toLowerCase()}.`,
+            thinking: thinkingTranscript(),
             retainedMessages,
             changedFiles: [...changed],
             toolSteps,
@@ -6427,6 +6479,7 @@ json.dump({'content':out},sys.stdout)`;
       if (pendingEdits.length) {
         return {
           content: "I prepared the requested file changes. Review them below.",
+          thinking: thinkingTranscript(),
           retainedMessages,
           changedFiles: [...changed],
           toolSteps,
@@ -6507,6 +6560,7 @@ json.dump({'content':out},sys.stdout)`;
           request.thinkingEnabled && step === 0 && !continued,
         );
       }
+      rememberThinking(reply.thinking);
       if (requestEpoch !== this.cancellationEpoch)
         throw new Error("Agent request stopped");
       const calls = reply.toolCalls.length
@@ -6563,7 +6617,7 @@ json.dump({'content':out},sys.stdout)`;
           return {
             content:
               "I couldn't complete the requested implementation because the local model did not return a valid project file action. No code was written. Please retry the task.",
-            thinking: reply.thinking,
+            thinking: thinkingTranscript(),
             retainedMessages,
             changedFiles: [...changed],
             toolSteps,
@@ -6582,7 +6636,7 @@ json.dump({'content':out},sys.stdout)`;
           return {
             content:
               "I saved the requested project files, but the local model did not complete a valid build, test, compile, or syntax check. The files are available for review, but I am not marking the implementation verified.",
-            thinking: reply.thinking,
+            thinking: thinkingTranscript(),
             retainedMessages,
             changedFiles: [...changed],
             toolSteps,
@@ -6599,7 +6653,7 @@ json.dump({'content':out},sys.stdout)`;
         this.options.status("Ready · local only");
         return {
           content: groundedFinalContent(reply.content, changed),
-          thinking: reply.thinking,
+          thinking: thinkingTranscript(),
           retainedMessages,
           changedFiles: [...changed],
           toolSteps,
@@ -6843,6 +6897,7 @@ json.dump({'content':out},sys.stdout)`;
             this.options.status("Waiting for permission");
             return {
               content: `Permission is needed to ${this.permissionTitle(requiredPermission.kind).toLowerCase()}.`,
+              thinking: thinkingTranscript(),
               retainedMessages,
               changedFiles: [...changed],
               toolSteps,
@@ -6930,6 +6985,7 @@ json.dump({'content':out},sys.stdout)`;
         this.options.status("Ready · local only");
         return {
           content: "I prepared the requested file changes. Review them below.",
+          thinking: thinkingTranscript(),
           retainedMessages,
           changedFiles: [...changed],
           toolSteps,
@@ -6950,6 +7006,7 @@ json.dump({'content':out},sys.stdout)`;
       content:
         progressGuardMessage ||
         "I reached the guarded local tool-step limit after 24 steps. Review the work log, then ask me to continue the active goal.",
+      thinking: thinkingTranscript(),
       retainedMessages,
       changedFiles: [...changed],
       toolSteps,

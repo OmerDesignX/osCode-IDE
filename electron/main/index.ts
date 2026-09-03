@@ -3779,6 +3779,10 @@ function createApplicationMenu() {
           click: send("open-project"),
         },
         {
+          label: "Create Project Folder…",
+          click: send("create-project"),
+        },
+        {
           label: "New File",
           accelerator: "CmdOrCtrl+N",
           click: send("new-file"),
@@ -4571,6 +4575,28 @@ function registerIpc() {
     });
     if (result.canceled) return null;
     const nextRoot = await fs.realpath(result.filePaths[0]);
+    setSenderProject(event, nextRoot);
+    return {
+      root: nextRoot,
+      name: path.basename(nextRoot),
+      tree: await tree(nextRoot),
+    };
+  });
+  ipcMain.handle("project:create", async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showSaveDialog(owner || undefined, {
+      title: "Create project folder",
+      buttonLabel: "Create project",
+      defaultPath: path.join(app.getPath("documents"), "Untitled Project"),
+      properties: ["createDirectory", "showOverwriteConfirmation"],
+    });
+    if (result.canceled || !result.filePath) return null;
+    const requestedRoot = path.resolve(result.filePath);
+    const existing = await fs.stat(requestedRoot).catch(() => null);
+    if (existing && !existing.isDirectory())
+      throw new Error("A file already exists with that name");
+    if (!existing) await fs.mkdir(requestedRoot);
+    const nextRoot = await fs.realpath(requestedRoot);
     setSenderProject(event, nextRoot);
     return {
       root: nextRoot,

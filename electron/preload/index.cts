@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("oscode", {
   confirmDiscardChanges: (detail: string) =>
     ipcRenderer.invoke("dialog:confirm-discard", detail),
   openProject: () => ipcRenderer.invoke("project:open"),
+  createProject: () => ipcRenderer.invoke("project:create"),
   openProjectPath: (path: string) =>
     ipcRenderer.invoke("project:open-path", path),
   closeProject: () => ipcRenderer.invoke("project:close"),
