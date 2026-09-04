@@ -1715,6 +1715,90 @@ test("the agent asks before running global development commands", async (t) => {
   assert.equal(reused.exitCode, 0);
 });
 
+test("successful sequential verification keeps a completed work-log status", async (t) => {
+  const actions = [];
+  const { root, base, service, chat } = await fixture({
+    serviceOptions: { action: (entry) => actions.push(entry) },
+  });
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "tests",
+  );
+  let turn = 0;
+  service.remoteReply = async () => {
+    turn += 1;
+    if (turn === 1)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write-chain-check",
+            name: "write_file",
+            arguments: {
+              path: "chain-check.mjs",
+              content: 'console.log("chain verified")\n',
+            },
+          },
+        ],
+      };
+    if (turn === 2)
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "run-chain-check",
+            name: "run_command",
+            arguments: {
+              command: "node chain-check.mjs && node chain-check.mjs",
+              purpose: "Run both verification steps",
+            },
+          },
+        ],
+      };
+    return {
+      content: "Created and verified the chained check.",
+      toolCalls: [],
+    };
+  };
+  const result = await service.chat({
+    chatId: chat.id,
+    engine: "mlx",
+    model: "fixture-mlx",
+    executable: "",
+    editMode: "auto",
+    terminalMode: "auto",
+    contextLimit: 8192,
+    contextSummary: "",
+    goal: "",
+    fileAccess: true,
+    webAccess: false,
+    browserAccess: false,
+    computerAccess: false,
+    messages: [
+      {
+        role: "user",
+        content: "Create chain-check.mjs and run it twice to verify it.",
+      },
+    ],
+  });
+  assert.match(result.content, /Created and verified/);
+  assert.match(
+    await fs.readFile(path.join(root, "chain-check.mjs"), "utf8"),
+    /chain verified/,
+  );
+  const completed = actions.find(
+    (entry) => entry.tool === "run_command" && entry.status !== "running",
+  );
+  assert.equal(completed?.status, "completed");
+  assert.match(completed?.detail || "", /exit code 0/);
+});
+
 test("chat terminal grants persist and Python commands use the selected project environment", async (t) => {
   const { root, base, service, chat } = await fixture({
     serviceOptions: {
@@ -3234,6 +3318,37 @@ test("local models can own a chat goal, queue follow-up work, and schedule it", 
   );
   const completed = await service.getAgentState();
   assert.equal(completed.goals[0].status, "complete");
+});
+
+test("structured Qwen goal arguments do not interrupt an active automatic goal", async (t) => {
+  const { base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const changed = new Set();
+  await service.runTool(
+    {
+      name: "set_goal",
+      arguments: { text: { objective: "Create Python and convert it to C" } },
+    },
+    "auto",
+    changed,
+    [],
+    false,
+    false,
+    chat.id,
+  );
+  const redundant = await service.runTool(
+    { name: "set_goal", arguments: { text: {} } },
+    "auto",
+    changed,
+    [],
+    false,
+    false,
+    chat.id,
+  );
+  assert.match(redundant, /Active goal remains/);
+  const state = await service.getAgentState();
+  assert.equal(state.goals.length, 1);
+  assert.equal(state.goals[0].text, "Create Python and convert it to C");
 });
 
 test("local models cannot complete a goal without verification evidence", async (t) => {

@@ -4571,7 +4571,9 @@ function registerIpc() {
   ipcMain.handle("project:open", async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(owner || undefined, {
-      properties: ["openDirectory"],
+      title: "Open or create a project folder",
+      buttonLabel: "Open project",
+      properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled) return null;
     const nextRoot = await fs.realpath(result.filePaths[0]);

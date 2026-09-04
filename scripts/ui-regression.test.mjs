@@ -126,6 +126,11 @@ test("project creation and live AI progress remain accessible", () => {
     preload,
     /createProject: \(\) => ipcRenderer\.invoke\("project:create"\)/,
   );
+  assert.match(
+    main,
+    /ipcMain\.handle\("project:open"[\s\S]*properties: \["openDirectory", "createDirectory"\]/,
+  );
+  assert.match(main, /title: "Open or create a project folder"/);
   assert.match(main, /ipcMain\.handle\("project:create"/);
   assert.match(main, /title: "Create project folder"/);
   assert.match(app, /Create project folder/);
@@ -137,6 +142,8 @@ test("project creation and live AI progress remain accessible", () => {
   assert.match(ai, /className="ai-action-output"/);
   assert.match(ai, /open=\{messageIndex === messages\.length - 1\}/);
   assert.match(aiMain, /const thinkingTranscript = \(\) =>/);
+  assert.doesNotMatch(aiMain, /thinkingSteps\.join\("\\n\\n---/);
+  assert.doesNotMatch(ai, /current\.reasoning\.trim\(\)\}\\n\\n---/);
   assert.match(
     aiMain,
     /output: publicToolOutput\(action\.tool, result, status\)/,

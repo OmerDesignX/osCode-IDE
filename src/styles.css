@@ -14073,14 +14073,14 @@ button > svg * {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--panel2) 88%, var(--bg));
+  background: var(--control-hover-fill);
   color: var(--text);
   box-shadow: none;
 }
 
 .ai-composer > .ai-composer-stop-button:hover:not(:disabled),
 .ai-composer > .ai-composer-stop-button:focus-visible {
-  background: color-mix(in srgb, var(--panel2) 78%, var(--accent) 15%);
+  background: var(--control-selected-fill);
   color: var(--accent);
 }
 

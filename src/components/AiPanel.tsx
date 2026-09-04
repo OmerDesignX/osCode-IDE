@@ -876,7 +876,7 @@ export function AiPanel({
                 ? {
                     chatId: output.chatId,
                     reasoning: current.reasoning.trim()
-                      ? `${current.reasoning.trim()}\n\n---\n\n`
+                      ? `${current.reasoning.trim()}\n\n`
                       : "",
                     answer: "",
                   }

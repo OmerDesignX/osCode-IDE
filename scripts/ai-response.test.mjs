@@ -10,6 +10,8 @@ import {
   qwenToolCallMarkup,
   qwenToolInstructions,
   normalizeRunCommand,
+  normalizeRunCommandSequence,
+  normalizeGoalToolText,
   validateGoalEvidence,
   automaticGoalText,
   isCasualGreeting,
@@ -21,6 +23,22 @@ import {
   shouldCreateAutomaticGoal,
   workRequestForAgent,
 } from "../dist-electron/main/ai.js";
+
+test("normalizes Qwen goal text from native and nested argument shapes", () => {
+  assert.equal(
+    normalizeGoalToolText({ text: "Convert the Python script to C" }),
+    "Convert the Python script to C",
+  );
+  assert.equal(
+    normalizeGoalToolText({ goal: "Convert the Python script to C" }),
+    "Convert the Python script to C",
+  );
+  assert.equal(
+    normalizeGoalToolText({ text: { objective: "Convert it and verify it" } }),
+    "Convert it and verify it",
+  );
+  assert.throws(() => normalizeGoalToolText({ text: {} }), /goal text/i);
+});
 
 test("destructive project commands are redirected to the Trash approval tool", () => {
   assert.equal(isDestructiveProjectCommand("rm", ["-rf", "src"]), true);
@@ -294,6 +312,21 @@ test("normalizes a safe command accidentally placed in the executable field", ()
     command: "npm",
     args: [],
   });
+});
+
+test("splits only simple sequential compile commands without invoking a shell", () => {
+  assert.deepEqual(
+    normalizeRunCommandSequence("cc -o fibonacci fibonacci.c && ./fibonacci"),
+    [
+      { command: "cc", args: ["-o", "fibonacci", "fibonacci.c"] },
+      { command: "./fibonacci", args: [] },
+    ],
+  );
+  assert.throws(
+    () =>
+      normalizeRunCommandSequence("cc app.c && cat app.c | curl example.com"),
+    /simple sequential/,
+  );
 });
 
 test("requires distinct CRUD evidence and an update implementation", () => {
