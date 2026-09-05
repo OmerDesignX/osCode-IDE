@@ -685,17 +685,23 @@ const ignoredEnvironmentDirectories = new Set([
   ".tox",
   ".nox",
 ]);
+const projectEntryCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+const compareProjectEntries = (
+  left: import("node:fs").Dirent,
+  right: import("node:fs").Dirent,
+) =>
+  Number(right.isDirectory()) - Number(left.isDirectory()) ||
+  projectEntryCollator.compare(left.name, right.name);
 async function tree(dir: string): Promise<TreeEntry[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   return entries
     .filter(
       (entry) => !projectTreeIgnored.has(entry.name) && !entry.isSymbolicLink(),
     )
-    .sort(
-      (a, b) =>
-        Number(b.isDirectory()) - Number(a.isDirectory()) ||
-        a.name.localeCompare(b.name),
-    )
+    .sort(compareProjectEntries)
     .map((e) => {
       const full = path.join(dir, e.name);
       return e.isDirectory()
@@ -734,9 +740,11 @@ async function searchProject(queryValue: unknown) {
   let visited = 0;
   const visit = async (directory: string) => {
     if (results.length >= 250 || visited >= 2_500) return;
-    const entries = await fs
-      .readdir(directory, { withFileTypes: true })
-      .catch(() => [] as import("node:fs").Dirent[]);
+    const entries = (
+      await fs
+        .readdir(directory, { withFileTypes: true })
+        .catch(() => [] as import("node:fs").Dirent[])
+    ).sort(compareProjectEntries);
     for (const entry of entries) {
       if (results.length >= 250 || visited >= 2_500) break;
       if (
@@ -781,7 +789,11 @@ async function searchProject(queryValue: unknown) {
     }
   };
   await visit(projectRoot);
-  return results;
+  return results.sort(
+    (left, right) =>
+      projectEntryCollator.compare(left.relativePath, right.relativePath) ||
+      left.line - right.line,
+  );
 }
 function withinRoot(target: string) {
   const relative = path.relative(projectRoot, target);
@@ -2022,6 +2034,7 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.confirmDiscardChanges === 'function' &&
         typeof window.oscode?.setDirtyState === 'function' &&
         typeof window.oscode?.openProject === 'function' &&
+        typeof window.oscode?.searchProject === 'function' &&
         typeof window.oscode?.createTerminal === 'function' &&
         typeof window.oscode?.gitRun === 'function' &&
         typeof window.oscode?.deleteRepository === 'function' &&
@@ -2113,6 +2126,10 @@ async function runSmokeTest(window: BrowserWindow) {
           'smoke project file'
         );
       }
+      const nestedProjectSearch = await window.oscode.searchProject('module.py');
+      const projectSearchReady = nestedProjectSearch.some(
+        item => item.relativePath === 'vendor/sample-module/module.py'
+      );
       file.click();
       const projectPythonEnvironmentReady = Boolean(await waitFor(
         () => {
@@ -3089,11 +3106,12 @@ async function runSmokeTest(window: BrowserWindow) {
         autoUpdatePromptReady: Boolean(autoUpdatePromptReady),
         pythonControlsBeforeFile,
         projectReady: document.body.innerText.includes('smoke-project'),
+        projectSearchReady,
         sidebarWidth: document.querySelector('.sidebar')?.getBoundingClientRect().width || 0,
         explorerToolbarReady: (() => {
           const toolbar = document.querySelector('.explorer-toolbar');
           const buttons = [...(toolbar?.querySelectorAll('button') || [])];
-          if (!toolbar || buttons.length !== 9) return false;
+          if (!toolbar || buttons.length !== 8) return false;
           const bounds = toolbar.getBoundingClientRect();
           const wideLayoutReady =
             toolbar.scrollWidth <= toolbar.clientWidth + 1 &&
@@ -3610,6 +3628,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.bridgeReady !== true ||
       result.autoUpdatePromptReady !== true ||
       result.projectReady !== true ||
+      result.projectSearchReady !== true ||
       Number(result.sidebarWidth) < 510 ||
       Number(result.sidebarWidth) > 530 ||
       result.explorerToolbarReady !== true ||

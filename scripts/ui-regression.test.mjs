@@ -10,6 +10,10 @@ const ai = await fs.readFile(
   new URL("../src/components/AiPanel.tsx", import.meta.url),
   "utf8",
 );
+const fileTree = await fs.readFile(
+  new URL("../src/components/FileTree.tsx", import.meta.url),
+  "utf8",
+);
 const chatSearchPreview = await fs.readFile(
   new URL("../src/chat-search-preview.ts", import.meta.url),
   "utf8",
@@ -1178,6 +1182,26 @@ test("global search separates project code from AI chats", () => {
   assert.match(main, /globalActivityScrollReady/);
   assert.match(main, /nonDownloadProgressHidden/);
   assert.match(main, /balancedControlSizing/);
+  assert.match(main, /projectSearchReady/);
+  assert.match(
+    app,
+    /const openGlobalProjectSearch[\s\S]*setGlobalSearchOpen\(true\)/,
+  );
+  assert.doesNotMatch(app, /className="project-search-panel"/);
+  assert.doesNotMatch(app, /icon="search"[\s\S]{0,120}label="Search project"/);
+});
+
+test("project files use stable natural alphabetical ordering", () => {
+  assert.match(main, /const projectEntryCollator = new Intl\.Collator/);
+  assert.match(main, /\.sort\(compareProjectEntries\)/);
+  assert.match(
+    main,
+    /return results\.sort\([\s\S]*projectEntryCollator\.compare\(left\.relativePath, right\.relativePath\)/,
+  );
+  assert.match(
+    fileTree,
+    /\[\.\.\.entries\]\.sort\(compareProjectTreeEntries\)\.map/,
+  );
 });
 
 test("Git commits use a private repository-local fallback without an author dialog", () => {
@@ -1745,7 +1769,7 @@ test("responsive workspace controls reflow instead of clipping", () => {
   );
   assert.match(
     main,
-    /explorerToolbarReady:[\s\S]*buttons\.length !== 9[\s\S]*overflowX === 'auto'[\s\S]*narrowLayoutScrollable[\s\S]*narrowLayoutScrolls/,
+    /explorerToolbarReady:[\s\S]*buttons\.length !== 8[\s\S]*overflowX === 'auto'[\s\S]*narrowLayoutScrollable[\s\S]*narrowLayoutScrolls/,
   );
   assert.match(
     main,

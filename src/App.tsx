@@ -457,11 +457,6 @@ export function App() {
     [gitUtilityName, setGitUtilityName] = useState(""),
     [branchComposer, setBranchComposer] = useState(false),
     [notificationsOpen, setNotificationsOpen] = useState(false),
-    [projectSearchOpen, setProjectSearchOpen] = useState(false),
-    [projectSearch, setProjectSearch] = useState(""),
-    [projectSearchResults, setProjectSearchResults] = useState<
-      ProjectSearchResult[]
-    >([]),
     [globalSearch, setGlobalSearch] = useState(""),
     [globalSearchOpen, setGlobalSearchOpen] = useState(false),
     [globalSearchResults, setGlobalSearchResults] = useState<{
@@ -1120,85 +1115,63 @@ export function App() {
       setNotice(errorMessage(error, "Those files could not be compared"));
     }
   };
-  const searchWholeProject = async () => {
-    if (!projectSearch.trim()) {
-      setProjectSearchResults([]);
-      return;
-    }
-    try {
-      setProjectSearchResults(await window.oscode.searchProject(projectSearch));
-    } catch (error) {
-      setNotice(errorMessage(error, "Project search failed"));
-    }
-  };
   useEffect(() => {
-    if (!projectSearchOpen) return;
-    const query = projectSearch.trim();
-    if (!query) {
-      setProjectSearchResults([]);
+    const query = globalSearch.trim();
+    if (!query || !project) {
+      setGlobalSearchResults({ code: [], chats: [] });
       return;
     }
     let current = true;
     const timeout = window.setTimeout(() => {
-      void window.oscode
-        .searchProject(query)
-        .then((results) => {
-          if (current) setProjectSearchResults(results);
+      void Promise.all([
+        window.oscode.searchProject(query),
+        window.oscode.aiAgentState(),
+      ])
+        .then(([code, state]) => {
+          if (!current) return;
+          const needle = query.toLowerCase();
+          const chats = state.chats
+            .slice()
+            .sort(
+              (left, right) =>
+                Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+            )
+            .filter((chat) =>
+              `${chat.title} ${chat.messages.map((item) => item.content).join(" ")}`
+                .toLowerCase()
+                .includes(needle),
+            )
+            .slice(0, 20)
+            .map((chat) => {
+              const match = chat.messages.find((item) =>
+                item.content.toLowerCase().includes(needle),
+              );
+              return {
+                id: chat.id,
+                title: chat.title,
+                preview: chatSearchPreview(
+                  match?.content || "Chat title match",
+                ).slice(0, 180),
+              };
+            });
+          setGlobalSearchResults({ code: code.slice(0, 80), chats });
         })
         .catch((error) => {
-          if (current) setNotice(errorMessage(error, "Project search failed"));
+          if (current) setNotice(errorMessage(error, "Search failed"));
         });
     }, 180);
     return () => {
       current = false;
       window.clearTimeout(timeout);
     };
-  }, [project?.root, projectSearch, projectSearchOpen]);
-  const searchEverything = async (rawQuery: string) => {
-    const query = rawQuery.trim();
-    if (!query || !project) {
-      setGlobalSearchResults({ code: [], chats: [] });
+  }, [globalSearch, project?.root]);
+  const openGlobalProjectSearch = () => {
+    if (!project) {
+      setNotice("Open a project before searching");
       return;
     }
-    try {
-      const [code, state] = await Promise.all([
-        window.oscode.searchProject(query),
-        window.oscode.aiAgentState(),
-      ]);
-      const needle = query.toLowerCase();
-      const chats = state.chats
-        .slice()
-        .reverse()
-        .filter((chat) =>
-          `${chat.title} ${chat.messages.map((item) => item.content).join(" ")}`
-            .toLowerCase()
-            .includes(needle),
-        )
-        .slice(0, 20)
-        .map((chat) => {
-          const match = chat.messages.find((item) =>
-            item.content.toLowerCase().includes(needle),
-          );
-          return {
-            id: chat.id,
-            title: chat.title,
-            preview: chatSearchPreview(
-              match?.content || "Chat title match",
-            ).slice(0, 180),
-          };
-        });
-      setGlobalSearchResults({ code: code.slice(0, 80), chats });
-    } catch (error) {
-      setNotice(errorMessage(error, "Search failed"));
-    }
+    setGlobalSearchOpen(true);
   };
-  useEffect(() => {
-    const timeout = window.setTimeout(
-      () => void searchEverything(globalSearch),
-      180,
-    );
-    return () => window.clearTimeout(timeout);
-  }, [globalSearch, project?.root]);
   const expandDirectory = async (target: string) => {
     const children = await window.oscode.listDirectory(target);
     const update = (entries: TreeEntry[]): TreeEntry[] =>
@@ -2438,8 +2411,7 @@ export function App() {
           shortcut: `${shortcutModifier}+Shift+F`,
           separatorBefore: true,
           run: () => {
-            setSidebarVisible(true);
-            setProjectSearchOpen(true);
+            openGlobalProjectSearch();
           },
         },
         {
@@ -2722,8 +2694,7 @@ export function App() {
     find: () => runEditorAction("actions.find"),
     replace: () => runEditorAction("editor.action.startFindReplaceAction"),
     "find-in-files": () => {
-      setSidebarVisible(true);
-      setProjectSearchOpen(true);
+      openGlobalProjectSearch();
     },
     "format-document": () => runEditorAction("editor.action.formatDocument"),
     "toggle-line-comment": () => runEditorAction("editor.action.commentLine"),
@@ -3880,74 +3851,11 @@ export function App() {
                         onClick={refreshProjectItems}
                       />
                       <IconButton
-                        icon="search"
-                        label="Search project"
-                        active={projectSearchOpen}
-                        onClick={() => setProjectSearchOpen((open) => !open)}
-                      />
-                      <IconButton
                         icon="x-circle"
                         label="Close and forget project"
                         onClick={() => void closeProject()}
                       />
                     </div>
-                    {projectSearchOpen && (
-                      <div className="project-search-panel">
-                        <div className="compact-panel-head">
-                          <b>Search project</b>
-                          <IconButton
-                            icon="x"
-                            label="Close project search"
-                            onClick={() => setProjectSearchOpen(false)}
-                          />
-                        </div>
-                        <form
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            void searchWholeProject();
-                          }}
-                        >
-                          <input
-                            autoFocus
-                            aria-label="Search all project files"
-                            placeholder="Search text"
-                            value={projectSearch}
-                            onChange={(event) =>
-                              setProjectSearch(event.target.value)
-                            }
-                          />
-                          <button
-                            type="submit"
-                            disabled={!projectSearch.trim()}
-                          >
-                            Search
-                          </button>
-                        </form>
-                        <div className="project-search-results">
-                          {projectSearchResults.map((result) => (
-                            <button
-                              key={`${result.path}:${result.line}`}
-                              onClick={() => {
-                                setPendingRevealLine(result.line);
-                                setProjectSearchOpen(false);
-                                void openFile({
-                                  path: result.path,
-                                  name:
-                                    result.relativePath.split("/").at(-1) ||
-                                    result.relativePath,
-                                  kind: "file",
-                                });
-                              }}
-                            >
-                              <b>
-                                {result.relativePath}:{result.line}
-                              </b>
-                              <span>{result.preview}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                     {projectOperation && (
                       <form
                         className="project-composer"

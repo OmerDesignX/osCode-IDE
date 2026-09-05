@@ -1,6 +1,19 @@
 import { FeatherIcon } from "./FeatherIcon";
 import { useState, type MouseEvent } from "react";
 import type { TreeEntry } from "../types";
+
+const projectEntryCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+export function compareProjectTreeEntries(left: TreeEntry, right: TreeEntry) {
+  return (
+    Number(right.kind === "directory") - Number(left.kind === "directory") ||
+    projectEntryCollator.compare(left.name, right.name)
+  );
+}
+
 export function FileTree({
   entries,
   onOpen,
@@ -22,7 +35,7 @@ export function FileTree({
 }) {
   return (
     <>
-      {entries.map((entry) => (
+      {[...entries].sort(compareProjectTreeEntries).map((entry) => (
         <TreeNode
           key={entry.path}
           entry={entry}
