@@ -9,7 +9,7 @@ export function defaultAiHardware(
 }
 
 export const defaultPreferences: EditorPreferences = {
-  version: 16,
+  version: 17,
   theme: "dark",
   locale: "en",
   sidebarSide: "left",
@@ -60,12 +60,12 @@ export function validPreferences(
   const aiHardware =
     platform === "darwin" &&
     arch === "x64" &&
-    Number(input.version) < 14 &&
+    Number(input.version) < 17 &&
     savedHardware === "auto"
       ? "cpu"
       : savedHardware || defaultAiHardware(platform, arch);
   return {
-    version: 16,
+    version: 17,
     theme:
       input.theme === "blue-dark" || input.theme === "blue-light"
         ? input.theme

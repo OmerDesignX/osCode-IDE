@@ -2114,7 +2114,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 16,
+      version: 17,
       theme,
       locale,
       sidebarSide,

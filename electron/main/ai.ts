@@ -118,6 +118,18 @@ export function shouldRetryLlamaOnCpu(
   return platform === "darwin" && arch === "x64" && hardware === "auto";
 }
 
+export function isBenignPromptPipeError(error: unknown) {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code || "")
+      : "";
+  return [
+    "EPIPE",
+    "ERR_STREAM_DESTROYED",
+    "ERR_STREAM_WRITE_AFTER_END",
+  ].includes(code);
+}
+
 function cleanOllamaModelName(rawValue: unknown) {
   const name = cleanText(rawValue, 200).trim();
   if (!name || !/^[A-Za-z0-9._:/-]{1,200}$/.test(name))
@@ -5349,7 +5361,15 @@ export class LocalAiService {
     // KV cache against the device's actual free memory. Forcing 999 layers
     // disables that fitting path and makes a supported 256k context fail on
     // smaller GPUs before generation starts. CPU mode remains explicit.
-    if (hardware === "cpu") inferenceArguments.push("--gpu-layers", "0");
+    if (hardware === "cpu")
+      inferenceArguments.push(
+        "--device",
+        "none",
+        "--gpu-layers",
+        "0",
+        "--no-kv-offload",
+        "--no-op-offload",
+      );
     else {
       const profile = await this.hardwareProfile();
       if (
@@ -5394,10 +5414,18 @@ export class LocalAiService {
         },
       });
       this.worker = child;
-      if (process.platform === "win32") child.stdin.end();
-      else child.stdin.end(promptBuffer, () => promptBuffer.fill(0));
       const output: Buffer[] = [];
       const errors: Buffer[] = [];
+      // A model process can exit before consuming its prompt (for example when
+      // an older CPU rejects the binary). Node reports that ordinary process
+      // failure as EPIPE on stdin; contain it here so it becomes a model error
+      // in the chat instead of an uncaught Electron main-process exception.
+      child.stdin.on("error", (error) => {
+        if (!isBenignPromptPipeError(error))
+          errors.push(Buffer.from(String(error), "utf8"));
+      });
+      if (process.platform === "win32") child.stdin.end();
+      else child.stdin.end(promptBuffer, () => promptBuffer.fill(0));
       let answerStarted = !enableThinking;
       let observed = "";
       let streamedRaw = "";
@@ -5487,9 +5515,12 @@ export class LocalAiService {
     if (shouldRetryLlamaOnCpu(process.platform, process.arch, hardware))
       attempts.push([
         ...inferenceArguments,
+        "--device",
+        "none",
         "--gpu-layers",
         "0",
         "--no-kv-offload",
+        "--no-op-offload",
       ]);
     let lastDiagnostic = "";
     let lastCode: number | null = null;
@@ -5499,9 +5530,7 @@ export class LocalAiService {
       lastDiagnostic = result.diagnostic;
       lastCode = result.code;
       if (index + 1 < attempts.length)
-        this.options.status(
-          "Intel GPU startup failed; retrying the model locally on CPU…",
-        );
+        this.options.status("Retrying local model startup…");
     }
     throw new Error(publicModelError(lastDiagnostic, lastCode));
   }

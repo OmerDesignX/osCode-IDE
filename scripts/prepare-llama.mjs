@@ -375,6 +375,11 @@ if (process.platform === "darwin") {
       const expectedArchitecture = targetName.endsWith("arm64")
         ? "arm64"
         : "x86_64";
+      if (
+        expectedArchitecture === "x86_64" &&
+        metadata.cpuBaseline !== "x86-64-avx"
+      )
+        return false;
       for (const binary of binaries) {
         if (!(await stat(binary)).isFile()) return false;
         const architectures = spawnSync("xcrun", ["lipo", "-archs", binary], {
@@ -464,6 +469,20 @@ if (process.platform === "darwin") {
       "-DGGML_ACCELERATE=ON",
       "-DGGML_METAL=ON",
       "-DGGML_METAL_EMBED_LIBRARY=ON",
+      ...(architecture === "x86_64"
+        ? [
+            // macOS Monterey supports the 2013 Mac Pro. Its Ivy Bridge CPU
+            // has AVX, but not AVX2, FMA or BMI2. Keep the Intel runtime on
+            // that common baseline instead of producing a host-tuned binary
+            // that exits with SIGILL on older supported Macs.
+            "-DGGML_AVX=ON",
+            "-DGGML_AVX2=OFF",
+            "-DGGML_FMA=OFF",
+            "-DGGML_F16C=OFF",
+            "-DGGML_BMI2=OFF",
+            "-DGGML_AVX_VNNI=OFF",
+          ]
+        : []),
       "-DLLAMA_BUILD_NUMBER=10517",
       "-DLLAMA_BUILD_COMMIT=dc72703fc",
       "-DLLAMA_BUILD_TESTS=OFF",
@@ -513,6 +532,7 @@ if (process.platform === "darwin") {
           architecture,
           metal: true,
           cpuFallback: "Accelerate",
+          cpuBaseline: architecture === "x86_64" ? "x86-64-avx" : "apple-arm64",
           multimodalCli: true,
         },
         null,

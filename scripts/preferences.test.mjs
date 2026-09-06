@@ -44,7 +44,7 @@ test("accepts versioned local editor preferences", () => {
       telemetry: true,
     }),
     {
-      version: 16,
+      version: 17,
       theme: "blue-dark",
       locale: "ar",
       sidebarSide: "right",
@@ -83,19 +83,24 @@ test("Intel Macs default llama.cpp to CPU and preserve an explicit Metal choice"
   assert.equal(defaultAiHardware("darwin", "arm64"), "auto");
   assert.equal(defaultAiHardware("win32", "x64"), "auto");
   assert.equal(
-    validPreferences({ version: 13, aiHardware: "auto" }, "darwin", "x64")
+    validPreferences({ version: 16, aiHardware: "auto" }, "darwin", "x64")
       .aiHardware,
     "cpu",
   );
   assert.equal(
-    validPreferences({ version: 13, aiHardware: "gpu" }, "darwin", "x64")
+    validPreferences({ version: 16, aiHardware: "gpu" }, "darwin", "x64")
       .aiHardware,
     "gpu",
   );
   assert.equal(
-    validPreferences({ version: 14, aiHardware: "cpu" }, "darwin", "x64")
+    validPreferences({ version: 17, aiHardware: "cpu" }, "darwin", "x64")
       .aiHardware,
     "cpu",
+  );
+  assert.equal(
+    validPreferences({ version: 17, aiHardware: "auto" }, "darwin", "x64")
+      .aiHardware,
+    "auto",
   );
   assert.equal(
     validPreferences({ version: 13, aiHardware: "auto" }, "darwin", "arm64")

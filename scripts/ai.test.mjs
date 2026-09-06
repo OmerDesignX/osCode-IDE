@@ -10,6 +10,7 @@ import {
   hasPrivateAttachmentContext,
   isTrustedOllamaDownloadUrl,
   isPackageInstallCommand,
+  isBenignPromptPipeError,
   llamaMediaArguments,
   localMediaMessages,
   LocalAiService,
@@ -27,6 +28,13 @@ test("automatic Intel macOS inference can retry without Metal", () => {
   assert.equal(shouldRetryLlamaOnCpu("darwin", "x64", "cpu"), false);
   assert.equal(shouldRetryLlamaOnCpu("darwin", "arm64", "auto"), false);
   assert.equal(shouldRetryLlamaOnCpu("win32", "x64", "auto"), false);
+});
+
+test("a model that closes its prompt pipe is contained as a model failure", () => {
+  assert.equal(isBenignPromptPipeError({ code: "EPIPE" }), true);
+  assert.equal(isBenignPromptPipeError({ code: "ERR_STREAM_DESTROYED" }), true);
+  assert.equal(isBenignPromptPipeError({ code: "EACCES" }), false);
+  assert.equal(isBenignPromptPipeError(new Error("closed")), false);
 });
 import {
   materializeAiMedia,

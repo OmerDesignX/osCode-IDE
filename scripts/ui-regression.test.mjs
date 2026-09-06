@@ -911,10 +911,8 @@ test("the last completed answer can be regenerated without duplicating earlier t
 });
 
 test("accelerated llama.cpp lets memory fitting choose GPU layers", () => {
-  assert.match(
-    aiMain,
-    /if \(hardware === "cpu"\) inferenceArguments\.push\("--gpu-layers", "0"\)/,
-  );
+  assert.match(aiMain, /if \(hardware === "cpu"\)[\s\S]{0,300}"--device"/);
+  assert.match(aiMain, /"none"[\s\S]{0,180}"--gpu-layers"/);
   assert.doesNotMatch(aiMain, /hardware === "cpu" \? "0" : "999"/);
   assert.match(
     aiMain,

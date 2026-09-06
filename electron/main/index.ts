@@ -187,6 +187,36 @@ function openMacInstallerAfterExit(installerPath: string) {
   handoff.once("error", () => undefined);
   handoff.unref();
 }
+
+async function makeCurrentMacBundleReplaceable() {
+  if (process.platform !== "darwin" || !app.isPackaged) return;
+  const runtimeRoot = path.join(
+    process.resourcesPath,
+    "python",
+    `darwin-${process.arch}`,
+  );
+  const relative = path.relative(process.resourcesPath, runtimeRoot);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+    return;
+  const root = await fs.lstat(runtimeRoot).catch(() => null);
+  if (!root?.isDirectory() || root.isSymbolicLink()) return;
+  const makeInstallable = async (directory: string): Promise<void> => {
+    await fs.chmod(directory, 0o755);
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        await makeInstallable(target);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const stat = await fs.stat(target);
+      await fs.chmod(target, stat.mode & 0o111 ? 0o755 : 0o644);
+    }
+  };
+  await makeInstallable(runtimeRoot);
+}
 function sendToRenderer(channel: string, ...args: unknown[]) {
   if (
     !mainWindow ||
@@ -5889,8 +5919,16 @@ app.whenReady().then(async () => {
   appUpdateService = new AppUpdateService(
     (status) => sendToRenderer("updates:status-changed", status),
     (installerPath) => {
-      if (process.platform === "darwin")
+      if (process.platform === "darwin") {
         pendingMacInstallerPath = installerPath;
+        // v1.1.0 made its embedded Python tree read-only. Repair those modes
+        // before quitting so Finder can replace that existing bundle on Intel
+        // Macs, then open the verified DMG only after the process has exited.
+        void makeCurrentMacBundleReplaceable()
+          .catch(() => undefined)
+          .finally(() => app.quit());
+        return;
+      }
       app.quit();
     },
   );

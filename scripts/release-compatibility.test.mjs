@@ -130,15 +130,19 @@ test("native releases package local inference runtimes without model weights or 
     /CMAKE_OSX_DEPLOYMENT_TARGET=\$\{deploymentTarget\}/,
   );
   assert.match(prepareLlama, /deploymentTarget = "12\.0"/);
+  assert.match(prepareLlama, /cpuBaseline !== "x86-64-avx"/);
+  assert.match(prepareLlama, /"-DGGML_AVX2=OFF"/);
+  assert.match(prepareLlama, /"-DGGML_FMA=OFF"/);
+  assert.match(prepareLlama, /"-DGGML_BMI2=OFF"/);
   assert.match(prepareLlama, /GGML_ACCELERATE=ON/);
   assert.match(prepareLlama, /GGML_METAL=ON/);
   assert.match(prepareLlama, /LLAMA_OPENSSL=OFF/);
 
   const aiService = read("electron/main/ai.ts");
-  assert.match(
-    aiService,
-    /if \(hardware === "cpu"\) inferenceArguments\.push\("--gpu-layers", "0"\)/,
-  );
+  assert.match(aiService, /if \(hardware === "cpu"\)[\s\S]{0,300}"--device"/);
+  assert.match(aiService, /"none"[\s\S]{0,180}"--gpu-layers"/);
+  assert.match(aiService, /child\.stdin\.on\("error"/);
+  assert.match(aiService, /isBenignPromptPipeError/);
   assert.doesNotMatch(aiService, /hardware === "cpu" \? "0" : "999"/);
   assert.match(aiService, /current\.acceleratorVersion\?\.startsWith\("12"\)/);
   const bundledModelRuntime = read("electron/main/bundled-models.ts");
@@ -202,7 +206,10 @@ test("native Computer Control is local, permissioned, and packaged", () => {
   assert.match(afterPack, /const target = `darwin-\$\{architecture\}`/);
   const afterSign = read("build/after-sign.cjs");
   assert.equal(manifest.build.afterSign, "./build/after-sign.cjs");
-  assert.match(afterSign, /makeTreeReadOnly/);
+  assert.match(afterSign, /makeTreeInstallable/);
+  assert.match(afterSign, /0o755/);
+  assert.match(afterSign, /0o644/);
+  assert.doesNotMatch(afterSign, /0o555|0o444/);
   assert.match(afterSign, /`darwin-\$\{architecture\}`/);
 
   const packageVerifier = read("scripts/verify-package.mjs");
@@ -398,7 +405,7 @@ test("manual release build preserves the verified native package pipeline", () =
   );
   assert.match(
     read("electron/main/index.ts"),
-    /new AppUpdateService\([\s\S]{0,320}pendingMacInstallerPath = installerPath[\s\S]{0,100}app\.quit\(\)/,
+    /new AppUpdateService\([\s\S]{0,420}pendingMacInstallerPath = installerPath[\s\S]{0,260}makeCurrentMacBundleReplaceable\(\)[\s\S]{0,80}app\.quit\(\)/,
   );
   assert.match(
     read("electron/main/index.ts"),
