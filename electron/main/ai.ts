@@ -3982,6 +3982,18 @@ export class LocalAiService {
         stderr: "",
       });
     }
+    if (["pwd", "cwd"].includes(commandName(normalized.command))) {
+      if (userArgs.length)
+        throw new Error("pwd and cwd do not accept command arguments");
+      const relative = path.relative(root, workingDirectory) || ".";
+      return JSON.stringify({
+        exitCode: 0,
+        background: false,
+        cwd: relative.replace(/\\/g, "/"),
+        stdout: workingDirectory,
+        stderr: "",
+      });
+    }
     if (commandName(normalized.command) === "mkdir") {
       const directories = userArgs.filter(
         (argument) => !["-p", "--parents"].includes(argument),

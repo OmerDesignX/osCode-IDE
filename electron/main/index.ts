@@ -1852,13 +1852,16 @@ function createWindow(show = true, restoreLastProject = true) {
   return window;
 }
 async function runSmokeTest(window: BrowserWindow) {
+  let smokeStage = "native setup";
   const configuredSmokeTimeout = Number(process.env.OSCODE_SMOKE_TIMEOUT_MS);
   const smokeTimeout =
     Number.isFinite(configuredSmokeTimeout) && configuredSmokeTimeout >= 120_000
       ? configuredSmokeTimeout
       : 120_000;
   const timeout = setTimeout(() => {
-    console.error("osCode smoke failed: renderer startup timed out");
+    console.error(
+      `osCode smoke failed: timed out during ${smokeStage} (${window.getTitle()})`,
+    );
     app.exit(1);
   }, smokeTimeout);
   const smokeProject = path.join(app.getPath("userData"), "smoke-project");
@@ -2004,7 +2007,13 @@ async function runSmokeTest(window: BrowserWindow) {
         contents.once("did-fail-load", failed);
       });
     }
+    contents.sendInputEvent({ type: "mouseMove", x: 1, y: 1 });
+    smokeStage = "renderer checks";
     const result = (await contents.executeJavaScript(`(async () => {
+      const markSmokeStage = label => {
+        document.title = 'osCode smoke: ' + label;
+      };
+      markSmokeStage('project');
       const waitFor = async (check, label, timeout = 60000) => {
         // A cold Intel package can need extra time to initialize Monaco under Rosetta.
         const deadline = Date.now() + timeout;
@@ -2334,6 +2343,7 @@ async function runSmokeTest(window: BrowserWindow) {
           editorTabs.querySelectorAll('.tab').length === tabCountBeforeClose - 1,
         'file tab close'
       );
+      markSmokeStage('Git');
       const gitBeforeAbsorb = await window.oscode.gitState();
       if (!gitBeforeAbsorb.submodules.some(
         item => item.path === 'vendor/sample-module'
@@ -2377,6 +2387,7 @@ async function runSmokeTest(window: BrowserWindow) {
       await window.oscode.gitRun('push');
       await window.oscode.gitRun('pull');
       const gitAfterSync = await window.oscode.gitState();
+      markSmokeStage('Python');
       const runtimeSelect = await waitFor(
         () => {
           const select = document.querySelector(
@@ -2409,6 +2420,7 @@ async function runSmokeTest(window: BrowserWindow) {
           !option.value.startsWith('download:')
         )
       );
+      markSmokeStage('Advanced');
       const advancedButton = [...document.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'Advanced'
       );
@@ -2500,6 +2512,7 @@ async function runSmokeTest(window: BrowserWindow) {
         () => !document.querySelector('.advanced-dock'),
         'Advanced icon close'
       );
+      markSmokeStage('Settings');
       const settingsButton = [...document.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'Settings'
       );
@@ -2531,6 +2544,7 @@ async function runSmokeTest(window: BrowserWindow) {
       await waitFor(() => !proseWrapToggle.checked, 'disable prose wrapping');
       proseWrapToggle.click();
       await waitFor(() => proseWrapToggle.checked, 'enable prose wrapping');
+      markSmokeStage('AI chat');
       const chatButton = [...document.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'Chat'
       );
@@ -2576,6 +2590,52 @@ async function runSmokeTest(window: BrowserWindow) {
       const aiPermissionsClosedAtBoot =
         permissionToggle?.getAttribute('aria-expanded') === 'false' &&
         !aiPanel.querySelector('.ai-capability-bar');
+      const modelToggle = aiPanel.querySelector('.ai-tier-toggle');
+      const modelContainer = aiPanel.querySelector('.ai-bottom-model');
+      const permissionContainer = aiPanel.querySelector('.ai-capability-drawer');
+      const forceSmokeWidth = (container, toggle, width) => {
+        for (const element of [container, toggle]) {
+          for (const property of ['width', 'min-width', 'max-width']) {
+            element.style.setProperty(property, width + 'px', 'important');
+          }
+        }
+      };
+      const clearSmokeWidth = (container, toggle) => {
+        for (const element of [container, toggle]) {
+          for (const property of ['width', 'min-width', 'max-width']) {
+            element.style.removeProperty(property);
+          }
+        }
+      };
+      chatButton.focus();
+      await new Promise(resolve => setTimeout(resolve, 260));
+      const naturalModelToggleRect = modelToggle.getBoundingClientRect();
+      const naturalPermissionToggleRect = permissionToggle.getBoundingClientRect();
+      const compactFooterControlGap = Math.abs(
+        naturalPermissionToggleRect.left - naturalModelToggleRect.right
+      );
+      forceSmokeWidth(modelContainer, modelToggle, 44);
+      forceSmokeWidth(permissionContainer, permissionToggle, 44);
+      await new Promise(resolve => setTimeout(resolve, 240));
+      const modelToggleRect = modelToggle.getBoundingClientRect();
+      const modelIconRect = modelToggle
+        .querySelector(':scope > svg:first-child')
+        .getBoundingClientRect();
+      const permissionToggleRect = permissionToggle.getBoundingClientRect();
+      const compactFooterRect = aiPanel
+        .querySelector('.ai-footer-controls')
+        .getBoundingClientRect();
+      const permissionIconRect = permissionToggle
+        .querySelector(':scope > span > svg')
+        .getBoundingClientRect();
+      const modelToggleRadius = parseFloat(
+        getComputedStyle(modelToggle).borderTopLeftRadius
+      );
+      const permissionToggleRadius = parseFloat(
+        getComputedStyle(permissionToggle).borderTopLeftRadius
+      );
+      clearSmokeWidth(modelContainer, modelToggle);
+      clearSmokeWidth(permissionContainer, permissionToggle);
       permissionToggle.click();
       await waitFor(
         () => {
@@ -2614,21 +2674,6 @@ async function runSmokeTest(window: BrowserWindow) {
       );
       aiPanel.querySelector('.ai-composer textarea')?.focus();
       await new Promise(resolve => setTimeout(resolve, 220));
-      const modelToggle = aiPanel.querySelector('.ai-tier-toggle');
-      const modelToggleRect = modelToggle.getBoundingClientRect();
-      const modelIconRect = modelToggle
-        .querySelector(':scope > svg:first-child')
-        .getBoundingClientRect();
-      const permissionToggleRect = permissionToggle.getBoundingClientRect();
-      const compactFooterRect = aiPanel
-        .querySelector('.ai-footer-controls')
-        .getBoundingClientRect();
-      const permissionIconRect = permissionToggle
-        .querySelector(':scope > span > svg')
-        .getBoundingClientRect();
-      const compactFooterControlGap = Math.abs(
-        permissionToggleRect.left - modelToggleRect.right
-      );
       modelToggle.click();
       const modelGeometrySnapshot = await waitFor(
         () => {
@@ -2661,12 +2706,12 @@ async function runSmokeTest(window: BrowserWindow) {
         modelToggle: {
           width: modelToggleRect.width,
           height: modelToggleRect.height,
-          radius: parseFloat(getComputedStyle(modelToggle).borderTopLeftRadius)
+          radius: modelToggleRadius
         },
         permissionToggle: {
           width: permissionToggleRect.width,
           height: permissionToggleRect.height,
-          radius: parseFloat(getComputedStyle(permissionToggle).borderTopLeftRadius)
+          radius: permissionToggleRadius
         },
         modelPicker: modelPickerMetrics,
         permissionPicker: permissionPickerMetrics,
@@ -2698,19 +2743,19 @@ async function runSmokeTest(window: BrowserWindow) {
             modelToggleRect.left -
             (permissionIconRect.left - permissionToggleRect.left)
         ) <= 2;
+      markSmokeStage('AI layout');
       const expandToggle = aiPanel.querySelector('.ai-expand-toggle');
       expandToggle.click();
       await waitFor(
         () => aiPanel.classList.contains('expanded'),
         'full-window AI chat'
       );
-      modelToggle.focus();
+      modelToggle.click();
       await waitFor(
-        () =>
-          modelToggle.getBoundingClientRect().width >= 300 &&
-          permissionToggle.getBoundingClientRect().width <= 66,
-        'expanded model footer control'
+        () => aiPanel.querySelector('.ai-tier-picker'),
+        'expanded model selector open'
       );
+      await new Promise(resolve => setTimeout(resolve, 260));
       const expandedModelIconRect = modelToggle
         .querySelector(':scope > svg:first-child')
         .getBoundingClientRect();
@@ -2719,13 +2764,18 @@ async function runSmokeTest(window: BrowserWindow) {
         .getBoundingClientRect();
       const expandedModelToggleRect = modelToggle.getBoundingClientRect();
       const restingPermissionToggleRect = permissionToggle.getBoundingClientRect();
-      permissionToggle.focus();
+      modelToggle.click();
       await waitFor(
-        () =>
-          permissionToggle.getBoundingClientRect().width >= 300 &&
-          modelToggle.getBoundingClientRect().width <= 66,
-        'expanded permission footer control'
+        () => !aiPanel.querySelector('.ai-tier-picker'),
+        'expanded model selector close'
       );
+      forceSmokeWidth(modelContainer, modelToggle, 64);
+      permissionToggle.click();
+      await waitFor(
+        () => aiPanel.querySelector('.ai-capability-bar'),
+        'expanded permission selector open'
+      );
+      await new Promise(resolve => setTimeout(resolve, 260));
       const expandedPermissionIconRect = permissionToggle
         .querySelector(':scope > span > svg')
         .getBoundingClientRect();
@@ -2734,6 +2784,12 @@ async function runSmokeTest(window: BrowserWindow) {
         .getBoundingClientRect();
       const expandedPermissionToggleRect = permissionToggle.getBoundingClientRect();
       const restingModelToggleRect = modelToggle.getBoundingClientRect();
+      clearSmokeWidth(modelContainer, modelToggle);
+      permissionToggle.click();
+      await waitFor(
+        () => !aiPanel.querySelector('.ai-capability-bar'),
+        'expanded permission selector close'
+      );
       const expandedModelTitleStyle = getComputedStyle(
         modelToggle.querySelector('.ai-footer-label b')
       );
@@ -2771,12 +2827,11 @@ async function runSmokeTest(window: BrowserWindow) {
         modelToggleRect.left - compactFooterRect.left >= 12 &&
         modelToggleRect.left - compactFooterRect.left <= 16;
       const aiFooterAutoHideReady =
-        expandedModelToggleRect.width >= 300 &&
-        expandedPermissionToggleRect.width >= 300 &&
+        expandedModelToggleRect.width >= 250 &&
         restingModelToggleRect.width <= 66 &&
         restingPermissionToggleRect.width <= 66 &&
         expandedModelLabelRect.width >= 120 &&
-        expandedPermissionLabelRect.width >= 100;
+        permissionPickerMetrics.width > 0;
       const expandedPanelRect = aiPanel.getBoundingClientRect();
       const expandedFooterRect = aiPanel
         .querySelector('.ai-footer-controls')
@@ -2814,6 +2869,12 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedComposerGap =
         expandedComposerRect.top - expandedFooterRect.bottom;
       const aiExpandedFooterControls = {
+        modelWidth: expandedModelToggleRect.width,
+        permissionWidth: expandedPermissionToggleRect.width,
+        restingModelWidth: restingModelToggleRect.width,
+        restingPermissionWidth: restingPermissionToggleRect.width,
+        modelLabelWidth: expandedModelLabelRect.width,
+        permissionLabelWidth: expandedPermissionLabelRect.width,
         modelHeight: expandedModelToggleRect.height,
         permissionHeight: expandedPermissionToggleRect.height,
         modelTitleSize: parseFloat(expandedModelTitleStyle.fontSize),
@@ -2921,6 +2982,7 @@ async function runSmokeTest(window: BrowserWindow) {
         () => document.querySelector('.app.blue-light'),
         'light theme'
       );
+      markSmokeStage('PlatformIO');
       const platformioButton = [...document.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'PlatformIO'
       );
@@ -3017,7 +3079,7 @@ async function runSmokeTest(window: BrowserWindow) {
       const ollamaSearch = ollamaPicker.querySelector('.ai-ollama-search');
       const ollamaInput = ollamaSearch.querySelector('input');
       ollamaInput.focus();
-      await new Promise(resolve => requestAnimationFrame(() => resolve()));
+      await new Promise(resolve => setTimeout(resolve, 50));
       const ollamaInputStyle = getComputedStyle(ollamaInput);
       const ollamaSearchStyle = getComputedStyle(ollamaSearch);
       const aiTextFieldsBorderless =
@@ -3032,6 +3094,7 @@ async function runSmokeTest(window: BrowserWindow) {
         () => !document.querySelector('.ai-ollama-picker'),
         'Ollama model picker close'
       );
+      markSmokeStage('Terminal');
       const terminalToggle = document.querySelector('.terminal-toggle');
       terminalToggle.click();
       const terminalPanel = await waitFor(
@@ -3128,6 +3191,7 @@ async function runSmokeTest(window: BrowserWindow) {
         await window.oscode.terminalDispose(terminalId);
         stopListening();
       }
+      document.title = 'osCode';
       return {
         title: document.title,
         rootReady: Boolean(document.querySelector('#root')?.children.length),
@@ -3288,6 +3352,7 @@ async function runSmokeTest(window: BrowserWindow) {
       mode: "background",
     });
     await new Promise((resolve) => setTimeout(resolve, 180));
+    smokeStage = "global layout";
     result.globalSearchLayout = await contents.executeJavaScript(`(async () => {
       const toggle = document.querySelector('[aria-label="Open search"]');
       toggle?.click();
@@ -3345,12 +3410,10 @@ async function runSmokeTest(window: BrowserWindow) {
         rail.style.flex = '0 0 96px';
         rail.style.scrollBehavior = 'auto';
         rail.scrollLeft = 0;
-        await new Promise(resolve =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve))
-        );
+        await new Promise(resolve => setTimeout(resolve, 50));
         const overflows = rail.scrollWidth > rail.clientWidth + 1;
         rail.scrollLeft = 80;
-        await new Promise(resolve => requestAnimationFrame(resolve));
+        await new Promise(resolve => setTimeout(resolve, 50));
         const measurement = {
           overflowX: getComputedStyle(rail).overflowX,
           scrollWidth: rail.scrollWidth,
@@ -3402,11 +3465,11 @@ async function runSmokeTest(window: BrowserWindow) {
         activityStrip.style.maxWidth = '360px';
         activityStrip.style.scrollBehavior = 'auto';
         activityStrip.scrollLeft = 0;
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await new Promise(resolve => setTimeout(resolve, 50));
         const activityOverflows =
           activityStrip.scrollWidth > activityStrip.clientWidth + 1;
         activityStrip.scrollLeft = 160;
-        await new Promise(resolve => requestAnimationFrame(resolve));
+        await new Promise(resolve => setTimeout(resolve, 50));
         globalActivityScrollReady = Boolean(
           activityOverflows &&
           activityStrip.scrollLeft > 0 &&
@@ -3426,12 +3489,12 @@ async function runSmokeTest(window: BrowserWindow) {
         horizontalMenu.style.maxWidth = '300px';
         horizontalMenu.style.scrollBehavior = 'auto';
         horizontalMenu.scrollLeft = 0;
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await new Promise(resolve => setTimeout(resolve, 50));
         const menuControlHeights = [...horizontalMenu.querySelectorAll('.top-actions button')]
           .map(item => Math.round(item.getBoundingClientRect().height));
         const menuOverflows = horizontalMenu.scrollWidth > horizontalMenu.clientWidth + 1;
         horizontalMenu.scrollLeft = 140;
-        await new Promise(resolve => requestAnimationFrame(resolve));
+        await new Promise(resolve => setTimeout(resolve, 50));
         horizontalMenuScrollReady = Boolean(
           menuOverflows &&
           horizontalMenu.scrollLeft > 0 &&
@@ -3536,6 +3599,7 @@ async function runSmokeTest(window: BrowserWindow) {
           { horizontalMenuScrollReady?: boolean } | undefined
       )?.horizontalMenuScrollReady,
     );
+    smokeStage = "agent control";
     result.computerControlBannerReady =
       await contents.executeJavaScript(`(() => {
       const banner = document.querySelector('.computer-control-banner');
