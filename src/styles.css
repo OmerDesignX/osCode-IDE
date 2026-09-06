@@ -14117,3 +14117,294 @@ button > svg * {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* 1.1.2 Auto Install is a first-class chat capability. The three footer
+   controls share one measured family and collapse to clear symbols only when
+   the AI column is genuinely narrow. */
+.ai-footer-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ai-auto-install-toggle {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--ui-control-height);
+  height: var(--ui-control-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill) !important;
+  outline: 0;
+  background: var(--control-hover-fill);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.ai-auto-install-toggle > svg {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.ai-auto-install-toggle .ai-footer-label {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.ai-auto-install-toggle .ai-footer-label > :where(b, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-auto-install-toggle .ai-footer-label b {
+  font-size: 13px;
+}
+
+.ai-auto-install-toggle .ai-footer-label small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-auto-install-toggle:hover,
+.ai-auto-install-toggle:focus-visible,
+.ai-auto-install-toggle.enabled {
+  border: 0 !important;
+  outline: 0 !important;
+  background: var(--control-selected-fill) !important;
+  color: var(--accent) !important;
+  box-shadow: none !important;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 521px) {
+  .ai-footer-controls,
+  .ai-panel:not(.expanded) .ai-footer-controls,
+  .ai-panel.expanded .ai-footer-controls {
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .ai-auto-install-toggle {
+    width: var(--ui-control-height);
+    min-width: var(--ui-control-height);
+    max-width: var(--ui-control-height);
+    flex: 0 0 auto;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+    overflow: hidden;
+    transition:
+      width 180ms ease,
+      min-width 180ms ease,
+      max-width 180ms ease,
+      padding 180ms ease,
+      background-color 160ms ease;
+  }
+
+  .ai-panel.expanded .ai-auto-install-toggle {
+    width: 64px;
+    min-width: 64px;
+    max-width: 64px;
+  }
+
+  .ai-auto-install-toggle .ai-footer-label {
+    width: 0;
+    min-width: 0;
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .ai-auto-install-toggle:is(:hover, :focus-visible) {
+    width: 230px;
+    min-width: 230px;
+    max-width: 230px;
+    justify-content: flex-start;
+    gap: 9px;
+    padding-inline: 14px;
+  }
+
+  .ai-panel.expanded .ai-auto-install-toggle:is(:hover, :focus-visible) {
+    width: 260px;
+    min-width: 260px;
+    max-width: 260px;
+    padding-inline: 20px;
+  }
+
+  .ai-auto-install-toggle:is(:hover, :focus-visible) .ai-footer-label {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+.ai-auto-install-dialog {
+  width: min(540px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 32px));
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--overlay-surface);
+  color: var(--text);
+  box-shadow: 0 28px 76px rgb(0 0 0 / 42%);
+}
+
+.ai-auto-install-dialog > header,
+.ai-auto-install-dialog > header > div,
+.ai-auto-install-dialog > footer {
+  display: flex;
+  align-items: center;
+}
+
+.ai-auto-install-dialog > header {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.ai-auto-install-dialog > header > div {
+  min-width: 0;
+  gap: 12px;
+}
+
+.ai-auto-install-dialog h2 {
+  margin: 0;
+  font:
+    600 28px/1.15 "Playfair Display",
+    Georgia,
+    serif;
+}
+
+.ai-auto-install-dialog p {
+  max-width: 56ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.ai-auto-install-dialog > footer {
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.ai-auto-install-dialog > footer > button {
+  min-height: var(--ui-control-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+  color: var(--text);
+}
+
+.ai-auto-install-dialog > footer > button.primary {
+  background: var(--accent);
+  color: var(--onaccent);
+}
+
+@container ai-panel (max-width: 430px) {
+  .ai-footer-controls {
+    gap: 8px;
+    padding-inline: 10px;
+  }
+}
+
+@container ai-panel (max-width: 360px) {
+  .ai-auto-install-toggle {
+    justify-content: center;
+    padding-inline: 12px;
+  }
+
+  .ai-auto-install-toggle .ai-footer-label {
+    display: none;
+  }
+}
+
+/* The terminal keeps the user's saved height and exposes a generous resize
+   seam without adding visual clutter. */
+.terminal-panel {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 180px;
+  max-height: min(700px, calc(100vh - 250px));
+}
+
+.terminal-height-resizer {
+  position: absolute;
+  z-index: 30;
+  top: -6px;
+  right: 18px;
+  left: 18px;
+  height: 12px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.terminal-height-resizer::after {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 64px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--terminal-muted) 38%, transparent);
+  content: "";
+  transform: translateX(-50%);
+  transition: background 140ms ease;
+}
+
+.terminal-height-resizer:hover::after,
+.terminal-height-resizer:focus-visible::after {
+  background: var(--accent);
+}
+
+.terminal-height-resizer:focus-visible {
+  outline: 0;
+}
+
+.terminal-action-strip .terminal-panel-close,
+.terminal-action-strip .terminal-panel-close:hover,
+.terminal-action-strip .terminal-panel-close:focus-visible {
+  width: 44px !important;
+  min-width: 44px !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  outline: 0 !important;
+  background: var(--control-hover-fill);
+  color: var(--accent);
+  box-shadow: none !important;
+}
+
+.terminal-action-strip .terminal-panel-close:hover,
+.terminal-action-strip .terminal-panel-close:focus-visible {
+  background: var(--control-selected-fill) !important;
+}
+
+.terminal-action-strip .terminal-panel-close > svg {
+  display: block;
+  margin: 0;
+}

@@ -9,7 +9,7 @@ export function defaultAiHardware(
 }
 
 export const defaultPreferences: EditorPreferences = {
-  version: 17,
+  version: 18,
   theme: "dark",
   locale: "en",
   sidebarSide: "left",
@@ -17,6 +17,7 @@ export const defaultPreferences: EditorPreferences = {
   editorFontSize: 14,
   sidebarWidth: 520,
   gitHeight: 390,
+  terminalHeight: 320,
   aiPanelWidth: 560,
   sidebarVisible: true,
   aiVisible: false,
@@ -29,6 +30,7 @@ export const defaultPreferences: EditorPreferences = {
   aiEditMode: "ask",
   aiFileAccess: false,
   aiWebAccess: false,
+  aiAutoInstall: false,
   aiContextLimit: 262144,
   aiHardware: defaultAiHardware(),
   aiThinkingEnabled: true,
@@ -65,7 +67,7 @@ export function validPreferences(
       ? "cpu"
       : savedHardware || defaultAiHardware(platform, arch);
   return {
-    version: 17,
+    version: 18,
     theme:
       input.theme === "blue-dark" || input.theme === "blue-light"
         ? input.theme
@@ -101,6 +103,12 @@ export function validPreferences(
       Number(input.gitHeight) <= 700
         ? Math.round(Number(input.gitHeight))
         : 390,
+    terminalHeight:
+      Number.isFinite(input.terminalHeight) &&
+      Number(input.terminalHeight) >= 180 &&
+      Number(input.terminalHeight) <= 700
+        ? Math.round(Number(input.terminalHeight))
+        : 320,
     aiPanelWidth:
       Number(input.version) < 15 && Number(input.aiPanelWidth) === 330
         ? 560
@@ -135,6 +143,8 @@ export function validPreferences(
       typeof input.aiFileAccess === "boolean" ? input.aiFileAccess : false,
     aiWebAccess:
       typeof input.aiWebAccess === "boolean" ? input.aiWebAccess : false,
+    aiAutoInstall:
+      typeof input.aiAutoInstall === "boolean" ? input.aiAutoInstall : false,
     aiContextLimit:
       Number(input.version) >= 7 &&
       [8192, 16384, 32768, 65536, 131072, 262144].includes(

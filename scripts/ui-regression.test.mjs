@@ -1409,6 +1409,9 @@ test("model and permission controls share a comfortable footer above the chat co
   assert.match(ai, /className="ai-footer-label"/);
   assert.match(ai, /className="ai-capability-toggle"/);
   assert.match(ai, /aria-expanded=\{permissionsDrawerOpen\}/);
+  assert.match(ai, /className=\{`ai-auto-install-toggle/);
+  assert.match(ai, /Enable Auto Install\?/);
+  assert.match(ai, /autoInstall,[\s\S]*fileAccess/);
   assert.match(
     ai,
     /const \[permissionsDrawerOpen, setPermissionsDrawerOpen\] = useState\(false\)/,
@@ -1439,6 +1442,10 @@ test("model and permission controls share a comfortable footer above the chat co
   assert.match(
     styles,
     /Cross-platform panel hierarchy[\s\S]*\.ai-footer-controls \.ai-tier-toggle,[\s\S]*min-height: var\(--ui-control-height\);[\s\S]*border-radius: var\(--radius-pill\) !important/,
+  );
+  assert.match(
+    styles,
+    /1\.1\.2 Auto Install[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)[\s\S]*\.ai-auto-install-dialog/,
   );
   assert.match(
     styles,
@@ -1817,6 +1824,8 @@ test("terminal sessions and auxiliary panels keep the revised workspace hierarch
     app,
     /<FeatherIcon icon="book-open" size="13" \/> UV help[\s\S]*className="terminal-panel-close"/,
   );
+  assert.match(app, /className="terminal-height-resizer"/);
+  assert.match(app, /style=\{\{ height: terminalHeight \}\}/);
   assert.match(styles, /1\.0 workspace refinement/);
   assert.match(styles, /\.env-badge\s*\{[\s\S]*font-size: 12px !important/);
   assert.match(
@@ -1826,6 +1835,10 @@ test("terminal sessions and auxiliary panels keep the revised workspace hierarch
   assert.match(
     styles,
     /\.terminal-action-strip > \.terminal-python-tools[\s\S]*margin: 0;/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-height-resizer[\s\S]*cursor: ns-resize[\s\S]*\.terminal-action-strip \.terminal-panel-close/,
   );
   assert.match(main, /terminalDualScrollReady/);
   assert.match(

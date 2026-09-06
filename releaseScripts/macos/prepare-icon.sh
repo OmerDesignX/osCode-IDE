@@ -28,7 +28,19 @@ sips -z 512 512 "$WORK/icon-1024.png" --out "$ICONSET/icon_256x256@2x.png" >/dev
 sips -z 512 512 "$WORK/icon-1024.png" --out "$ICONSET/icon_512x512.png" >/dev/null
 cp "$WORK/icon-1024.png" "$ICONSET/icon_512x512@2x.png"
 
-iconutil -c icns "$ICONSET" -o "$ROOT/build/icon-macos.icns"
+GENERATED_ICNS="$WORK/icon-macos.icns"
+if iconutil -c icns "$ICONSET" -o "$GENERATED_ICNS"; then
+  mv "$GENERATED_ICNS" "$ROOT/build/icon-macos.icns"
+elif iconutil -c iconset "$ROOT/build/icon-macos.icns" \
+  -o "$WORK/existing.iconset" >/dev/null 2>&1; then
+  # macOS 26 can reject a complete legacy iconset while still reading the
+  # checked-in ICNS. Keep that verified release icon instead of breaking an
+  # otherwise reproducible package build.
+  echo "iconutil could not repack the iconset; using the verified release icon." >&2
+else
+  echo "Could not generate or verify the macOS release icon." >&2
+  exit 1
+fi
 iconutil -c iconset "$ROOT/build/icon-macos.icns" -o "$WORK/verified.iconset"
 COUNT="$(find "$WORK/verified.iconset" -type f -name '*.png' | wc -l | tr -d ' ')"
 if [[ "$COUNT" -lt 10 ]]; then

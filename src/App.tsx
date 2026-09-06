@@ -525,6 +525,7 @@ export function App() {
     [editorFontSize, setEditorFontSize] = useState(14),
     [sidebarWidth, setSidebarWidth] = useState(520),
     [gitHeight, setGitHeight] = useState(390),
+    [terminalHeight, setTerminalHeight] = useState(320),
     [aiPanelWidth, setAiPanelWidth] = useState(560),
     [sidebarVisible, setSidebarVisible] = useState(true),
     [aiVisible, setAiVisible] = useState(false),
@@ -547,6 +548,7 @@ export function App() {
     [aiTerminalMode, setAiTerminalMode] = useState<AiTerminalMode>("ask"),
     [aiFileAccess, setAiFileAccess] = useState(false),
     [aiWebAccess, setAiWebAccess] = useState(false),
+    [aiAutoInstall, setAiAutoInstall] = useState(false),
     [aiBrowserAccess, setAiBrowserAccess] = useState(false),
     [aiComputerAccess, setAiComputerAccess] = useState(false),
     [aiContextLimit, setAiContextLimit] = useState(262144),
@@ -708,6 +710,7 @@ export function App() {
         setSidebarSide(preferences.sidebarSide);
         setUiScale(preferences.uiScale);
         setEditorFontSize(preferences.editorFontSize);
+        setTerminalHeight(preferences.terminalHeight);
         setAiPanelWidth(preferences.aiPanelWidth);
         setAiEngine(preferences.aiEngine);
         setAiModel(preferences.aiModel);
@@ -715,6 +718,7 @@ export function App() {
         setAiContextLimit(preferences.aiContextLimit);
         setAiHardware(preferences.aiHardware);
         setAiThinkingEnabled(preferences.aiThinkingEnabled);
+        setAiAutoInstall(preferences.aiAutoInstall);
         setAutoSave(preferences.autoSave);
       }),
     [preferencesReady],
@@ -2043,6 +2047,7 @@ export function App() {
         setEditorFontSize(preferences.editorFontSize);
         setSidebarWidth(preferences.sidebarWidth);
         setGitHeight(preferences.gitHeight);
+        setTerminalHeight(preferences.terminalHeight);
         setAiPanelWidth(preferences.aiPanelWidth);
         setSidebarVisible(preferences.sidebarVisible);
         setAiVisible(preferences.aiVisible);
@@ -2052,6 +2057,7 @@ export function App() {
         setAiEditMode("ask");
         setAiFileAccess(false);
         setAiWebAccess(false);
+        setAiAutoInstall(preferences.aiAutoInstall);
         setAiContextLimit(preferences.aiContextLimit);
         setAiHardware(preferences.aiHardware);
         setAiThinkingEnabled(preferences.aiThinkingEnabled);
@@ -2114,7 +2120,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 17,
+      version: 18,
       theme,
       locale,
       sidebarSide,
@@ -2122,6 +2128,7 @@ export function App() {
       editorFontSize,
       sidebarWidth,
       gitHeight,
+      terminalHeight,
       aiPanelWidth,
       sidebarVisible,
       aiVisible,
@@ -2131,6 +2138,7 @@ export function App() {
       aiEditMode,
       aiFileAccess,
       aiWebAccess,
+      aiAutoInstall,
       aiContextLimit,
       aiHardware,
       aiThinkingEnabled,
@@ -2160,6 +2168,7 @@ export function App() {
     editorFontSize,
     sidebarWidth,
     gitHeight,
+    terminalHeight,
     aiPanelWidth,
     sidebarVisible,
     aiVisible,
@@ -2169,6 +2178,7 @@ export function App() {
     aiEditMode,
     aiFileAccess,
     aiWebAccess,
+    aiAutoInstall,
     aiContextLimit,
     aiHardware,
     aiThinkingEnabled,
@@ -2798,6 +2808,21 @@ export function App() {
     const initial = gitHeight;
     const move = (next: PointerEvent) =>
       setGitHeight(
+        Math.max(180, Math.min(700, initial + start - next.clientY)),
+      );
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  };
+  const beginTerminalResize = (event: ReactPointerEvent) => {
+    event.preventDefault();
+    const start = event.clientY;
+    const initial = terminalHeight;
+    const move = (next: PointerEvent) =>
+      setTerminalHeight(
         Math.max(180, Math.min(700, initial + start - next.clientY)),
       );
     const stop = () => {
@@ -5807,7 +5832,32 @@ export function App() {
             />
           </button>
           {terminalOpen && (
-            <div className="terminal-panel">
+            <div className="terminal-panel" style={{ height: terminalHeight }}>
+              <div
+                className="terminal-height-resizer"
+                role="separator"
+                aria-label="Resize terminal height"
+                aria-orientation="horizontal"
+                aria-valuemin={180}
+                aria-valuemax={700}
+                aria-valuenow={terminalHeight}
+                tabIndex={0}
+                onPointerDown={beginTerminalResize}
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowUp" && event.key !== "ArrowDown")
+                    return;
+                  event.preventDefault();
+                  setTerminalHeight((current) =>
+                    Math.max(
+                      180,
+                      Math.min(
+                        700,
+                        current + (event.key === "ArrowUp" ? 20 : -20),
+                      ),
+                    ),
+                  );
+                }}
+              />
               <div
                 className="terminal-tabs"
                 role="toolbar"
@@ -6323,6 +6373,7 @@ export function App() {
               executable={aiExecutable}
               editMode={aiEditMode}
               terminalMode={aiTerminalMode}
+              autoInstall={aiAutoInstall}
               fileAccess={aiFileAccess}
               webAccess={aiWebAccess}
               browserAccess={aiBrowserAccess}
@@ -6344,6 +6395,7 @@ export function App() {
               onModel={setAiModel}
               onEditMode={setAiEditMode}
               onTerminalMode={setAiTerminalMode}
+              onAutoInstall={setAiAutoInstall}
               onFileAccess={setAiFileAccess}
               onWebAccess={setAiWebAccess}
               onBrowserAccess={setAiBrowserAccess}

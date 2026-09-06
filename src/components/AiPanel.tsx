@@ -34,6 +34,7 @@ type Props = {
   executable: string;
   editMode: AiEditMode;
   terminalMode: AiTerminalMode;
+  autoInstall: boolean;
   fileAccess: boolean;
   webAccess: boolean;
   browserAccess: boolean;
@@ -52,6 +53,7 @@ type Props = {
   onModel: (model: string) => void;
   onEditMode: (mode: AiEditMode) => void;
   onTerminalMode: (mode: AiTerminalMode) => void;
+  onAutoInstall: (enabled: boolean) => void;
   onFileAccess: (enabled: boolean) => void;
   onWebAccess: (enabled: boolean) => void;
   onBrowserAccess: (enabled: boolean) => void;
@@ -423,6 +425,7 @@ export function AiPanel({
   executable,
   editMode,
   terminalMode,
+  autoInstall,
   fileAccess,
   webAccess,
   browserAccess,
@@ -441,6 +444,7 @@ export function AiPanel({
   onModel,
   onEditMode,
   onTerminalMode,
+  onAutoInstall,
   onFileAccess,
   onWebAccess,
   onBrowserAccess,
@@ -483,6 +487,7 @@ export function AiPanel({
   const [modelsOpen, setModelsOpen] = useState(false);
   const [tierPickerOpen, setTierPickerOpen] = useState(false);
   const [permissionsDrawerOpen, setPermissionsDrawerOpen] = useState(false);
+  const [autoInstallConfirmOpen, setAutoInstallConfirmOpen] = useState(false);
   const [pipelineState, setPipelineState] = useState<AiPipelineState>({
     state: "idle",
     label: "",
@@ -1595,6 +1600,7 @@ export function AiPanel({
         messages: next,
         editMode: activeCapabilities.editMode,
         terminalMode: activeCapabilities.terminalMode,
+        autoInstall,
         fileAccess: activeCapabilities.fileAccess,
         webAccess: activeCapabilities.webAccess,
         browserAccess: activeCapabilities.browserAccess,
@@ -1802,6 +1808,7 @@ export function AiPanel({
         messages: next,
         editMode,
         terminalMode,
+        autoInstall,
         fileAccess,
         webAccess,
         browserAccess,
@@ -4113,7 +4120,82 @@ export function AiPanel({
             </div>
           )}
         </section>
+        <button
+          type="button"
+          className={`ai-auto-install-toggle${autoInstall ? " enabled" : ""}`}
+          aria-pressed={autoInstall}
+          title={
+            autoInstall
+              ? "Auto Install is enabled"
+              : "Let the agent install missing dependencies and developer tools"
+          }
+          onClick={() => {
+            setTierPickerOpen(false);
+            setPermissionsDrawerOpen(false);
+            if (autoInstall) {
+              onAutoInstall(false);
+              setStatus("Auto Install is off");
+            } else setAutoInstallConfirmOpen(true);
+          }}
+        >
+          <FeatherIcon icon="download-cloud" size="16" />
+          <span className="ai-footer-label">
+            <b>Auto Install</b>
+            <small>{autoInstall ? "Enabled" : "Off"}</small>
+          </span>
+        </button>
       </div>
+      {autoInstallConfirmOpen &&
+        createPortal(
+          <div className="modal-scrim" role="presentation">
+            <section
+              className="ai-auto-install-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="ai-auto-install-title"
+            >
+              <header>
+                <div>
+                  <FeatherIcon icon="alert-triangle" size="20" />
+                  <h2 id="ai-auto-install-title">Enable Auto Install?</h2>
+                </div>
+                <IconButton
+                  icon="x"
+                  label="Close Auto Install explanation"
+                  onClick={() => setAutoInstallConfirmOpen(false)}
+                />
+              </header>
+              <p>
+                Auto Install lets the agent download and install missing
+                packages and developer tools while it works. Installers can run
+                code and change this computer.
+              </p>
+              <p>
+                Only enable it for projects and sources you trust. This can be
+                risky, and you use it at your own risk. Uploads, data sharing,
+                and deletion outside the project remain blocked. Commands that
+                can affect the wider computer still ask first.
+              </p>
+              <footer>
+                <button onClick={() => setAutoInstallConfirmOpen(false)}>
+                  Cancel
+                </button>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    onAutoInstall(true);
+                    setAutoInstallConfirmOpen(false);
+                    setStatus("Auto Install is enabled");
+                  }}
+                >
+                  <FeatherIcon icon="download-cloud" size="16" />
+                  Enable Auto Install
+                </button>
+              </footer>
+            </section>
+          </div>,
+          document.querySelector(".app") || document.body,
+        )}
       <form className="ai-composer" onSubmit={send}>
         <input
           ref={attachmentInputRef}

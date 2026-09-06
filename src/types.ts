@@ -13,7 +13,7 @@ export type ProjectItemOperationResult = {
   kind: TreeEntry["kind"];
 };
 export type EditorPreferences = {
-  version: 17;
+  version: 18;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
@@ -21,6 +21,7 @@ export type EditorPreferences = {
   editorFontSize: number;
   sidebarWidth: number;
   gitHeight: number;
+  terminalHeight: number;
   aiPanelWidth: number;
   sidebarVisible: boolean;
   aiVisible: boolean;
@@ -30,6 +31,7 @@ export type EditorPreferences = {
   aiEditMode: AiEditMode;
   aiFileAccess: boolean;
   aiWebAccess: boolean;
+  aiAutoInstall: boolean;
   aiContextLimit: number;
   aiHardware: AiInferenceHardware;
   aiThinkingEnabled: boolean;
@@ -546,6 +548,7 @@ declare global {
         messages: AiChatMessage[];
         editMode: AiEditMode;
         terminalMode: AiTerminalMode;
+        autoInstall: boolean;
         fileAccess: boolean;
         webAccess: boolean;
         browserAccess: boolean;

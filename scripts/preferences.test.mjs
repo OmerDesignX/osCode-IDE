@@ -19,6 +19,7 @@ test("accepts versioned local editor preferences", () => {
       editorFontSize: 18,
       sidebarWidth: 360,
       gitHeight: 480,
+      terminalHeight: 460,
       aiPanelWidth: 410,
       sidebarVisible: false,
       aiVisible: true,
@@ -28,6 +29,7 @@ test("accepts versioned local editor preferences", () => {
       aiEditMode: "auto",
       aiFileAccess: false,
       aiWebAccess: true,
+      aiAutoInstall: true,
       aiContextLimit: 16384,
       aiHardware: "gpu",
       aiThinkingEnabled: false,
@@ -44,7 +46,7 @@ test("accepts versioned local editor preferences", () => {
       telemetry: true,
     }),
     {
-      version: 17,
+      version: 18,
       theme: "blue-dark",
       locale: "ar",
       sidebarSide: "right",
@@ -52,6 +54,7 @@ test("accepts versioned local editor preferences", () => {
       editorFontSize: 18,
       sidebarWidth: 360,
       gitHeight: 480,
+      terminalHeight: 460,
       aiPanelWidth: 410,
       sidebarVisible: false,
       aiVisible: true,
@@ -61,6 +64,7 @@ test("accepts versioned local editor preferences", () => {
       aiEditMode: "auto",
       aiFileAccess: false,
       aiWebAccess: true,
+      aiAutoInstall: true,
       aiContextLimit: 16384,
       aiHardware: "gpu",
       aiThinkingEnabled: false,
@@ -76,6 +80,14 @@ test("accepts versioned local editor preferences", () => {
       lastProject,
     },
   );
+});
+
+test("keeps Auto Install opt-in and validates the saved terminal height", () => {
+  assert.equal(defaultPreferences.aiAutoInstall, false);
+  assert.equal(defaultPreferences.terminalHeight, 320);
+  assert.equal(validPreferences({ aiAutoInstall: true }).aiAutoInstall, true);
+  assert.equal(validPreferences({ terminalHeight: 520 }).terminalHeight, 520);
+  assert.equal(validPreferences({ terminalHeight: 900 }).terminalHeight, 320);
 });
 
 test("Intel Macs default llama.cpp to CPU and preserve an explicit Metal choice", () => {
