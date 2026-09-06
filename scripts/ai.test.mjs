@@ -1715,6 +1715,116 @@ test("the agent asks before running global development commands", async (t) => {
   assert.equal(reused.exitCode, 0);
 });
 
+test("project terminal access supports cd, chmod, cwd, and reviewed tools", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  await service.grantPermission(
+    "terminal.run",
+    "conversation",
+    chat.id,
+    "project commands",
+  );
+  await fs.writeFile(path.join(root, "src", "tool.sh"), "#!/bin/sh\nexit 0\n");
+
+  const changedDirectory = JSON.parse(
+    await service.runTool(
+      { name: "run_command", arguments: { command: "cd", args: ["src"] } },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+  );
+  assert.equal(changedDirectory.cwd, "src");
+
+  const currentDirectory = JSON.parse(
+    await service.runTool(
+      { name: "run_command", arguments: { command: "pwd", args: [] } },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+  );
+  assert.equal(
+    await fs.realpath(currentDirectory.stdout.trim()),
+    await fs.realpath(path.join(root, "src")),
+  );
+
+  if (process.platform !== "win32") {
+    const chmod = JSON.parse(
+      await service.runTool(
+        {
+          name: "run_command",
+          arguments: { command: "chmod", args: ["+x", "tool.sh"] },
+        },
+        "auto",
+        new Set(),
+        [],
+        true,
+        false,
+        chat.id,
+      ),
+    );
+    assert.equal(chmod.exitCode, 0);
+    assert.notEqual(
+      (await fs.stat(path.join(root, "src", "tool.sh"))).mode & 0o100,
+      0,
+    );
+  }
+
+  const reviewedCommand = process.platform === "win32" ? "hostname" : "whoami";
+  await assert.rejects(
+    service.runTool(
+      {
+        name: "run_command",
+        arguments: { command: reviewedCommand, args: [] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+    (error) => {
+      assert.equal(error.kind, "terminal.review");
+      assert.match(error.detail, new RegExp(reviewedCommand, "i"));
+      return true;
+    },
+  );
+  await service.grantPermission(
+    "terminal.review",
+    "always",
+    chat.id,
+    reviewedCommand,
+  );
+  const reviewed = JSON.parse(
+    await service.runTool(
+      {
+        name: "run_command",
+        arguments: { command: reviewedCommand, args: [] },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+  );
+  assert.equal(reviewed.exitCode, 0);
+  const state = await service.getAgentState();
+  assert.equal(
+    state.permissions.some((grant) => grant.kind === "terminal.review"),
+    false,
+  );
+});
+
 test("successful sequential verification keeps a completed work-log status", async (t) => {
   const actions = [];
   const { root, base, service, chat } = await fixture({

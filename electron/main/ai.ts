@@ -1647,6 +1647,160 @@ export function isDestructiveProjectCommand(
   return false;
 }
 
+export type RunCommandReview = {
+  decision: "allow" | "ask" | "deny";
+  reason: string;
+};
+
+const trustedProjectCommands = new Set([
+  "npm",
+  "npx",
+  "pnpm",
+  "pnpx",
+  "yarn",
+  "yarnpkg",
+  "bun",
+  "bunx",
+  "deno",
+  "node",
+  "python",
+  "python3",
+  "pip",
+  "pip3",
+  "pytest",
+  "uv",
+  "git",
+  "cargo",
+  "rustc",
+  "go",
+  "java",
+  "javac",
+  "dotnet",
+  "cmake",
+  "ninja",
+  "make",
+  "gcc",
+  "cc",
+  "cl",
+  "g++",
+  "clang",
+  "clang++",
+  "ruby",
+  "gem",
+  "php",
+  "composer",
+  "swift",
+  "xcodebuild",
+  "pio",
+  "platformio",
+  "brew",
+  "winget",
+  "choco",
+  "scoop",
+  "apt",
+  "apt-get",
+  "dnf",
+  "yum",
+  "pacman",
+  "zypper",
+  "cd",
+  "pwd",
+  "which",
+  "where",
+  "where.exe",
+  "ls",
+  "dir",
+  "mkdir",
+  "chmod",
+  "touch",
+  "cp",
+  "mv",
+  "ln",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "sort",
+  "uniq",
+  "diff",
+  "file",
+  "stat",
+  "find",
+  "grep",
+  "rg",
+  "sed",
+  "awk",
+  "echo",
+  "printf",
+  "tar",
+  "zip",
+  "unzip",
+]);
+
+const deniedTerminalPrograms = new Set([
+  "bash",
+  "sh",
+  "zsh",
+  "fish",
+  "cmd",
+  "powershell",
+  "pwsh",
+  "sudo",
+  "doas",
+  "su",
+  "kill",
+  "killall",
+  "pkill",
+  "shutdown",
+  "reboot",
+  "launchctl",
+  "systemctl",
+  "mount",
+  "umount",
+  "diskutil",
+  "mkfs",
+  "dd",
+]);
+
+export function reviewRunCommand(
+  rawCommand: unknown,
+  rawArgs: unknown,
+): RunCommandReview {
+  const normalized = normalizeRunCommand(rawCommand, rawArgs);
+  const executable = commandName(normalized.command);
+  if (isDestructiveProjectCommand(normalized.command, normalized.args))
+    return {
+      decision: "deny",
+      reason:
+        "Destructive removals must use delete_path so the user receives a fresh Move to Trash approval.",
+    };
+  if (deniedTerminalPrograms.has(executable))
+    return {
+      decision: "deny",
+      reason:
+        "Shell interpreters, privilege escalation, process control, and disk or service commands are outside project-scoped terminal access. Run the required executable directly instead.",
+    };
+  if (/^\.([\\/])/.test(normalized.command))
+    return {
+      decision: "allow",
+      reason: "Project-local executable",
+    };
+  if (/^python(?:\d+(?:\.\d+)*)?$/.test(executable))
+    return {
+      decision: "allow",
+      reason: "Recognized project Python command",
+    };
+  if (trustedProjectCommands.has(executable))
+    return {
+      decision: "allow",
+      reason: "Recognized project development command",
+    };
+  return {
+    decision: "ask",
+    reason: `“${normalized.command}” is installed but is not a recognized project development command`,
+  };
+}
+
 export function pythonPackageInstallSpecs(
   rawCommand: unknown,
   rawArgs: unknown,
@@ -1891,6 +2045,7 @@ export class LocalAiService {
   private downloadController: AbortController | null = null;
   private readonly pendingEdits = new Map<string, PendingEdit>();
   private readonly computerSnapshots = new Map<string, AiChatAttachment>();
+  private readonly projectCommandDirectories = new Map<string, string>();
   private readonly pendingPermissionCalls = new Map<
     string,
     {
@@ -3399,13 +3554,18 @@ export class LocalAiService {
       function: {
         name: "run_command",
         description:
-          "Run a development command with its working directory set to the open project and the host PATH available. Global npm, node, yarn, pnpm, bun, Python, Git, compilers, package managers, which/where, ls/dir, and project-local binaries are supported when installed. Send the executable and argument array separately. Set background=true with an exact localhost ready_url for a development or preview server. Package installation always has its own exact approval unless the user chose Always allow.",
+          "Run an installed command inside the open project with the host PATH available. The working directory starts at the project root, can be changed with cd, and persists for this chat; cwd may explicitly select an existing project-relative folder. Send the executable and argument array separately. Recognized project commands run under Terminal access, while an unfamiliar installed command receives an exact one-time user review instead of being rejected. Set background=true with an exact localhost ready_url for a development or preview server. Package installation always has its own exact approval unless the user chose Always allow.",
         parameters: {
           type: "object",
           required: ["command"],
           properties: {
             command: { type: "string" },
             args: { type: "array", items: { type: "string" } },
+            cwd: {
+              type: "string",
+              description:
+                "Optional existing project-relative working directory. It persists for later commands in this chat.",
+            },
             purpose: { type: "string" },
             background: {
               type: "boolean",
@@ -3499,6 +3659,7 @@ export class LocalAiService {
         "project.write": "Edit project files",
         "project.delete": "Move a project item to Trash",
         "terminal.run": "Run a terminal command",
+        "terminal.review": "Run this reviewed terminal command",
         "packages.install": "Install packages on this computer",
         "debug.run": "Run or debug code",
         "web.search": "Use the internet",
@@ -3602,6 +3763,45 @@ export class LocalAiService {
       .join(path.delimiter);
   }
 
+  private commandDirectoryKey(root: string, chatId: string) {
+    return `${root}\0${chatId || "default"}`;
+  }
+
+  private async projectCommandDirectory(
+    root: string,
+    chatId: string,
+    rawDirectory?: unknown,
+  ) {
+    const key = this.commandDirectoryKey(root, chatId);
+    const saved = this.projectCommandDirectories.get(key);
+    const requested =
+      typeof rawDirectory === "string" && rawDirectory.trim()
+        ? rawDirectory.trim()
+        : saved || root;
+    const candidate = path.isAbsolute(requested)
+      ? path.resolve(requested)
+      : path.resolve(root, requested);
+    const resolved = await fs.realpath(candidate).catch(() => candidate);
+    const relative = path.relative(root, resolved);
+    const directory = await fs.stat(resolved).catch(() => null);
+    if (
+      relative.startsWith("..") ||
+      path.isAbsolute(relative) ||
+      !directory?.isDirectory()
+    ) {
+      if (rawDirectory === undefined && saved) {
+        this.projectCommandDirectories.delete(key);
+        return root;
+      }
+      throw new Error(
+        "The command working directory must be an existing folder inside the open project",
+      );
+    }
+    if (rawDirectory !== undefined)
+      this.projectCommandDirectories.set(key, resolved);
+    return resolved;
+  }
+
   private async missingPythonPackages(packages: string[]) {
     const parsed = packages.map((spec) => {
       const match = spec.match(
@@ -3652,12 +3852,16 @@ export class LocalAiService {
     }
   }
 
-  private async resolveCommand(rawCommand: unknown, root: string) {
+  private async resolveCommand(
+    rawCommand: unknown,
+    root: string,
+    workingDirectory: string,
+  ) {
     const requestedCommand = cleanText(rawCommand, 80).trim();
     if (/^\.([\\/])/.test(requestedCommand)) {
-      if (requestedCommand.replace(/\\/g, "/").split("/").includes(".."))
-        throw new Error("Command paths must stay inside the open project");
-      const candidate = await fs.realpath(path.resolve(root, requestedCommand));
+      const candidate = await fs.realpath(
+        path.resolve(workingDirectory, requestedCommand),
+      );
       const relative = path.relative(root, candidate);
       const stat = await fs.stat(candidate);
       if (
@@ -3669,63 +3873,6 @@ export class LocalAiService {
       return { executable: candidate, prefixArgs: [] };
     }
     const command = requestedCommand.toLowerCase();
-    const allowed = new Set([
-      "npm",
-      "npx",
-      "pnpm",
-      "pnpx",
-      "yarn",
-      "yarnpkg",
-      "bun",
-      "bunx",
-      "deno",
-      "which",
-      "where",
-      "where.exe",
-      "ls",
-      "dir",
-      "python",
-      "python3",
-      "git",
-      "cargo",
-      "rustc",
-      "go",
-      "java",
-      "javac",
-      "dotnet",
-      "cmake",
-      "ninja",
-      "make",
-      "gcc",
-      "cc",
-      "cl",
-      "g++",
-      "clang",
-      "clang++",
-      "pytest",
-      "ruby",
-      "gem",
-      "php",
-      "composer",
-      "swift",
-      "xcodebuild",
-      "pio",
-      "platformio",
-      "node",
-      "uv",
-      "pip",
-      "pip3",
-      "brew",
-      "winget",
-      "choco",
-      "scoop",
-      "apt",
-      "apt-get",
-      "dnf",
-      "yum",
-      "pacman",
-      "zypper",
-    ]);
     if (/^python(?:\d+(?:\.\d+)*)?$/.test(command))
       return {
         executable: this.options.getProjectPython
@@ -3755,18 +3902,15 @@ export class LocalAiService {
         prefixArgs: ["/d", "/s", "/c", "dir"],
         windowsCommandWrapper: true,
       };
-    if (!allowed.has(command)) {
-      const local = await this.localPackageBin(root, command).catch(() => "");
-      if (local)
-        return {
-          executable: process.execPath,
-          prefixArgs: [local],
-          environment: { ELECTRON_RUN_AS_NODE: "1" },
-        };
-      throw new Error(
-        `${command || "That command"} is not available. Use list_files for files or run an available package.json script.`,
-      );
-    }
+    if (!/^[a-z0-9@._+-]{1,80}$/i.test(requestedCommand))
+      throw new Error("Send a simple executable name or a project-local path");
+    const local = await this.localPackageBin(root, command).catch(() => "");
+    if (local)
+      return {
+        executable: process.execPath,
+        prefixArgs: [local],
+        environment: { ELECTRON_RUN_AS_NODE: "1" },
+      };
     const locator = process.platform === "win32" ? "where.exe" : "which";
     const commandPath = this.commandPath(root);
     const located = await exec(locator, [command], {
@@ -3789,17 +3933,43 @@ export class LocalAiService {
     return { executable, prefixArgs: [] };
   }
 
-  private async runProjectCommand(argumentsValue: Record<string, unknown>) {
+  private async runProjectCommand(
+    argumentsValue: Record<string, unknown>,
+    chatId = "",
+  ) {
     const normalized = normalizeRunCommand(
       argumentsValue.command,
       argumentsValue.args,
     );
     const root = await fs.realpath(this.root());
+    let workingDirectory = await this.projectCommandDirectory(
+      root,
+      chatId,
+      argumentsValue.cwd,
+    );
     const userArgs = normalized.args;
     if (isDestructiveProjectCommand(normalized.command, normalized.args))
       throw new Error(
         "Destructive terminal commands are blocked for the agent. Use delete_path so osCode can show a fresh one-time Move to Trash approval.",
       );
+    if (commandName(normalized.command) === "cd") {
+      const directoryArgs = userArgs[0] === "--" ? userArgs.slice(1) : userArgs;
+      if (directoryArgs.length > 1)
+        throw new Error("cd accepts one project-relative directory");
+      workingDirectory = await this.projectCommandDirectory(
+        root,
+        chatId,
+        path.resolve(workingDirectory, directoryArgs[0] || "."),
+      );
+      const relative = path.relative(root, workingDirectory) || ".";
+      return JSON.stringify({
+        exitCode: 0,
+        background: false,
+        cwd: relative.replace(/\\/g, "/"),
+        stdout: `Working directory: ${relative.replace(/\\/g, "/")}`,
+        stderr: "",
+      });
+    }
     if (commandName(normalized.command) === "mkdir") {
       const directories = userArgs.filter(
         (argument) => !["-p", "--parents"].includes(argument),
@@ -3810,12 +3980,7 @@ export class LocalAiService {
       )
         throw new Error("mkdir needs one or more project-relative directories");
       for (const directory of directories) {
-        if (
-          path.isAbsolute(directory) ||
-          directory.replace(/\\/g, "/").split("/").includes("..")
-        )
-          throw new Error("Command paths must stay inside the open project");
-        const target = path.resolve(root, directory);
+        const target = path.resolve(workingDirectory, directory);
         const relative = path.relative(root, target);
         if (relative.startsWith("..") || path.isAbsolute(relative))
           throw new Error("Command paths must stay inside the open project");
@@ -3828,7 +3993,11 @@ export class LocalAiService {
         stderr: "",
       });
     }
-    const resolved = await this.resolveCommand(normalized.command, root);
+    const resolved = await this.resolveCommand(
+      normalized.command,
+      root,
+      workingDirectory,
+    );
     const executable = resolved.executable;
     if (
       /^(?:git(?:\.exe)?)$/i.test(path.basename(executable)) &&
@@ -3853,8 +4022,12 @@ export class LocalAiService {
         if (relative.startsWith("..") || path.isAbsolute(relative))
           throw new Error("Command paths must stay inside the open project");
       }
-      if (argument.replace(/\\/g, "/").split("/").includes(".."))
-        throw new Error("Command paths must stay inside the open project");
+      if (argument.replace(/\\/g, "/").split("/").includes("..")) {
+        const target = path.resolve(workingDirectory, argument);
+        const relative = path.relative(root, target);
+        if (relative.startsWith("..") || path.isAbsolute(relative))
+          throw new Error("Command paths must stay inside the open project");
+      }
     }
     const args = [...resolved.prefixArgs, ...userArgs];
     const environment: NodeJS.ProcessEnv = {
@@ -3869,6 +4042,7 @@ export class LocalAiService {
       LANG: process.env.LANG,
       NO_COLOR: "1",
       OSCODE_PROJECT_ROOT: root,
+      OSCODE_PROJECT_CWD: workingDirectory,
       PYTHONPYCACHEPREFIX: this.pythonEnvironment().PYTHONPYCACHEPREFIX,
       ...resolved.environment,
     };
@@ -3884,7 +4058,12 @@ export class LocalAiService {
     const readyUrl = background
       ? localPreviewUrl(argumentsValue.ready_url)
       : "";
-    const signature = JSON.stringify({ executable, args, readyUrl });
+    const signature = JSON.stringify({
+      executable,
+      args,
+      readyUrl,
+      workingDirectory,
+    });
     if (background) {
       const existing = this.backgroundCommands.get(root);
       if (
@@ -3908,7 +4087,7 @@ export class LocalAiService {
       }
     }
     const child = spawn(executable, args, {
-      cwd: root,
+      cwd: workingDirectory,
       env: environment,
       shell: false,
       detached: process.platform !== "win32",
@@ -3996,6 +4175,7 @@ export class LocalAiService {
     }
     return JSON.stringify({
       exitCode: code,
+      cwd: (path.relative(root, workingDirectory) || ".").replace(/\\/g, "/"),
       stdout: Buffer.concat(stdout).toString("utf8"),
       stderr: Buffer.concat(stderr).toString("utf8"),
     });
@@ -4922,8 +5102,40 @@ export class LocalAiService {
             routedThrough: "project-python-environment",
           });
         }
-      } else await this.requirePermission("terminal.run", chatId, detail);
-      if (commands.length === 1) return this.runProjectCommand(call.arguments);
+      } else {
+        const projectRoot = await fs.realpath(this.root());
+        const reviews = await Promise.all(
+          commands.map(async ({ command, args }) => {
+            const review = reviewRunCommand(command, args);
+            if (review.decision !== "ask") return review;
+            const local = await this.localPackageBin(
+              projectRoot,
+              command,
+            ).catch(() => "");
+            return local
+              ? ({
+                  decision: "allow",
+                  reason: "Project-local package executable",
+                } satisfies RunCommandReview)
+              : review;
+          }),
+        );
+        const denied = reviews.find((review) => review.decision === "deny");
+        if (denied)
+          throw new Error(
+            `${denied.reason} Do not retry the same command; use direct project-scoped run_command calls or the dedicated file tool.`,
+          );
+        const questioned = reviews.find((review) => review.decision === "ask");
+        if (questioned)
+          await this.requirePermission(
+            "terminal.review",
+            chatId,
+            `${detail}\n\nReview note: ${questioned.reason}. The command will still run without a shell and with its working directory confined to the open project.`,
+          );
+        else await this.requirePermission("terminal.run", chatId, detail);
+      }
+      if (commands.length === 1)
+        return this.runProjectCommand(call.arguments, chatId);
       const outputs: Array<{
         command: string;
         exitCode: number | null;
@@ -4932,10 +5144,13 @@ export class LocalAiService {
       }> = [];
       for (const command of commands) {
         const result = JSON.parse(
-          await this.runProjectCommand({
-            command: command.command,
-            args: command.args,
-          }),
+          await this.runProjectCommand(
+            {
+              command: command.command,
+              args: command.args,
+            },
+            chatId,
+          ),
         ) as { exitCode: number | null; stdout?: string; stderr?: string };
         outputs.push({
           command: `${command.command} ${command.args.join(" ")}`.trim(),
@@ -4999,6 +5214,7 @@ export class LocalAiService {
       "Every file tool path and every local browser address must be an exact project-relative path returned by list_files. Never invent an absolute path, file:// URL, username, home folder, project name, or filename extension. If one path fails, use the alternatives from the error instead of repeating it.",
       "Local project pages and localhost previews always go through browser_open. For an app with package.json build tooling, start its exact development or preview script in the background and open localhost; generated build/index.html files commonly depend on HTTP root assets and must not be opened directly with file://. Open a project-relative HTML file directly only when it is a self-contained static page. Never pass a file path, file URL, or localhost address to web_fetch or web_search.",
       `run_command uses a directly executed development program with its working directory set to the open project and the host PATH available on ${process.platform}/${process.arch}. Installed npm, node, yarn, pnpm, bun, Python, Git, compilers including cc, recognized package managers, which/where, ls/dir, and project-local binaries such as ./program may be used. Send the executable and argument array separately. Prefer one command per call; a short compile-and-run sequence joined only by && is split and executed sequentially without a shell. Pipes, redirection, interpolation, and other shell syntax are never interpreted. Inspect package.json before choosing a JavaScript script name. If a required package or development tool is missing, use its recognized installer command; osCode will show a separate exact install approval, even when Terminal is Auto, unless the user explicitly chose Always allow. Never claim that a missing package was installed before the installer succeeds.`,
+      "Project terminal access includes common file and development programs such as cd, chmod, mkdir, cp, mv, touch, find, rg, grep, sed, and installed build tools. cd changes the working directory for later commands in this chat; alternatively pass cwd as a project-relative folder. An unfamiliar installed executable triggers osCode's one-time command reviewer automatically. Do not ask in prose, retry while approval is pending, or substitute a shell interpreter. Destructive removal still uses delete_path so the user gets a recoverable Trash approval.",
       "A development or preview server is long-running. Start its exact package.json script with run_command using background=true and ready_url set to the exact http://localhost or http://127.0.0.1 page. Wait for the READY result before browser_open. Do not use an ordinary foreground run_command for a server and do not open localhost before it responds.",
       `Current local date and time: ${new Date().toISOString()}.`,
       goal ? `Current user goal: ${goal}` : "No explicit goal is active.",
@@ -7355,7 +7571,7 @@ json.dump({'content':out},sys.stdout)`;
     const kind = cleanText(rawKind, 50) as AiPermissionKind;
     return this.agentState.grantPermission(
       kind,
-      kind === "project.delete"
+      kind === "project.delete" || kind === "terminal.review"
         ? "once"
         : (cleanText(rawScope, 20) as AiPermissionScope),
       cleanText(rawChatId, 100),

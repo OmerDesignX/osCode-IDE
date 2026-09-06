@@ -116,6 +116,7 @@ const permissionLabels: Record<AiPermissionKind, string> = {
   "project.write": "Edit project files",
   "project.delete": "Move a project item to Trash",
   "terminal.run": "Run terminal commands",
+  "terminal.review": "Run this reviewed command",
   "packages.install": "Install packages",
   "debug.run": "Run and debug code",
   "web.search": "Search the web",
@@ -131,6 +132,7 @@ const permissionLabels: Record<AiPermissionKind, string> = {
 };
 const oneShotPermissionKinds = new Set<AiPermissionKind>([
   "project.delete",
+  "terminal.review",
   "attachments.external",
   "network.request",
   "computer.external",

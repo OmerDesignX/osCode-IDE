@@ -17,6 +17,7 @@ import {
   isCasualGreeting,
   isDeferredActionReply,
   isDestructiveProjectCommand,
+  reviewRunCommand,
   isStalePermissionReply,
   needsTextToolProtocol,
   normalizeAgentWebSearchQuery,
@@ -51,6 +52,21 @@ test("destructive project commands are redirected to the Trash approval tool", (
     true,
   );
   assert.equal(isDestructiveProjectCommand("pio", ["run"]), false);
+});
+
+test("project command review allows normal IDE work and escalates unfamiliar tools", () => {
+  assert.equal(reviewRunCommand("cd", ["src"]).decision, "allow");
+  assert.equal(
+    reviewRunCommand("chmod", ["+x", "scripts/build.sh"]).decision,
+    "allow",
+  );
+  assert.equal(reviewRunCommand("rg", ["TODO", "."]).decision, "allow");
+  assert.equal(reviewRunCommand("custom-linter", ["src"]).decision, "ask");
+  assert.equal(
+    reviewRunCommand("bash", ["-c", "echo hidden"]).decision,
+    "deny",
+  );
+  assert.equal(reviewRunCommand("rm", ["-rf", "build"]).decision, "deny");
 });
 import {
   publicImageCandidates,
