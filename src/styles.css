@@ -14408,3 +14408,72 @@ button > svg * {
   display: block;
   margin: 0;
 }
+
+/* 1.2.0: compact chat capabilities are a real horizontal control rail. This
+   keeps every circular action reachable at narrow saved panel widths without
+   letting a control bleed into the editor. Open menus temporarily escape the
+   rail so their padded panels are not clipped. */
+.ai-panel:not(.expanded) .ai-footer-controls {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 14px 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 36%, transparent) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls::-webkit-scrollbar {
+  height: 4px;
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--muted) 36%, transparent);
+}
+
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  > :is(.ai-bottom-model, .ai-capability-drawer, .ai-auto-install-toggle) {
+  flex: 0 0 var(--ui-control-height);
+  width: var(--ui-control-height);
+  min-width: var(--ui-control-height);
+  max-width: var(--ui-control-height);
+  scroll-snap-align: start;
+}
+
+.ai-panel:not(.expanded)
+  .ai-footer-controls:has(.ai-tier-picker, .ai-capability-bar) {
+  overflow: visible;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 521px) {
+  .ai-panel:not(.expanded)
+    .ai-footer-controls
+    > :is(.ai-bottom-model, .ai-capability-drawer):is(
+      :hover,
+      :focus-within,
+      :has([aria-expanded="true"])
+    ) {
+    flex-basis: 260px;
+    width: 260px;
+    min-width: 260px;
+    max-width: 260px;
+  }
+
+  .ai-panel:not(.expanded)
+    .ai-footer-controls
+    > .ai-auto-install-toggle:is(:hover, :focus-visible) {
+    flex-basis: 230px;
+    width: 230px;
+    min-width: 230px;
+    max-width: 230px;
+  }
+}

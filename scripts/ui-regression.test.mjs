@@ -158,6 +158,26 @@ test("project creation and live AI progress remain accessible", () => {
   );
 });
 
+test("compact AI capabilities stay reachable through one horizontal rail", () => {
+  assert.match(
+    styles,
+    /compact chat capabilities are a real horizontal control rail[\s\S]*?\.ai-panel:not\(\.expanded\) \.ai-footer-controls \{[\s\S]*?overflow-x: auto;/,
+  );
+  assert.match(styles, /overscroll-behavior-inline: contain/);
+  assert.match(
+    styles,
+    /\.ai-footer-controls:has\(\.ai-tier-picker, \.ai-capability-bar\)[\s\S]*?overflow: visible/,
+  );
+});
+
+test("built-in autonomous coding runs use bounded local supervisor checkpoints", () => {
+  assert.match(aiMain, /shouldUseOsCodeSupervisor/);
+  assert.match(aiMain, /Supervisor reviewing coding progress/);
+  assert.match(aiMain, /maxAgentSteps = supervisorEnabled \? 72 : 24/);
+  assert.match(aiMain, /tool: "supervisor_review"/);
+  assert.match(aiMain, /forcedAgentPhase === "finish"[\s\S]*?complete_goal/);
+});
+
 test("new-chat creation is idempotent and widget protocols stay out of search previews", () => {
   assert.match(ai, /createAiChat\(undefined, true\)/);
   assert.match(agentState, /\[draft, \.\.\.persistedChats\]/);

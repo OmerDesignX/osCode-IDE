@@ -21,9 +21,53 @@ import {
   isStalePermissionReply,
   needsTextToolProtocol,
   normalizeAgentWebSearchQuery,
+  osCodeSupervisorPhase,
+  parseOsCodeSupervisorReview,
+  shouldUseOsCodeSupervisor,
   shouldCreateAutomaticGoal,
   workRequestForAgent,
 } from "../dist-electron/main/ai.js";
+
+test("osCode supervisor is limited to fully autonomous built-in model runs", () => {
+  const autonomous = {
+    builtInModel: true,
+    implementationRequest: true,
+    fileAccess: true,
+    editMode: "auto",
+    terminalMode: "auto",
+    autoInstall: true,
+  };
+  assert.equal(shouldUseOsCodeSupervisor(autonomous), true);
+  assert.equal(
+    shouldUseOsCodeSupervisor({ ...autonomous, builtInModel: false }),
+    false,
+  );
+  assert.equal(
+    shouldUseOsCodeSupervisor({ ...autonomous, autoInstall: false }),
+    false,
+  );
+  assert.equal(
+    shouldUseOsCodeSupervisor({ ...autonomous, terminalMode: "ask" }),
+    false,
+  );
+});
+
+test("supervisor checkpoints cannot skip missing write or verification evidence", () => {
+  assert.equal(osCodeSupervisorPhase(false, false), "write");
+  assert.equal(osCodeSupervisorPhase(true, false), "verify");
+  assert.equal(osCodeSupervisorPhase(true, true), "finish");
+  assert.deepEqual(
+    parseOsCodeSupervisorReview(
+      '{"phase":"verify","instruction":"Run the focused unit test."}',
+      "verify",
+    ),
+    { phase: "verify", instruction: "Run the focused unit test." },
+  );
+  assert.equal(
+    parseOsCodeSupervisorReview("continue with a real edit", "write").phase,
+    "write",
+  );
+});
 
 test("normalizes Qwen goal text from native and nested argument shapes", () => {
   assert.equal(
