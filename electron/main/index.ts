@@ -1722,7 +1722,10 @@ function createWindow(show = true, restoreLastProject = true) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      spellcheck: true,
+      // Windows' native spellchecker can create profile artefacts while the
+      // disposable packaged smoke window is shutting down. Production windows
+      // keep spellcheck enabled; the hidden release verifier does not need it.
+      spellcheck: !smokeMode,
     },
   });
   const webContentsId = window.webContents.id;
@@ -2755,7 +2758,10 @@ async function runSmokeTest(window: BrowserWindow) {
         () => aiPanel.querySelector('.ai-tier-picker'),
         'expanded model selector open'
       );
-      await new Promise(resolve => setTimeout(resolve, 260));
+      await waitFor(
+        () => modelToggle.getBoundingClientRect().width >= 250,
+        'expanded model footer control'
+      );
       const expandedModelIconRect = modelToggle
         .querySelector(':scope > svg:first-child')
         .getBoundingClientRect();
@@ -4676,7 +4682,10 @@ function registerIpc() {
     return stopped.some(Boolean);
   });
   ipcMain.handle("spellcheck:set", (_event, enabled: unknown) => {
-    spellcheckEnabled = enabled !== false;
+    // The hidden release verifier uses an isolated profile and never needs the
+    // native Windows spellchecker. Keep renderer preference hydration from
+    // re-enabling it and leaking Microsoft/Spelling artefacts into the cwd.
+    spellcheckEnabled = smokeMode ? false : enabled !== false;
     if (mainWindow && !mainWindow.isDestroyed())
       mainWindow.webContents.session.spellCheckerEnabled = spellcheckEnabled;
     return spellcheckEnabled;
@@ -5949,6 +5958,7 @@ function registerIpc() {
   });
 }
 app.whenReady().then(async () => {
+  if (smokeMode) session.defaultSession.spellCheckerEnabled = false;
   await protocol.handle("oscode-media", handleMediaPreviewRequest);
   const userData = app.getPath("userData");
   if (!smokeMode) {

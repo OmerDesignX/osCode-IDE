@@ -216,6 +216,18 @@ test("native Computer Control is local, permissioned, and packaged", () => {
   assert.match(packageVerifier, /PYTHONDONTWRITEBYTECODE: "1"/);
   assert.match(
     packageVerifier,
+    /platform === "windows"[\s\S]{0,100}\["--disable-gpu", "--no-sandbox", "--smoke-test"\]/,
+  );
+  assert.match(
+    packageVerifier,
+    /mkdtempSync\(path\.join\(tmpdir\(\), "oscode-package-smoke-"\)\)/,
+  );
+  assert.match(
+    packageVerifier,
+    /spawnSync\(command, args, \{ cwd: smokeCwd, stdio: "inherit" \}\)/,
+  );
+  assert.match(
+    packageVerifier,
     /Packaged macOS smoke test mutated the signed app bundle/,
   );
 
@@ -444,6 +456,15 @@ test("manual release build preserves the verified native package pipeline", () =
   assert.match(
     read("electron/main/index.ts"),
     /app\.commandLine\.hasSwitch\("smoke-test"\)/,
+  );
+  assert.match(read("electron/main/index.ts"), /spellcheck:\s*!smokeMode/);
+  assert.match(
+    read("electron/main/index.ts"),
+    /spellcheckEnabled\s*=\s*smokeMode\s*\?\s*false\s*:\s*enabled\s*!==\s*false/,
+  );
+  assert.match(
+    read("electron/main/index.ts"),
+    /if \(smokeMode\) session\.defaultSession\.spellCheckerEnabled = false/,
   );
   assert.match(
     read("electron/main/index.ts"),

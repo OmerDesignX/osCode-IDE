@@ -1,11 +1,13 @@
 import {
   existsSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -755,15 +757,17 @@ if (flags.includes("--run-smoke")) {
     platform === "linux"
       ? ["-a", executable, "--no-sandbox", "--smoke-test"]
       : platform === "windows"
-        ? ["--disable-gpu", "--smoke-test"]
+        ? ["--disable-gpu", "--no-sandbox", "--smoke-test"]
         : ["--smoke-test"];
   const smokeMarker = path.join(path.dirname(executable), ".oscode-smoke-test");
+  const smokeCwd = mkdtempSync(path.join(tmpdir(), "oscode-package-smoke-"));
   writeFileSync(smokeMarker, "smoke\n", { mode: 0o600 });
   const smoke = (() => {
     try {
-      return spawnSync(command, args, { stdio: "inherit" });
+      return spawnSync(command, args, { cwd: smokeCwd, stdio: "inherit" });
     } finally {
       rmSync(smokeMarker, { force: true });
+      rmSync(smokeCwd, { force: true, recursive: true });
     }
   })();
   if (smoke.error) throw smoke.error;
