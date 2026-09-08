@@ -180,6 +180,7 @@ function messages(value: unknown): AiChatMessage[] {
               : undefined,
         attachments: savedAttachments,
         actions: actions(input.actions),
+        interrupted: input.interrupted === true ? true : undefined,
       },
     ];
   });

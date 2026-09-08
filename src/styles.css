@@ -14592,3 +14592,185 @@ button > svg * {
 .ai-panel:not(.expanded) .ai-footer-controls .ai-capability-bar {
   width: min(583px, calc(100vw - 32px));
 }
+
+/* 1.3.0: long-running agent controls and the terminal remain unambiguous at
+   every saved panel width. Off means neutral grey; enabled means blue. */
+.ai-auto-install-toggle:not(.enabled),
+.ai-auto-install-toggle:not(.enabled):hover,
+.ai-auto-install-toggle:not(.enabled):focus-visible {
+  opacity: 0.68;
+  background: color-mix(
+    in srgb,
+    var(--control-hover-fill) 82%,
+    var(--bg)
+  ) !important;
+  color: var(--muted) !important;
+}
+
+.ai-auto-install-toggle:not(.enabled) > svg {
+  color: var(--muted) !important;
+}
+
+.ai-auto-install-toggle.enabled,
+.ai-auto-install-toggle.enabled:hover,
+.ai-auto-install-toggle.enabled:focus-visible {
+  opacity: 1;
+  background: var(--control-selected-fill) !important;
+  color: var(--accent) !important;
+}
+
+.ai-auto-install-toggle.enabled > svg {
+  color: var(--accent) !important;
+}
+
+body.terminal-resizing {
+  cursor: ns-resize !important;
+  user-select: none !important;
+}
+
+.terminal-panel {
+  position: relative;
+  isolation: isolate;
+  min-height: 360px;
+  max-height: min(760px, calc(100vh - 190px));
+  overflow: hidden;
+}
+
+.terminal-height-resizer {
+  z-index: 3;
+  top: -5px;
+  right: 22px;
+  left: 22px;
+  height: 11px;
+}
+
+.terminal-controls {
+  min-width: 0;
+  flex: 0 0 auto;
+  display: grid;
+  grid-auto-rows: minmax(48px, auto);
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  background: var(--terminal-surface);
+}
+
+.terminal-mode-row,
+.terminal-session-row,
+.terminal-tools-row {
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--terminal-muted) 36%, transparent)
+    transparent;
+}
+
+.terminal-mode-row,
+.terminal-session-row {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.terminal-mode-row::-webkit-scrollbar,
+.terminal-session-row::-webkit-scrollbar,
+.terminal-tools-row::-webkit-scrollbar {
+  height: 4px;
+}
+
+.terminal-mode-row::-webkit-scrollbar-thumb,
+.terminal-session-row::-webkit-scrollbar-thumb,
+.terminal-tools-row::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--terminal-muted) 36%, transparent);
+}
+
+.terminal-mode-row > *,
+.terminal-session-row > *,
+.terminal-tools-row > * {
+  min-width: max-content;
+  flex: 0 0 auto;
+}
+
+.terminal-view-tabs,
+.terminal-run-actions,
+.terminal-session-actions,
+.terminal-python-tools,
+.shell-tab-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.terminal-controls button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+  color: var(--terminal-muted);
+  white-space: nowrap;
+}
+
+.terminal-controls button:hover:not(:disabled),
+.terminal-controls button:focus-visible,
+.terminal-controls button.active,
+.shell-tab-strip > div.active {
+  outline: 0;
+  background: var(--control-selected-fill);
+  color: var(--accent);
+}
+
+.shell-tab-strip > div {
+  min-height: 38px;
+  display: flex;
+  align-items: stretch;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--control-hover-fill);
+}
+
+.shell-tab-strip > div > button {
+  border-radius: 0;
+  background: transparent;
+}
+
+.shell-tab-strip > div > button:last-child {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+}
+
+.terminal-workspace,
+.terminal-main {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terminal-main {
+  padding-bottom: 14px;
+}
+
+.terminal-host {
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 12px 14px 24px;
+}
+
+.run-console {
+  padding-bottom: 30px;
+  scroll-padding-bottom: 30px;
+}

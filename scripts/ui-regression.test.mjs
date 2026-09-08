@@ -644,7 +644,7 @@ test("user chat identity is an icon and compact controls cannot wrap labels", ()
     styles,
     /\.ai-permission-row > \.icon-button span[\s\S]*display: none !important/,
   );
-  assert.match(app, /className="terminal-action-strip horizontal-menu-scroll"/);
+  assert.match(app, /className="terminal-tools-row horizontal-menu-scroll"/);
   assert.match(app, /className="terminal-session-actions"/);
   assert.match(
     styles,
@@ -933,6 +933,33 @@ test("the last completed answer can be regenerated without duplicating earlier t
   assert.match(ai, /const retryLastResponse = async/);
   assert.match(ai, /current\.slice\(0, userIndex\)/);
   assert.match(ai, /Retry response/);
+});
+
+test("paused local runs retain their work log and resume from a saved checkpoint", () => {
+  assert.match(ai, /function interruptedCheckpointSummary/);
+  assert.match(ai, /status: "waiting" as const/);
+  assert.match(ai, /interrupted: true/);
+  assert.match(ai, /Paused · resume available/);
+  assert.match(ai, /const resumeInterruptedRun = async/);
+  assert.match(ai, /Resume run/);
+  assert.match(agentState, /interrupted: input\.interrupted === true/);
+  assert.doesNotMatch(
+    ai,
+    /const stopResponse = \(\) => \{[\s\S]{0,300}liveActionsRef\.current = \[\]/,
+  );
+});
+
+test("all serialized osCode roles use bounded quantized long-context KV caches", () => {
+  assert.match(
+    aiMain,
+    /Four private roles share one serialized local inference pipeline/,
+  );
+  assert.match(aiMain, /promptCharacterBudget/);
+  assert.match(aiMain, /"--cache-type-k"[\s\S]{0,120}"q8_0"/);
+  assert.match(aiMain, /"--cache-type-v"[\s\S]{0,120}"q8_0"/);
+  assert.match(aiMain, /maybe_quantize_kv_cache/);
+  assert.match(aiMain, /KV_BITS=8/);
+  assert.match(aiMain, /quantized_kv_start/);
 });
 
 test("accelerated llama.cpp lets memory fitting choose GPU layers", () => {
@@ -1301,11 +1328,11 @@ test("dense command menus keep padded controls and scroll horizontally", () => {
   assert.doesNotMatch(app, /className="terminal-tabs horizontal-menu-scroll"/);
   assert.match(
     app,
-    /className="shell-tab-strip horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+    /className="terminal-session-row horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
   );
   assert.match(
     app,
-    /className="terminal-action-strip horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+    /className="terminal-tools-row horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
   );
   assert.match(
     app,
@@ -1323,10 +1350,13 @@ test("dense command menus keep padded controls and scroll horizontally", () => {
     styles,
     /\.horizontal-menu-scroll\s*\{[\s\S]*overflow-x: auto !important;[\s\S]*touch-action: pan-x/,
   );
-  assert.match(styles, /The terminal has two independent overflow rails/);
   assert.match(
     styles,
-    /\.terminal-tabs > \.terminal-action-strip\.horizontal-menu-scroll\s*\{[\s\S]*overflow-x: auto !important;/,
+    /two lower rails scroll independently|long-running agent controls/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-mode-row,[\s\S]*\.terminal-session-row,[\s\S]*\.terminal-tools-row\s*\{[\s\S]*overflow-x: auto !important;/,
   );
 });
 
@@ -1440,13 +1470,19 @@ test("model and permission controls share a comfortable footer above the chat co
   assert.match(ai, /className="ai-capability-toggle"/);
   assert.match(ai, /aria-expanded=\{permissionsDrawerOpen\}/);
   assert.match(ai, /className=\{`ai-auto-install-toggle/);
-  assert.match(ai, /Enable Auto Install\?/);
+  assert.match(ai, /Enable Auto\?/);
   assert.match(ai, /className="ai-auto-install-close"/);
   assert.match(
     styles,
     /\.ai-auto-install-dialog \.ai-auto-install-close\s*\{[\s\S]*width: var\(--ui-control-height\);[\s\S]*border-radius: 50%;/,
   );
   assert.match(ai, /autoInstall,[\s\S]*fileAccess/);
+  assert.match(ai, /<FeatherIcon icon="robot" size="18" \/>/);
+  assert.match(
+    ai,
+    /fileAccess: true,[\s\S]*editMode: "auto",[\s\S]*webAccess: true,[\s\S]*browserAccess: true,[\s\S]*terminalMode: "auto",[\s\S]*computerAccess: false/,
+  );
+  assert.match(ai, /Computer Control[\s\S]*is not enabled by Auto/);
   assert.match(
     ai,
     /const \[permissionsDrawerOpen, setPermissionsDrawerOpen\] = useState\(false\)/,
@@ -1849,36 +1885,30 @@ test("terminal sessions and auxiliary panels keep the revised workspace hierarch
   assert.match(app, /className="terminal-view-tabs"/);
   assert.match(
     app,
-    /className="shell-tab-strip horizontal-menu-scroll"[\s\S]*role="tablist"/,
+    /className="terminal-session-row horizontal-menu-scroll"[\s\S]*className="shell-tab-strip"[\s\S]*role="tablist"/,
   );
   assert.match(
     app,
-    /className="terminal-toolbar-divider"[\s\S]*className="terminal-action-strip horizontal-menu-scroll"/,
+    /className="terminal-session-row horizontal-menu-scroll"[\s\S]*className="terminal-tools-row horizontal-menu-scroll"/,
   );
-  assert.match(
-    app,
-    /<FeatherIcon icon="book-open" size="13" \/> UV help[\s\S]*className="terminal-panel-close"/,
-  );
+  assert.doesNotMatch(app, /Close terminal panel/);
   assert.match(app, /className="terminal-height-resizer"/);
   assert.match(app, /style=\{\{ height: terminalHeight \}\}/);
   assert.match(styles, /1\.0 workspace refinement/);
   assert.match(styles, /\.env-badge\s*\{[\s\S]*font-size: 12px !important/);
   assert.match(
     styles,
-    /\.terminal-tabs > \.shell-tab-strip\.horizontal-menu-scroll\s*\{[\s\S]*flex: 1 1 280px;[\s\S]*overflow-x: auto !important/,
+    /\.terminal-session-row,[\s\S]*overflow-x: auto !important/,
   );
+  assert.match(styles, /\.terminal-python-tools,[\s\S]*margin: 0;/);
   assert.match(
     styles,
-    /\.terminal-action-strip > \.terminal-python-tools[\s\S]*margin: 0;/,
-  );
-  assert.match(
-    styles,
-    /\.terminal-height-resizer[\s\S]*cursor: ns-resize[\s\S]*\.terminal-action-strip \.terminal-panel-close/,
+    /\.terminal-height-resizer[\s\S]*z-index: 3[\s\S]*cursor: ns-resize|cursor: ns-resize[\s\S]*z-index: 3/,
   );
   assert.match(main, /terminalDualScrollReady/);
   assert.match(
     main,
-    /terminalTabScrollReady[\s\S]*terminalActionScrollReady[\s\S]*terminalDividerRect\.width >= 1/,
+    /terminalTabScrollReady[\s\S]*terminalActionScrollReady[\s\S]*terminalTabRect\.bottom <= terminalActionRect\.top \+ 3/,
   );
   assert.match(ai, /className="ai-expand-toggle"/);
   assert.match(

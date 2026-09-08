@@ -304,6 +304,29 @@ function contentWithSources(content: string, actions: AiActionEntry[]) {
     .join("\n")}`;
 }
 
+function interruptedCheckpointSummary(
+  currentSummary: string,
+  actions: AiActionEntry[],
+  reasoning: string,
+) {
+  const actionCheckpoint = actions
+    .slice(-80)
+    .map((action) => {
+      const detail = action.detail ? ` — ${action.detail}` : "";
+      const output = action.output
+        ? `\n  Output: ${action.output.replace(/\s+/g, " ").slice(0, 700)}`
+        : "";
+      return `- [${action.status}] ${action.title}${detail}${output}`;
+    })
+    .join("\n");
+  const reasoningCheckpoint = reasoning.trim()
+    ? `\nLast model checkpoint:\n${reasoning.trim().slice(-4_000)}`
+    : "";
+  return `${currentSummary.trim()}\n\n[Paused run checkpoint]\nCompleted project changes remain authoritative. Continue from the first waiting step and do not repeat completed work.\n${actionCheckpoint || "- No tool action was emitted before the pause."}${reasoningCheckpoint}`
+    .trim()
+    .slice(-80_000);
+}
+
 function actionIcon(kind: AiActionEntry["kind"]) {
   if (kind === "web") return "globe";
   if (kind === "browser") return "compass";
@@ -479,6 +502,11 @@ export function AiPanel({
     reasoning: string;
     answer: string;
   }>({ chatId: "", reasoning: "", answer: "" });
+  const liveModelOutputRef = useRef({
+    chatId: "",
+    reasoning: "",
+    answer: "",
+  });
   const [cudaBusy, setCudaBusy] = useState(false);
   const [downloadingTier, setDownloadingTier] = useState<
     Exclude<AiModelTier, "custom"> | ""
@@ -888,16 +916,19 @@ export function AiPanel({
                     answer: "",
                   }
                 : current;
-          if (!output.delta) return base;
-          return output.phase === "reasoning"
-            ? {
-                ...base,
-                reasoning: `${base.reasoning}${output.delta}`.slice(-40_000),
-              }
-            : {
-                ...base,
-                answer: `${base.answer}${output.delta}`.slice(-100_000),
-              };
+          const next = !output.delta
+            ? base
+            : output.phase === "reasoning"
+              ? {
+                  ...base,
+                  reasoning: `${base.reasoning}${output.delta}`.slice(-40_000),
+                }
+              : {
+                  ...base,
+                  answer: `${base.answer}${output.delta}`.slice(-100_000),
+                };
+          liveModelOutputRef.current = next;
+          return next;
         });
       },
     );
@@ -1585,6 +1616,11 @@ export function AiPanel({
       reasoning: "",
       answer: "",
     });
+    liveModelOutputRef.current = {
+      chatId: executionChatId,
+      reasoning: "",
+      answer: "",
+    };
     if (queueId) await window.oscode.updateAiQueue(queueId, "running");
     let failed = false;
     try {
@@ -1614,6 +1650,7 @@ export function AiPanel({
         activeFile: activeFile || "",
       });
       if (requestEpoch !== requestEpochRef.current) {
+        if (stoppingRef.current) throw new Error("Agent request stopped");
         failed = true;
         return;
       }
@@ -1702,9 +1739,47 @@ export function AiPanel({
       if (steeringRef.current) {
         setStatus("Steering…");
       } else if (stoppingRef.current) {
+        const stoppedAt = new Date().toISOString();
+        const pausedActions = liveActionsRef.current.map((action) =>
+          action.status === "running"
+            ? {
+                ...action,
+                status: "waiting" as const,
+                detail: `${action.detail ? `${action.detail} · ` : ""}Paused by user`,
+              }
+            : action,
+        );
+        const pausedSummary = interruptedCheckpointSummary(
+          continuation?.contextSummary ?? contextSummary,
+          pausedActions,
+          liveModelOutputRef.current.reasoning,
+        );
+        const interruptedMessage: AiChatMessage = {
+          id: globalThis.crypto.randomUUID(),
+          role: "assistant",
+          content:
+            "Run paused. Resume when you are ready to continue from the last completed step.",
+          thinking: liveModelOutputRef.current.reasoning || undefined,
+          actions: pausedActions,
+          interrupted: true,
+          createdAt: stoppedAt,
+          assistantName:
+            selectedModel && osCodeGgufTier(selectedModel)
+              ? "osCode"
+              : "Custom Model",
+        };
+        const completed = [...next, interruptedMessage];
+        if (chatIdRef.current === executionChatId) {
+          messagesRef.current = completed;
+          setMessages(completed);
+          setContextSummary(pausedSummary);
+        }
         liveActionsRef.current = [];
         setLiveActions([]);
-        setStatus("Stopped");
+        await saveConversation(completed, pausedSummary, executionChatId).catch(
+          () => undefined,
+        );
+        setStatus("Paused · resume available");
       } else {
         const message = publicAiError(error, "Local AI request failed");
         const failureMessage: AiChatMessage = {
@@ -1773,6 +1848,11 @@ export function AiPanel({
       setBusy(false);
       busyRef.current = false;
       setLiveModelOutput({ chatId: "", reasoning: "", answer: "" });
+      liveModelOutputRef.current = {
+        chatId: "",
+        reasoning: "",
+        answer: "",
+      };
       steeringRef.current = false;
       stoppingRef.current = false;
       await refreshAgentState().catch(() => undefined);
@@ -2085,12 +2165,32 @@ export function AiPanel({
   const stopResponse = () => {
     stoppingRef.current = true;
     requestEpochRef.current += 1;
-    liveActionsRef.current = [];
-    setLiveActions([]);
-    busyRef.current = false;
-    setBusy(false);
-    setStatus("Stopped");
+    setStatus("Pausing after the current step…");
     void window.oscode.stopAi();
+  };
+
+  const resumeInterruptedRun = async () => {
+    const currentPipeline = await window.oscode
+      .aiPipelineState()
+      .catch(() => pipelineState);
+    setPipelineState(currentPipeline);
+    if (busyRef.current || currentPipeline.state !== "idle") {
+      setStatus("Wait for the active local run to finish before resuming");
+      return;
+    }
+    const current = messagesRef.current;
+    if (!current.at(-1)?.interrupted) return;
+    setPermissionRequest(null);
+    setPendingEdits([]);
+    permissionContinuation.current = null;
+    setStatus("Resuming from the saved checkpoint…");
+    await runPrompt(
+      "",
+      undefined,
+      [],
+      { messages: current, contextSummary },
+      capabilityRef.current,
+    );
   };
 
   const grantPermission = async (scope: AiPermissionScope) => {
@@ -3602,10 +3702,17 @@ export function AiPanel({
               <button
                 type="button"
                 disabled={pipelineOccupied}
-                onClick={() => void retryLastResponse()}
+                onClick={() =>
+                  void (messages.at(-1)?.interrupted
+                    ? resumeInterruptedRun()
+                    : retryLastResponse())
+                }
               >
-                <FeatherIcon icon="refresh-cw" size="14" />
-                Retry response
+                <FeatherIcon
+                  icon={messages.at(-1)?.interrupted ? "play" : "refresh-cw"}
+                  size="14"
+                />
+                {messages.at(-1)?.interrupted ? "Resume run" : "Retry response"}
               </button>
             </div>
           )}
@@ -4130,21 +4237,21 @@ export function AiPanel({
           aria-pressed={autoInstall}
           title={
             autoInstall
-              ? "Auto Install is enabled"
-              : "Let the agent install missing dependencies and developer tools"
+              ? "Auto is enabled"
+              : "Let the agent work autonomously and install missing dependencies"
           }
           onClick={() => {
             setTierPickerOpen(false);
             setPermissionsDrawerOpen(false);
             if (autoInstall) {
               onAutoInstall(false);
-              setStatus("Auto Install is off");
+              setStatus("Auto is off");
             } else setAutoInstallConfirmOpen(true);
           }}
         >
-          <FeatherIcon icon="download-cloud" size="16" />
+          <FeatherIcon icon="robot" size="18" />
           <span className="ai-footer-label">
-            <b>Auto Install</b>
+            <b>Auto</b>
             <small>{autoInstall ? "Enabled" : "Off"}</small>
           </span>
         </button>
@@ -4161,27 +4268,28 @@ export function AiPanel({
               <header>
                 <div>
                   <FeatherIcon icon="alert-triangle" size="20" />
-                  <h2 id="ai-auto-install-title">Enable Auto Install?</h2>
+                  <h2 id="ai-auto-install-title">Enable Auto?</h2>
                 </div>
                 <button
                   type="button"
                   className="ai-auto-install-close"
-                  aria-label="Close Auto Install explanation"
+                  aria-label="Close Auto explanation"
                   onClick={() => setAutoInstallConfirmOpen(false)}
                 >
                   <FeatherIcon icon="x" size="17" />
                 </button>
               </header>
               <p>
-                Auto Install lets the agent download and install missing
-                packages and developer tools while it works. Installers can run
-                code and change this computer.
+                Auto lets the agent read and edit project files, search the web,
+                use its browser, run terminal commands, and install missing
+                packages or developer tools while it works.
               </p>
               <p>
                 Only enable it for projects and sources you trust. This can be
                 risky, and you use it at your own risk. Uploads, data sharing,
                 and deletion outside the project remain blocked. Commands that
-                can affect the wider computer still ask first.
+                can affect the wider computer still ask first. Computer Control
+                is not enabled by Auto.
               </p>
               <footer>
                 <button onClick={() => setAutoInstallConfirmOpen(false)}>
@@ -4190,13 +4298,28 @@ export function AiPanel({
                 <button
                   className="primary"
                   onClick={() => {
+                    const computerWasEnabled =
+                      capabilityRef.current.computerAccess;
                     onAutoInstall(true);
+                    applyCapabilities(
+                      {
+                        ...capabilityRef.current,
+                        fileAccess: true,
+                        editMode: "auto",
+                        webAccess: true,
+                        browserAccess: true,
+                        terminalMode: "auto",
+                        computerAccess: false,
+                      },
+                      "Auto enabled · all permissions except Computer Control",
+                    );
+                    if (computerWasEnabled)
+                      void window.oscode.stopAgentControl();
                     setAutoInstallConfirmOpen(false);
-                    setStatus("Auto Install is enabled");
                   }}
                 >
-                  <FeatherIcon icon="download-cloud" size="16" />
-                  Enable Auto Install
+                  <FeatherIcon icon="robot" size="18" />
+                  Enable Auto
                 </button>
               </footer>
             </section>

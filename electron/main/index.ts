@@ -3412,7 +3412,7 @@ async function runSmokeTest(window: BrowserWindow) {
       const controlHeights = [
         ...document.querySelectorAll('.top-actions .icon-button, .top-actions .runtime-select'),
         ...document.querySelectorAll('.editor-command-bar button'),
-        ...document.querySelectorAll('.terminal-tabs button')
+        ...document.querySelectorAll('.terminal-controls button')
       ].map(item => Math.round(item.getBoundingClientRect().height)).filter(Boolean);
       const terminalSessionHeights = [...document.querySelectorAll('.terminal-session-control')]
         .map(item => Math.round(item.getBoundingClientRect().height));
@@ -3426,13 +3426,10 @@ async function runSmokeTest(window: BrowserWindow) {
         }
       }
       const terminalTabRail = document.querySelector(
-        '.shell-tab-strip[data-horizontal-menu]'
+        '.terminal-session-row[data-horizontal-menu]'
       );
       const terminalActionRail = document.querySelector(
-        '.terminal-action-strip[data-horizontal-menu]'
-      );
-      const terminalDivider = document.querySelector(
-        '.terminal-toolbar-divider'
+        '.terminal-tools-row[data-horizontal-menu]'
       );
       const exerciseTerminalRail = async rail => {
         if (!(rail instanceof HTMLElement)) {
@@ -3482,17 +3479,12 @@ async function runSmokeTest(window: BrowserWindow) {
       const terminalActionScrollReady = terminalActionScrollCheck.ready;
       const terminalTabRect = terminalTabRail?.getBoundingClientRect();
       const terminalActionRect = terminalActionRail?.getBoundingClientRect();
-      const terminalDividerRect = terminalDivider?.getBoundingClientRect();
       const terminalDualScrollReady = Boolean(
         terminalTabScrollReady &&
         terminalActionScrollReady &&
-        terminalDividerRect &&
-        terminalDividerRect.width >= 1 &&
-        terminalDividerRect.height >= 24 &&
         terminalTabRect &&
         terminalActionRect &&
-        terminalTabRect.right <= terminalDividerRect.left + 3 &&
-        terminalDividerRect.right <= terminalActionRect.left + 3
+        terminalTabRect.bottom <= terminalActionRect.top + 3
       );
       const horizontalMenu = activityStrip;
       let globalActivityScrollReady = false;
@@ -3579,12 +3571,8 @@ async function runSmokeTest(window: BrowserWindow) {
         terminalDualScroll: {
           tabs: terminalTabScrollCheck,
           actions: terminalActionScrollCheck,
-          tabRight: terminalTabRect?.right,
-          dividerLeft: terminalDividerRect?.left,
-          dividerRight: terminalDividerRect?.right,
-          actionLeft: terminalActionRect?.left,
-          dividerWidth: terminalDividerRect?.width,
-          dividerHeight: terminalDividerRect?.height
+          tabBottom: terminalTabRect?.bottom,
+          actionTop: terminalActionRect?.top
         },
         globalActivityScrollReady,
         nonDownloadProgressHidden,

@@ -525,7 +525,7 @@ export function App() {
     [editorFontSize, setEditorFontSize] = useState(14),
     [sidebarWidth, setSidebarWidth] = useState(520),
     [gitHeight, setGitHeight] = useState(390),
-    [terminalHeight, setTerminalHeight] = useState(320),
+    [terminalHeight, setTerminalHeight] = useState(400),
     [aiPanelWidth, setAiPanelWidth] = useState(560),
     [sidebarVisible, setSidebarVisible] = useState(true),
     [aiVisible, setAiVisible] = useState(false),
@@ -710,7 +710,7 @@ export function App() {
         setSidebarSide(preferences.sidebarSide);
         setUiScale(preferences.uiScale);
         setEditorFontSize(preferences.editorFontSize);
-        setTerminalHeight(preferences.terminalHeight);
+        setTerminalHeight(Math.max(360, preferences.terminalHeight));
         setAiPanelWidth(preferences.aiPanelWidth);
         setAiEngine(preferences.aiEngine);
         setAiModel(preferences.aiModel);
@@ -2047,7 +2047,7 @@ export function App() {
         setEditorFontSize(preferences.editorFontSize);
         setSidebarWidth(preferences.sidebarWidth);
         setGitHeight(preferences.gitHeight);
-        setTerminalHeight(preferences.terminalHeight);
+        setTerminalHeight(Math.max(360, preferences.terminalHeight));
         setAiPanelWidth(preferences.aiPanelWidth);
         setSidebarVisible(preferences.sidebarVisible);
         setAiVisible(preferences.aiVisible);
@@ -2819,18 +2819,24 @@ export function App() {
   };
   const beginTerminalResize = (event: ReactPointerEvent) => {
     event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.body.classList.add("terminal-resizing");
     const start = event.clientY;
     const initial = terminalHeight;
+    const maxHeight = Math.max(360, Math.min(760, window.innerHeight - 190));
     const move = (next: PointerEvent) =>
       setTerminalHeight(
-        Math.max(180, Math.min(700, initial + start - next.clientY)),
+        Math.max(300, Math.min(maxHeight, initial + start - next.clientY)),
       );
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.classList.remove("terminal-resizing");
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
   };
   const beginAiResize = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -5838,8 +5844,8 @@ export function App() {
                 role="separator"
                 aria-label="Resize terminal height"
                 aria-orientation="horizontal"
-                aria-valuemin={180}
-                aria-valuemax={700}
+                aria-valuemin={300}
+                aria-valuemax={760}
                 aria-valuenow={terminalHeight}
                 tabIndex={0}
                 onPointerDown={beginTerminalResize}
@@ -5849,9 +5855,9 @@ export function App() {
                   event.preventDefault();
                   setTerminalHeight((current) =>
                     Math.max(
-                      180,
+                      300,
                       Math.min(
-                        700,
+                        760,
                         current + (event.key === "ArrowUp" ? 20 : -20),
                       ),
                     ),
@@ -5859,111 +5865,119 @@ export function App() {
                 }}
               />
               <div
-                className="terminal-tabs"
+                className="terminal-controls"
                 role="toolbar"
                 aria-label="Terminal controls"
               >
                 {pythonContext && (
                   <div
-                    className="terminal-view-tabs"
+                    className="terminal-mode-row horizontal-menu-scroll"
+                    data-horizontal-menu
                     aria-label="Terminal mode"
                   >
-                    <button
-                      type="button"
-                      className={terminalView === "shell" ? "active" : ""}
-                      aria-pressed={terminalView === "shell"}
-                      onClick={() => setTerminalView("shell")}
-                    >
-                      <FeatherIcon icon="terminal" size="14" /> Shell
-                    </button>
-                    <button
-                      type="button"
-                      className={terminalView === "run" ? "active" : ""}
-                      aria-pressed={terminalView === "run"}
-                      onClick={() => setTerminalView("run")}
-                    >
-                      <FeatherIcon icon="play" size="14" /> Run output
-                      {running && <i className="running-dot" />}
-                    </button>
-                  </div>
-                )}
-                {terminalView === "shell" && (
-                  <div
-                    className="shell-tab-strip horizontal-menu-scroll"
-                    data-horizontal-menu
-                    role="tablist"
-                    aria-label="Shell sessions"
-                  >
-                    {shellTabs.map((shell) => (
-                      <div
-                        className={
-                          shell.id === activeTerminalId ? "active" : ""
-                        }
-                        key={shell.id}
+                    <div className="terminal-view-tabs">
+                      <button
+                        type="button"
+                        className={terminalView === "shell" ? "active" : ""}
+                        aria-pressed={terminalView === "shell"}
+                        onClick={() => setTerminalView("shell")}
                       >
-                        <button
-                          role="tab"
-                          aria-selected={shell.id === activeTerminalId}
-                          onClick={() => setActiveShellId(shell.id)}
-                        >
-                          {shell.title}
-                        </button>
-                        <button
-                          aria-label={`Close ${shell.title}`}
-                          onClick={() => {
-                            setShellTabs((current) =>
-                              current.filter((item) => item.id !== shell.id),
-                            );
-                            if (shell.id === activeTerminalId) {
-                              const other = shellTabs.find(
-                                (item) => item.id !== shell.id,
-                              );
-                              setActiveShellId(other?.id || "");
-                            }
-                          }}
-                        >
-                          <FeatherIcon icon="x" size="13" />
-                        </button>
-                      </div>
-                    ))}
+                        <FeatherIcon icon="terminal" size="14" /> Shell
+                      </button>
+                      <button
+                        type="button"
+                        className={terminalView === "run" ? "active" : ""}
+                        aria-pressed={terminalView === "run"}
+                        onClick={() => setTerminalView("run")}
+                      >
+                        <FeatherIcon icon="play" size="14" /> Run output
+                        {running && <i className="running-dot" />}
+                      </button>
+                    </div>
                   </div>
                 )}
-                {terminalView === "run" && (
-                  <div
-                    className="terminal-run-actions horizontal-menu-scroll"
-                    data-horizontal-menu
-                    aria-label="Run controls"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void run()}
-                      disabled={
-                        running || !runtime || !active?.name.endsWith(".py")
-                      }
-                    >
-                      <FeatherIcon icon="play" size="14" /> Run script
-                    </button>
-                    <button
-                      type="button"
-                      className="terminal-run-stop"
-                      disabled={!running}
-                      onClick={stopPythonProcess}
-                    >
-                      <FeatherIcon icon="square" size="14" /> Stop
-                    </button>
-                    <button
-                      type="button"
-                      className="terminal-clear"
-                      disabled={!runOutput}
-                      onClick={() => setRunOutput("")}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                )}
-                <span className="terminal-toolbar-divider" aria-hidden="true" />
                 <div
-                  className="terminal-action-strip horizontal-menu-scroll"
+                  className="terminal-session-row horizontal-menu-scroll"
+                  data-horizontal-menu
+                  aria-label={
+                    terminalView === "shell" ? "Shell sessions" : "Run controls"
+                  }
+                >
+                  {terminalView === "shell" && (
+                    <div
+                      className="shell-tab-strip"
+                      role="tablist"
+                      aria-label="Shell sessions"
+                    >
+                      {shellTabs.map((shell) => (
+                        <div
+                          className={
+                            shell.id === activeTerminalId ? "active" : ""
+                          }
+                          key={shell.id}
+                        >
+                          <button
+                            role="tab"
+                            aria-selected={shell.id === activeTerminalId}
+                            onClick={() => setActiveShellId(shell.id)}
+                          >
+                            {shell.title}
+                          </button>
+                          <button
+                            aria-label={`Close ${shell.title}`}
+                            onClick={() => {
+                              setShellTabs((current) =>
+                                current.filter((item) => item.id !== shell.id),
+                              );
+                              if (shell.id === activeTerminalId) {
+                                const other = shellTabs.find(
+                                  (item) => item.id !== shell.id,
+                                );
+                                setActiveShellId(other?.id || "");
+                              }
+                            }}
+                          >
+                            <FeatherIcon icon="x" size="13" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {terminalView === "run" && (
+                    <div
+                      className="terminal-run-actions"
+                      aria-label="Run controls"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void run()}
+                        disabled={
+                          running || !runtime || !active?.name.endsWith(".py")
+                        }
+                      >
+                        <FeatherIcon icon="play" size="14" /> Run script
+                      </button>
+                      <button
+                        type="button"
+                        className="terminal-run-stop"
+                        disabled={!running}
+                        onClick={stopPythonProcess}
+                      >
+                        <FeatherIcon icon="square" size="14" /> Stop
+                      </button>
+                      <button
+                        type="button"
+                        className="terminal-clear"
+                        disabled={!runOutput}
+                        onClick={() => setRunOutput("")}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div
+                  className="terminal-tools-row horizontal-menu-scroll"
                   data-horizontal-menu
                   role="group"
                   aria-label="Terminal actions"
@@ -6035,21 +6049,7 @@ export function App() {
                       >
                         <FeatherIcon icon="book-open" size="13" /> UV help
                       </button>
-                      <IconButton
-                        icon="x"
-                        label="Close terminal panel"
-                        className="terminal-panel-close"
-                        onClick={() => setTerminalOpen(false)}
-                      />
                     </div>
-                  )}
-                  {!pythonContext && (
-                    <IconButton
-                      icon="x"
-                      label="Close terminal panel"
-                      className="terminal-panel-close"
-                      onClick={() => setTerminalOpen(false)}
-                    />
                   )}
                 </div>
               </div>

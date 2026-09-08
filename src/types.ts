@@ -198,6 +198,7 @@ export type AiChatMessage = {
   assistantName?: "osCode" | "Custom Model";
   attachments?: AiChatAttachment[];
   actions?: AiActionEntry[];
+  interrupted?: boolean;
 };
 export type AiChatThread = {
   id: string;
