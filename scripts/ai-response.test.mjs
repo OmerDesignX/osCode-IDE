@@ -22,7 +22,9 @@ import {
   needsTextToolProtocol,
   normalizeAgentWebSearchQuery,
   osCodeSupervisorPhase,
+  parseOsCodeImplementationTrackerReview,
   parseOsCodeSupervisorReview,
+  parseOsCodeToolPlannerReview,
   shouldUseOsCodeSupervisor,
   shouldCreateAutomaticGoal,
   workRequestForAgent,
@@ -66,6 +68,30 @@ test("supervisor checkpoints cannot skip missing write or verification evidence"
   assert.equal(
     parseOsCodeSupervisorReview("continue with a real edit", "write").phase,
     "write",
+  );
+});
+
+test("serialized osCode role reviews stay bounded and machine-readable", () => {
+  assert.deepEqual(
+    parseOsCodeToolPlannerReview(
+      'preface {"instruction":"Inspect the active module, then use the project test script.","preferredTools":["read_file","run_command"],"priorityPaths":["src/main.ts"]} trailing',
+    ),
+    {
+      instruction:
+        "Inspect the active module, then use the project test script.",
+      preferredTools: ["read_file", "run_command"],
+      priorityPaths: ["src/main.ts"],
+    },
+  );
+  assert.deepEqual(
+    parseOsCodeImplementationTrackerReview(
+      '{"completed":["Saved src/main.ts"],"remaining":["Run tests"],"instruction":"Run the focused test and repair failures."}',
+    ),
+    {
+      completed: ["Saved src/main.ts"],
+      remaining: ["Run tests"],
+      instruction: "Run the focused test and repair failures.",
+    },
   );
 });
 

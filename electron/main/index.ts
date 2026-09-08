@@ -748,7 +748,9 @@ async function searchProject(queryValue: unknown) {
     .trim()
     .slice(0, 200);
   if (!query) return [];
+  const searchRoot = projectRoot;
   const needle = query.toLocaleLowerCase();
+  const indexedFiles: Array<{ full: string; relativePath: string }> = [];
   const results: Array<{
     path: string;
     relativePath: string;
@@ -767,16 +769,17 @@ async function searchProject(queryValue: unknown) {
     resultKeys.add(key);
     results.push({ path: full, relativePath, line, preview });
   };
-  let visited = 0;
+  let visitedEntries = 0;
   const visit = async (directory: string) => {
-    if (results.length >= 250 || visited >= 2_500) return;
+    if (visitedEntries >= 30_000 || indexedFiles.length >= 20_000) return;
     const entries = (
       await fs
         .readdir(directory, { withFileTypes: true })
         .catch(() => [] as import("node:fs").Dirent[])
     ).sort(compareProjectEntries);
     for (const entry of entries) {
-      if (results.length >= 250 || visited >= 2_500) break;
+      if (visitedEntries >= 30_000 || indexedFiles.length >= 20_000) break;
+      visitedEntries += 1;
       if (
         projectSearchIgnored.has(entry.name) ||
         (entry.isDirectory() &&
@@ -790,37 +793,67 @@ async function searchProject(queryValue: unknown) {
         continue;
       }
       if (!entry.isFile()) continue;
-      visited += 1;
-      const relativePath = path.relative(projectRoot, full).replace(/\\/g, "/");
-      if (relativePath.toLocaleLowerCase().includes(needle))
-        addResult(full, relativePath, 1, "File name match");
-      const stat = await fs.stat(full).catch(() => null);
-      if (!stat || stat.size > 2_000_000) continue;
-      let content = "";
-      try {
-        content = decodeTextFile(await fs.readFile(full));
-      } catch {
-        continue;
-      }
-      const lines = content.split(/\r?\n/);
-      for (
-        let index = 0;
-        index < lines.length && results.length < 250;
-        index += 1
-      ) {
-        if (!lines[index].toLocaleLowerCase().includes(needle)) continue;
-        addResult(
-          full,
-          relativePath,
-          index + 1,
-          lines[index].trim().slice(0, 240),
-        );
-      }
+      const relativePath = path.relative(searchRoot, full).replace(/\\/g, "/");
+      indexedFiles.push({ full, relativePath });
     }
   };
-  await visit(projectRoot);
+  await visit(searchRoot);
+
+  // Resolve every nested filename before scanning file contents. A common
+  // content query must never consume the result cap before a deeper matching
+  // path is reached.
+  const pathScore = (relativePath: string) => {
+    const relative = relativePath.toLocaleLowerCase();
+    const name = path.basename(relativePath).toLocaleLowerCase();
+    if (name === needle) return 0;
+    if (name.startsWith(needle)) return 1;
+    if (name.includes(needle)) return 2;
+    return relative.includes(needle) ? 3 : 4;
+  };
+  const pathMatches = indexedFiles
+    .filter(({ relativePath }) =>
+      relativePath.toLocaleLowerCase().includes(needle),
+    )
+    .sort(
+      (left, right) =>
+        pathScore(left.relativePath) - pathScore(right.relativePath) ||
+        projectEntryCollator.compare(left.relativePath, right.relativePath),
+    );
+  for (const { full, relativePath } of pathMatches)
+    addResult(full, relativePath, 1, "File name match");
+
+  for (const { full, relativePath } of indexedFiles) {
+    if (results.length >= 250) break;
+    const stat = await fs.stat(full).catch(() => null);
+    if (!stat || stat.size > 2_000_000) continue;
+    let content = "";
+    try {
+      content = decodeTextFile(await fs.readFile(full));
+    } catch {
+      continue;
+    }
+    const lines = content.split(/\r?\n/);
+    for (
+      let index = 0;
+      index < lines.length && results.length < 250;
+      index += 1
+    ) {
+      if (!lines[index].toLocaleLowerCase().includes(needle)) continue;
+      addResult(
+        full,
+        relativePath,
+        index + 1,
+        lines[index].trim().slice(0, 240),
+      );
+    }
+  }
   return results.sort(
     (left, right) =>
+      Number(right.preview === "File name match") -
+        Number(left.preview === "File name match") ||
+      (left.preview === "File name match" && right.preview === "File name match"
+        ? pathScore(left.relativePath) - pathScore(right.relativePath)
+        : 0) ||
       projectEntryCollator.compare(left.relativePath, right.relativePath) ||
       left.line - right.line,
   );

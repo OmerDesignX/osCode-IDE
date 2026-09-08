@@ -172,6 +172,14 @@ test("compact AI capabilities stay reachable through one horizontal rail", () =>
 
 test("built-in autonomous coding runs use bounded local supervisor checkpoints", () => {
   assert.match(aiMain, /shouldUseOsCodeSupervisor/);
+  assert.match(
+    aiMain,
+    /Four private roles share one serialized local inference pipeline/,
+  );
+  assert.match(aiMain, /Tool planner mapping the project/);
+  assert.match(aiMain, /Implementation tracker reviewing progress/);
+  assert.match(aiMain, /tool: "tool_planner_review"/);
+  assert.match(aiMain, /tool: "implementation_tracker_review"/);
   assert.match(aiMain, /Supervisor reviewing coding progress/);
   assert.match(aiMain, /maxAgentSteps = supervisorEnabled \? 72 : 24/);
   assert.match(aiMain, /tool: "supervisor_review"/);
@@ -907,21 +915,18 @@ test("AI chat shows a steerable queue and can expand to the full window", () => 
   );
 });
 
-test("chat footer controls auto-hide to dark icon circles and expand accessibly", () => {
+test("chat footer controls stay fixed dark icon circles in compact mode", () => {
   assert.match(styles, /--ai-footer-rest-fill:/);
+  assert.match(styles, /Compact chat controls are permanent icon circles/);
   assert.match(
     styles,
-    /@media \(hover: hover\) and \(pointer: fine\) and \(min-width: 521px\)/,
+    /\.ai-panel:not\(\.expanded\)[\s\S]*?> :is\(\.ai-bottom-model, \.ai-capability-drawer, \.ai-auto-install-toggle\)[\s\S]*?flex: 0 0 var\(--ui-control-height\) !important;/,
   );
   assert.match(
     styles,
-    /\.ai-bottom-model:is\(:hover, :focus-within, :has\(\[aria-expanded="true"\]\)\)/,
+    /Compact chat controls are permanent icon circles[\s\S]*?border-radius: 50% !important;/,
   );
-  assert.match(
-    styles,
-    /\.ai-footer-controls[\s\S]*?\.ai-footer-label,[\s\S]*?opacity: 0;[\s\S]*?visibility: hidden;/,
-  );
-  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(ai, /title="Agent permissions"/);
 });
 
 test("the last completed answer can be regenerated without duplicating earlier turns", () => {
@@ -1202,6 +1207,11 @@ test("global search separates project code from AI chats", () => {
   assert.match(main, /balancedControlSizing/);
   assert.match(main, /projectSearchReady/);
   assert.match(
+    main,
+    /Resolve every nested filename before scanning file contents/,
+  );
+  assert.match(main, /indexedFiles\.length >= 20_000/);
+  assert.match(
     app,
     /const openGlobalProjectSearch[\s\S]*setGlobalSearchOpen\(true\)/,
   );
@@ -1431,6 +1441,11 @@ test("model and permission controls share a comfortable footer above the chat co
   assert.match(ai, /aria-expanded=\{permissionsDrawerOpen\}/);
   assert.match(ai, /className=\{`ai-auto-install-toggle/);
   assert.match(ai, /Enable Auto Install\?/);
+  assert.match(ai, /className="ai-auto-install-close"/);
+  assert.match(
+    styles,
+    /\.ai-auto-install-dialog \.ai-auto-install-close\s*\{[\s\S]*width: var\(--ui-control-height\);[\s\S]*border-radius: 50%;/,
+  );
   assert.match(ai, /autoInstall,[\s\S]*fileAccess/);
   assert.match(
     ai,

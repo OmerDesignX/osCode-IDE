@@ -14280,6 +14280,20 @@ button > svg * {
   gap: 12px;
 }
 
+.ai-auto-install-dialog .ai-auto-install-close {
+  width: var(--ui-control-height);
+  min-width: var(--ui-control-height);
+  height: var(--ui-control-height);
+  flex: 0 0 var(--ui-control-height);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--control-hover-fill);
+  color: var(--accent);
+}
+
 .ai-auto-install-dialog h2 {
   margin: 0;
   font:
@@ -14476,4 +14490,105 @@ button > svg * {
     min-width: 230px;
     max-width: 230px;
   }
+}
+
+/* Compact chat controls are permanent icon circles. A narrow AI column must
+   never turn a hovered or open trigger into a clipped full-width pill. The
+   labels remain available to assistive technology and native tooltips, while
+   the opened model/permission menus keep their readable panel widths. */
+.ai-panel:not(.expanded) .ai-footer-controls {
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 12px;
+}
+
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  > :is(.ai-bottom-model, .ai-capability-drawer, .ai-auto-install-toggle),
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  > :is(.ai-bottom-model, .ai-capability-drawer):is(
+    :hover,
+    :focus-within,
+    :has([aria-expanded="true"])
+  ),
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  > .ai-auto-install-toggle:is(:hover, :focus-visible) {
+  flex: 0 0 var(--ui-control-height) !important;
+  width: var(--ui-control-height) !important;
+  min-width: var(--ui-control-height) !important;
+  max-width: var(--ui-control-height) !important;
+  height: var(--ui-control-height);
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls .ai-tier-toggle,
+.ai-panel:not(.expanded) .ai-footer-controls .ai-capability-toggle,
+.ai-panel:not(.expanded) .ai-footer-controls .ai-auto-install-toggle,
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  :is(.ai-bottom-model, .ai-capability-drawer):is(
+    :hover,
+    :focus-within,
+    :has([aria-expanded="true"])
+  )
+  :is(.ai-tier-toggle, .ai-capability-toggle) {
+  width: var(--ui-control-height) !important;
+  min-width: var(--ui-control-height) !important;
+  max-width: var(--ui-control-height) !important;
+  height: var(--ui-control-height) !important;
+  min-height: var(--ui-control-height) !important;
+  display: grid;
+  grid-template-columns: 1fr !important;
+  place-items: center;
+  gap: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border: 0 !important;
+  border-radius: 50% !important;
+  box-shadow: none !important;
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls .ai-capability-toggle > span {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  grid-template-columns: 1fr !important;
+  place-items: center;
+  gap: 0 !important;
+}
+
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle)
+  .ai-footer-label,
+.ai-panel:not(.expanded) .ai-footer-controls .ai-tier-toggle > svg:last-child,
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  .ai-capability-toggle
+  > svg:last-child {
+  display: none !important;
+}
+
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle)
+  > svg,
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  .ai-capability-toggle
+  > span
+  > svg {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls .ai-tier-picker {
+  width: min(400px, calc(100vw - 32px));
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls .ai-capability-bar {
+  width: min(583px, calc(100vw - 32px));
 }

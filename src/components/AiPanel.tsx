@@ -3853,6 +3853,8 @@ export function AiPanel({
           <button
             className="ai-tier-toggle"
             type="button"
+            aria-label={`${selectedModel?.name || "Choose a local model"}: ${selectedModel?.installed === false ? "download required" : selectedModel ? "ready" : "choose a model"}`}
+            title={`${selectedModel?.name || "Choose a local model"} — ${selectedModel?.installed === false ? "download required" : selectedModel ? "ready" : "choose a model"}`}
             aria-expanded={tierPickerOpen}
             aria-controls="ai-model-size-picker"
             onClick={() => {
@@ -3950,6 +3952,8 @@ export function AiPanel({
           <button
             type="button"
             className="ai-capability-toggle"
+            aria-label="Agent permissions"
+            title="Agent permissions"
             aria-expanded={permissionsDrawerOpen}
             aria-controls="ai-capability-controls"
             onClick={() => {
@@ -4159,11 +4163,14 @@ export function AiPanel({
                   <FeatherIcon icon="alert-triangle" size="20" />
                   <h2 id="ai-auto-install-title">Enable Auto Install?</h2>
                 </div>
-                <IconButton
-                  icon="x"
-                  label="Close Auto Install explanation"
+                <button
+                  type="button"
+                  className="ai-auto-install-close"
+                  aria-label="Close Auto Install explanation"
                   onClick={() => setAutoInstallConfirmOpen(false)}
-                />
+                >
+                  <FeatherIcon icon="x" size="17" />
+                </button>
               </header>
               <p>
                 Auto Install lets the agent download and install missing
