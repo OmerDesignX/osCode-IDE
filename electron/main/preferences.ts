@@ -9,7 +9,7 @@ export function defaultAiHardware(
 }
 
 export const defaultPreferences: EditorPreferences = {
-  version: 18,
+  version: 19,
   theme: "dark",
   locale: "en",
   sidebarSide: "left",
@@ -18,7 +18,7 @@ export const defaultPreferences: EditorPreferences = {
   sidebarWidth: 520,
   gitHeight: 390,
   terminalHeight: 320,
-  aiPanelWidth: 560,
+  aiPanelWidth: 680,
   sidebarVisible: true,
   aiVisible: false,
   aiEngine:
@@ -67,7 +67,7 @@ export function validPreferences(
       ? "cpu"
       : savedHardware || defaultAiHardware(platform, arch);
   return {
-    version: 18,
+    version: 19,
     theme:
       input.theme === "blue-dark" || input.theme === "blue-light"
         ? input.theme
@@ -111,12 +111,14 @@ export function validPreferences(
         : 320,
     aiPanelWidth:
       Number(input.version) < 15 && Number(input.aiPanelWidth) === 330
-        ? 560
-        : Number.isFinite(input.aiPanelWidth) &&
-            Number(input.aiPanelWidth) >= 280 &&
-            Number(input.aiPanelWidth) <= 560
-          ? Math.round(Number(input.aiPanelWidth))
-          : 560,
+        ? 680
+        : Number(input.version) < 19 && Number(input.aiPanelWidth) === 560
+          ? 680
+          : Number.isFinite(input.aiPanelWidth) &&
+              Number(input.aiPanelWidth) >= 280 &&
+              Number(input.aiPanelWidth) <= 1200
+            ? Math.round(Number(input.aiPanelWidth))
+            : 680,
     sidebarVisible:
       typeof input.sidebarVisible === "boolean" ? input.sidebarVisible : true,
     aiVisible: typeof input.aiVisible === "boolean" ? input.aiVisible : false,

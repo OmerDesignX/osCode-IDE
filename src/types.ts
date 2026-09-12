@@ -13,7 +13,7 @@ export type ProjectItemOperationResult = {
   kind: TreeEntry["kind"];
 };
 export type EditorPreferences = {
-  version: 18;
+  version: 19;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
@@ -134,6 +134,7 @@ export type AiAttention = {
   kind: AiAttentionKind;
   title: string;
   detail: string;
+  chatId?: string;
   permissionKind?: AiPermissionKind;
 };
 export type AiPermissionGrant = {
@@ -619,6 +620,9 @@ declare global {
       choosePython(): Promise<PythonRuntime | null>;
       installPython(version: string): Promise<boolean>;
       createVenv(interpreter: string, name?: string): Promise<PythonRuntime>;
+      deleteVenv(
+        interpreter: string,
+      ): Promise<{ name: string; environment: string }>;
       listPythonPackages(interpreter: string): Promise<PythonPackageState>;
       installPythonPackage(
         interpreter: string,

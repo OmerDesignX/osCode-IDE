@@ -693,7 +693,12 @@ async function confirmDiscardChanges(detail: string) {
   return result.response === 1;
 }
 
-const projectTreeIgnored = new Set([".git", "node_modules", "__pycache__"]);
+const projectTreeIgnored = new Set([
+  ".git",
+  ".oscode",
+  "node_modules",
+  "__pycache__",
+]);
 const projectSearchIgnored = new Set([
   ".git",
   ".oscode",
@@ -705,6 +710,21 @@ const projectSearchIgnored = new Set([
   ".next",
   "__pycache__",
 ]);
+async function retireLegacyProjectPythonStorage(root: string) {
+  const legacyRoot = path.join(root, ".oscode");
+  const legacyEnvironments = path.join(legacyRoot, "envs");
+  const legacyRootStat = await fs.lstat(legacyRoot).catch(() => null);
+  if (
+    !legacyRootStat ||
+    !legacyRootStat.isDirectory() ||
+    legacyRootStat.isSymbolicLink()
+  )
+    return;
+  const environmentStat = await fs.lstat(legacyEnvironments).catch(() => null);
+  if (environmentStat?.isDirectory() && !environmentStat.isSymbolicLink())
+    await fs.rm(legacyEnvironments, { recursive: true, force: true });
+  if (!(await fs.readdir(legacyRoot)).length) await fs.rmdir(legacyRoot);
+}
 const ignoredEnvironmentDirectories = new Set([
   "env",
   ".env",
@@ -948,27 +968,6 @@ async function handleMediaPreviewRequest(request: Request) {
       error instanceof Error ? error.message : "Media preview unavailable",
     );
   }
-}
-async function projectPrivateDirectory(parts: string[], create: boolean) {
-  if (!projectRoot) throw new Error("Open a project first");
-  const root = await fs.realpath(projectRoot);
-  let current = root;
-  for (const part of parts) {
-    current = path.join(current, part);
-    const item = await fs.lstat(current).catch(() => null);
-    if (!item) {
-      if (!create) return "";
-      await fs.mkdir(current);
-    } else if (!item.isDirectory() || item.isSymbolicLink()) {
-      throw new Error(`Project storage “${part}” must be a regular folder`);
-    }
-    const resolved = await fs.realpath(current);
-    const relative = path.relative(root, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative))
-      throw new Error("Project storage is outside the project");
-    current = resolved;
-  }
-  return current;
 }
 function projectItemName(input: string) {
   return validateProjectItemName(input);
@@ -1216,6 +1215,22 @@ function validPythonPackageSpec(value: unknown) {
       "Enter one package name or version, for example requests==2.32.5",
     );
   return packageSpec;
+}
+function validProjectPythonEnvironmentName(value: unknown) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (
+    !name ||
+    name.length > 80 ||
+    name === "." ||
+    name === ".." ||
+    !/^[A-Za-z0-9._ -]+$/.test(name) ||
+    /[. ]$/.test(name) ||
+    /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(name)
+  )
+    throw new Error(
+      "Use a short environment name with letters, numbers, spaces, dots, dashes, or underscores",
+    );
+  return name;
 }
 const secureStatePath = (name: string) =>
   path.join(secureStore.root, "state", `${name}.oscode-data`);
@@ -1539,7 +1554,7 @@ async function ownedProjectPythonEnvironment(
     path.resolve(environment) === path.resolve(appEnvironment);
   if (!insideProject && !insideAppData)
     throw new Error(
-      "Select this project's app environment or a project-local environment",
+      "Select this project's osCode environment or a project-local environment",
     );
   return {
     inspected,
@@ -1608,15 +1623,34 @@ async function createProjectPythonEnvironment(
   if (!project) throw new Error("Open a project first");
   const base = await inspectPython(baseInterpreter);
   await fs.mkdir(uvCacheRoot(), { recursive: true });
-  await exec(
-    await uvExecutable(),
-    ["venv", "--python", base.path, "--seed", destination],
-    {
-      cwd: project,
-      timeout: 10 * 60_000,
-      env: uvEnvironment({ UV_PYTHON_DOWNLOADS: "never" }),
-    },
-  );
+  try {
+    await exec(
+      await uvExecutable(),
+      ["venv", "--python", base.path, "--seed", destination],
+      {
+        cwd: project,
+        timeout: 10 * 60_000,
+        env: uvEnvironment({ UV_PYTHON_DOWNLOADS: "never" }),
+      },
+    );
+  } catch (uvError) {
+    // A system-installed Python can still create a standards-compliant venv
+    // when the bundled uv binary is unavailable or incompatible on the host.
+    await fs.rm(destination, { recursive: true, force: true });
+    try {
+      await exec(base.path, ["-m", "venv", destination], {
+        cwd: project,
+        timeout: 10 * 60_000,
+        env: pythonRuntimeEnvironment(app.getPath("userData")),
+      });
+    } catch (pythonError) {
+      const detail = pythonError instanceof Error ? pythonError.message : "";
+      const uvDetail = uvError instanceof Error ? uvError.message : "";
+      throw new Error(
+        `Python could not create this environment. ${detail || uvDetail}`.trim(),
+      );
+    }
+  }
   const python = path.join(
     destination,
     process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
@@ -1792,35 +1826,83 @@ function createWindow(show = true, restoreLastProject = true) {
     }
   });
   window.webContents.on("context-menu", (_event, params) => {
-    if (!spellcheckEnabled || !params.misspelledWord) return;
-    const word = params.misspelledWord;
-    const suggestions = params.dictionarySuggestions.slice(0, 8);
-    const template: MenuItemConstructorOptions[] = suggestions.map(
-      (suggestion) => ({
-        label: suggestion,
-        click: () => window.webContents.replaceMisspelling(suggestion),
-      }),
-    );
-    if (!suggestions.length)
-      template.push({ label: "No suggestions", enabled: false });
-    template.push(
-      { type: "separator" },
-      {
-        label: "Replace all",
-        enabled: suggestions.length > 0,
-        submenu: suggestions.map((suggestion) => ({
+    const template: MenuItemConstructorOptions[] = [];
+    if (
+      params.mediaType === "image" &&
+      params.srcURL.startsWith("data:image/")
+    ) {
+      const image = nativeImage.createFromDataURL(params.srcURL);
+      if (!image.isEmpty()) {
+        const imageName =
+          (params.titleText || "osCode image")
+            .replace(/\.[a-z0-9]{2,5}$/i, "")
+            .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+            .trim()
+            .slice(0, 80) || "osCode image";
+        template.push(
+          {
+            label: "Copy Image",
+            click: () => clipboard.writeImage(image),
+          },
+          {
+            label: "Save Image As\u2026",
+            click: () => {
+              void dialog
+                .showSaveDialog(window, {
+                  title: "Save pasted image",
+                  defaultPath: `${imageName}.png`,
+                  filters: [{ name: "PNG image", extensions: ["png"] }],
+                })
+                .then(async ({ canceled, filePath }) => {
+                  if (canceled || !filePath) return;
+                  await fs.writeFile(filePath, image.toPNG());
+                })
+                .catch((error: unknown) => {
+                  dialog.showErrorBox(
+                    "Couldn’t save image",
+                    error instanceof Error ? error.message : String(error),
+                  );
+                });
+            },
+          },
+        );
+      }
+    }
+    if (spellcheckEnabled && params.misspelledWord) {
+      if (template.length) template.push({ type: "separator" });
+      const word = params.misspelledWord;
+      const suggestions = params.dictionarySuggestions.slice(0, 8);
+      template.push(
+        ...suggestions.map((suggestion) => ({
           label: suggestion,
-          click: () =>
-            window.webContents.send("spellcheck:replace-all", word, suggestion),
+          click: () => window.webContents.replaceMisspelling(suggestion),
         })),
-      },
-      {
-        label: "Add to dictionary",
-        click: () =>
-          window.webContents.session.addWordToSpellCheckerDictionary(word),
-      },
-    );
-    Menu.buildFromTemplate(template).popup({ window });
+      );
+      if (!suggestions.length)
+        template.push({ label: "No suggestions", enabled: false });
+      template.push(
+        { type: "separator" },
+        {
+          label: "Replace all",
+          enabled: suggestions.length > 0,
+          submenu: suggestions.map((suggestion) => ({
+            label: suggestion,
+            click: () =>
+              window.webContents.send(
+                "spellcheck:replace-all",
+                word,
+                suggestion,
+              ),
+          })),
+        },
+        {
+          label: "Add to dictionary",
+          click: () =>
+            window.webContents.session.addWordToSpellCheckerDictionary(word),
+        },
+      );
+    }
+    if (template.length) Menu.buildFromTemplate(template).popup({ window });
   });
   if (process.env.OSCODE_DEBUG_RENDERER === "1") {
     window.webContents.on("console-message", (_event, level, message) =>
@@ -2116,6 +2198,8 @@ async function runSmokeTest(window: BrowserWindow) {
         typeof window.oscode?.listPython === 'function' &&
         typeof window.oscode?.getProjectPython === 'function' &&
         typeof window.oscode?.setProjectPython === 'function' &&
+        typeof window.oscode?.createVenv === 'function' &&
+        typeof window.oscode?.deleteVenv === 'function' &&
         typeof window.oscode?.loadPreferences === 'function' &&
         typeof window.oscode?.savePreferences === 'function' &&
         typeof window.oscode?.listSaveHistory === 'function' &&
@@ -2206,6 +2290,25 @@ async function runSmokeTest(window: BrowserWindow) {
         item => item.relativePath === 'vendor/sample-module/module.py'
       );
       file.click();
+      const terminalForPython = document.querySelector('.terminal-panel');
+      if (
+        !terminalForPython ||
+        terminalForPython.hidden === true ||
+        getComputedStyle(terminalForPython).display === 'none'
+      ) {
+        document.querySelector('.terminal-toggle')?.click();
+        await waitFor(
+          () => {
+            const panel = document.querySelector('.terminal-panel');
+            return panel && panel.hidden === false &&
+              getComputedStyle(panel).display !== 'none'
+              ? panel
+              : null;
+          },
+          'open terminal for project Python selection'
+        );
+      }
+      document.querySelector('.terminal-mode-tab.python')?.click();
       const projectPythonEnvironmentReady = Boolean(await waitFor(
         () => {
           const selector = document.querySelector('[aria-label="Python interpreter"]');
@@ -2482,15 +2585,11 @@ async function runSmokeTest(window: BrowserWindow) {
         )
       ];
       const advancedRuntimeSection = advancedRuntimeContent.querySelector(
-        '.project-environment-settings'
+        '.runtime-catalog'
       );
-      const advancedRuntimeSelect = advancedRuntimeSection.querySelector(
-        '.advanced-select-row > select'
-      );
-      const advancedRuntimeSectionRect =
-        advancedRuntimeSection.getBoundingClientRect();
-      const advancedRuntimeSelectRect =
-        advancedRuntimeSelect.getBoundingClientRect();
+      const advancedRuntimeRows = [
+        ...advancedRuntimeContent.querySelectorAll('.runtime-row')
+      ];
       const advancedRuntimeContentStyle = getComputedStyle(
         advancedRuntimeContent
       );
@@ -2501,10 +2600,9 @@ async function runSmokeTest(window: BrowserWindow) {
         advancedRuntimeDock.getBoundingClientRect().width >= 600 &&
         parseFloat(advancedRuntimeContentStyle.paddingLeft) >= 24 &&
         parseFloat(advancedRuntimeSectionStyle.paddingLeft) >= 20 &&
-        advancedRuntimeActions.length === 3 &&
-        advancedRuntimeActions.some(button =>
-          button.textContent.includes('Rescan project')
-        ) &&
+        !advancedRuntimeContent.querySelector('.project-environment-settings') &&
+        advancedRuntimeActions.length === 1 &&
+        advancedRuntimeActions[0].textContent.includes('Use installed Python') &&
         advancedRuntimeActions.every(button => {
           const rect = button.getBoundingClientRect();
           return (
@@ -2513,8 +2611,11 @@ async function runSmokeTest(window: BrowserWindow) {
             button.scrollWidth <= button.clientWidth + 1
           );
         }) &&
-        advancedRuntimeSelectRect.left >= advancedRuntimeSectionRect.left &&
-        advancedRuntimeSelectRect.right <= advancedRuntimeSectionRect.right;
+        advancedRuntimeRows.length === 5 &&
+        advancedRuntimeRows.every(row =>
+          row.getBoundingClientRect().width <=
+            advancedRuntimeSection.getBoundingClientRect().width + 1
+        );
       advancedDock.querySelector('[aria-label="Back to Advanced"]').click();
       await waitFor(
         () => advancedDock.querySelector('.advanced-menu'),
@@ -2623,6 +2724,9 @@ async function runSmokeTest(window: BrowserWindow) {
         'Chats and tasks panel close'
       );
       const permissionToggle = aiPanel.querySelector('.ai-capability-toggle');
+      const autoInstallToggle = aiPanel.querySelector(
+        '.ai-auto-install-toggle'
+      );
       const aiPermissionsClosedAtBoot =
         permissionToggle?.getAttribute('aria-expanded') === 'false' &&
         !aiPanel.querySelector('.ai-capability-bar');
@@ -2791,10 +2895,7 @@ async function runSmokeTest(window: BrowserWindow) {
         () => aiPanel.querySelector('.ai-tier-picker'),
         'expanded model selector open'
       );
-      await waitFor(
-        () => modelToggle.getBoundingClientRect().width >= 250,
-        'expanded model footer control'
-      );
+      await new Promise(resolve => setTimeout(resolve, 80));
       const expandedModelIconRect = modelToggle
         .querySelector(':scope > svg:first-child')
         .getBoundingClientRect();
@@ -2808,7 +2909,6 @@ async function runSmokeTest(window: BrowserWindow) {
         () => !aiPanel.querySelector('.ai-tier-picker'),
         'expanded model selector close'
       );
-      forceSmokeWidth(modelContainer, modelToggle, 64);
       permissionToggle.click();
       await waitFor(
         () => aiPanel.querySelector('.ai-capability-bar'),
@@ -2823,11 +2923,17 @@ async function runSmokeTest(window: BrowserWindow) {
         .getBoundingClientRect();
       const expandedPermissionToggleRect = permissionToggle.getBoundingClientRect();
       const restingModelToggleRect = modelToggle.getBoundingClientRect();
-      clearSmokeWidth(modelContainer, modelToggle);
       permissionToggle.click();
       await waitFor(
         () => !aiPanel.querySelector('.ai-capability-bar'),
         'expanded permission selector close'
+      );
+      const restingAutoToggleRect = autoInstallToggle.getBoundingClientRect();
+      const expandedAutoTitleStyle = getComputedStyle(
+        autoInstallToggle.querySelector('.ai-footer-label b')
+      );
+      const expandedAutoStatusStyle = getComputedStyle(
+        autoInstallToggle.querySelector('.ai-footer-label small')
       );
       const expandedModelTitleStyle = getComputedStyle(
         modelToggle.querySelector('.ai-footer-label b')
@@ -2841,13 +2947,17 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedPermissionStatusStyle = getComputedStyle(
         permissionToggle.querySelector('.ai-footer-label small')
       );
-      const modelIconGap =
-        expandedModelLabelRect.left - expandedModelIconRect.right;
-      const permissionIconGap =
-        expandedPermissionLabelRect.left - expandedPermissionIconRect.right;
+      const modelIconCenterOffset = Math.abs(
+        expandedModelIconRect.left + expandedModelIconRect.width / 2 -
+          (expandedModelToggleRect.left + expandedModelToggleRect.width / 2)
+      );
+      const permissionIconCenterOffset = Math.abs(
+        expandedPermissionIconRect.left + expandedPermissionIconRect.width / 2 -
+          (expandedPermissionToggleRect.left + expandedPermissionToggleRect.width / 2)
+      );
       const aiFooterSelectorSpacing = {
-        modelIconGap,
-        permissionIconGap,
+        modelIconCenterOffset,
+        permissionIconCenterOffset,
         compactFooterControlGap,
         compactFooterLeftInset: modelToggleRect.left - compactFooterRect.left,
         compactModelInset: modelIconRect.left - modelToggleRect.left,
@@ -2856,20 +2966,19 @@ async function runSmokeTest(window: BrowserWindow) {
       };
       const aiFooterSelectorSpacingReady =
         compactSelectorInsetsReady &&
-        modelIconGap >= 7 &&
-        modelIconGap <= 11 &&
-        permissionIconGap >= 7 &&
-        permissionIconGap <= 11 &&
-        Math.abs(modelIconGap - permissionIconGap) <= 1 &&
+        modelIconCenterOffset <= 1 &&
+        permissionIconCenterOffset <= 1 &&
         compactFooterControlGap >= 8 &&
         compactFooterControlGap <= 12 &&
         modelToggleRect.left - compactFooterRect.left >= 12 &&
         modelToggleRect.left - compactFooterRect.left <= 16;
       const aiFooterAutoHideReady =
-        expandedModelToggleRect.width >= 250 &&
+        expandedModelToggleRect.width >= 43 &&
+        expandedModelToggleRect.width <= 45 &&
         restingModelToggleRect.width <= 66 &&
         restingPermissionToggleRect.width <= 66 &&
-        expandedModelLabelRect.width >= 120 &&
+        expandedModelLabelRect.width === 0 &&
+        expandedPermissionLabelRect.width === 0 &&
         permissionPickerMetrics.width > 0;
       const expandedPanelRect = aiPanel.getBoundingClientRect();
       const expandedFooterRect = aiPanel
@@ -2912,28 +3021,39 @@ async function runSmokeTest(window: BrowserWindow) {
         permissionWidth: expandedPermissionToggleRect.width,
         restingModelWidth: restingModelToggleRect.width,
         restingPermissionWidth: restingPermissionToggleRect.width,
+        restingAutoWidth: restingAutoToggleRect.width,
         modelLabelWidth: expandedModelLabelRect.width,
         permissionLabelWidth: expandedPermissionLabelRect.width,
         modelHeight: expandedModelToggleRect.height,
         permissionHeight: expandedPermissionToggleRect.height,
+        autoHeight: restingAutoToggleRect.height,
         modelTitleSize: parseFloat(expandedModelTitleStyle.fontSize),
         modelStatusSize: parseFloat(expandedModelStatusStyle.fontSize),
         permissionTitleSize: parseFloat(expandedPermissionTitleStyle.fontSize),
         permissionStatusSize: parseFloat(expandedPermissionStatusStyle.fontSize),
+        autoTitleSize: parseFloat(expandedAutoTitleStyle.fontSize),
+        autoStatusSize: parseFloat(expandedAutoStatusStyle.fontSize),
         composerGap: expandedComposerGap
       };
       const aiExpandedFooterControlsReady =
-        expandedModelToggleRect.height >= 63 &&
-        expandedPermissionToggleRect.height >= 63 &&
+        expandedModelToggleRect.height >= 43 &&
+        expandedModelToggleRect.height <= 45 &&
+        expandedPermissionToggleRect.height >= 43 &&
+        expandedPermissionToggleRect.height <= 45 &&
         Math.abs(
           expandedModelToggleRect.height - expandedPermissionToggleRect.height
         ) <= 1 &&
-        expandedModelLabelRect.height >= 32 &&
-        expandedPermissionLabelRect.height >= 32 &&
-        aiExpandedFooterControls.modelTitleSize >= 15 &&
-        aiExpandedFooterControls.modelStatusSize >= 13 &&
-        aiExpandedFooterControls.permissionTitleSize >= 15 &&
-        aiExpandedFooterControls.permissionStatusSize >= 13 &&
+        Math.abs(
+          expandedModelToggleRect.height - restingAutoToggleRect.height
+        ) <= 1 &&
+        Math.abs(
+          restingModelToggleRect.width - restingAutoToggleRect.width
+        ) <= 2 &&
+        Math.abs(
+          restingPermissionToggleRect.width - restingAutoToggleRect.width
+        ) <= 2 &&
+        expandedModelLabelRect.width === 0 &&
+        expandedPermissionLabelRect.width === 0 &&
         expandedComposerGap >= 18;
       const layoutProbe = document.createElement('article');
       layoutProbe.className = 'ai-message assistant';
@@ -3135,11 +3255,26 @@ async function runSmokeTest(window: BrowserWindow) {
       );
       markSmokeStage('Terminal');
       const terminalToggle = document.querySelector('.terminal-toggle');
-      terminalToggle.click();
-      const terminalPanel = await waitFor(
-        () => document.querySelector('.terminal-panel'),
-        'terminal panel'
-      );
+      let terminalPanel = document.querySelector('.terminal-panel');
+      if (
+        !terminalPanel ||
+        terminalPanel.hidden === true ||
+        getComputedStyle(terminalPanel).display === 'none'
+      ) {
+        terminalToggle.click();
+        terminalPanel = await waitFor(
+          () => {
+            const panel = document.querySelector('.terminal-panel');
+            return panel && panel.hidden === false &&
+              getComputedStyle(panel).display !== 'none'
+              ? panel
+              : null;
+          },
+          'terminal panel'
+        );
+      }
+      document.querySelector('.terminal-mode-tab.python')?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
       const terminalPanelHeight = terminalPanel.getBoundingClientRect().height;
       const packageManagerButton = [...terminalPanel.querySelectorAll('button')]
         .find(item => item.textContent.trim() === 'Packages');
@@ -3152,7 +3287,6 @@ async function runSmokeTest(window: BrowserWindow) {
       const packageAddButton = [...document.querySelectorAll('.python-package-manager button')]
         .find(item => item.textContent.trim() === 'Add');
       const packageList = document.querySelector('.python-package-list');
-      const packageManagerText = document.querySelector('.python-package-manager')?.textContent || '';
       const pythonPackageInputReady = Boolean(
         packageInput && !packageInput.disabled && packageAddButton
       );
@@ -3162,9 +3296,30 @@ async function runSmokeTest(window: BrowserWindow) {
         getComputedStyle(packageList).flexDirection === 'column' &&
         getComputedStyle(packageList).overflowY === 'auto'
       );
-      const pythonEnvironmentLocationReady =
-        packageManagerText.includes('outside project') &&
-        packageManagerText.includes('Create project .venv');
+      const interpreterManagerButton = [...document.querySelectorAll('.python-package-manager button')]
+        .find(item => item.textContent.trim() === 'Manage interpreters');
+      interpreterManagerButton.click();
+      const interpreterManager = await waitFor(
+        () => document.querySelector('.python-environment-manager-dialog'),
+        'Python interpreter manager'
+      );
+      const interpreterManagerText = interpreterManager.textContent || '';
+      const pythonEnvironmentLocationReady = Boolean(
+        interpreterManagerText.includes('Python interpreters') &&
+        interpreterManagerText.includes('App only') &&
+        interpreterManagerText.includes('never in this project') &&
+        interpreterManagerText.includes('Project environments') &&
+        interpreterManagerText.includes('Create environment') &&
+        interpreterManager.querySelector('[aria-label="Active Python interpreter"]') &&
+        interpreterManager.querySelector('[aria-label^="Delete "]')
+      );
+      interpreterManager
+        .querySelector('[aria-label="Close Python interpreters"]')
+        .click();
+      await waitFor(
+        () => !document.querySelector('.python-environment-manager-dialog'),
+        'Python interpreter manager close'
+      );
       if (packageInput) {
         const valueSetter = Object.getOwnPropertyDescriptor(
           HTMLInputElement.prototype,
@@ -3202,7 +3357,10 @@ async function runSmokeTest(window: BrowserWindow) {
       );
       terminalToggle.click();
       await waitFor(
-        () => !document.querySelector('.terminal-panel'),
+        () => {
+          const panel = document.querySelector('.terminal-panel');
+          return panel?.hidden === true && getComputedStyle(panel).display === 'none';
+        },
         'terminal panel close'
       );
       await new Promise(resolve => setTimeout(resolve, 1200));
@@ -3346,8 +3504,8 @@ async function runSmokeTest(window: BrowserWindow) {
         platformioReady,
         aiPanelReady:
           Boolean(aiPanel) &&
-          aiPanel.getBoundingClientRect().width >= 550 &&
-          aiPanel.getBoundingClientRect().width <= 570 &&
+          aiPanel.getBoundingClientRect().width >= 670 &&
+          aiPanel.getBoundingClientRect().width <= 690 &&
           Boolean(aiSwapReady) &&
           (await window.oscode.listAiModels()).length >= 0,
         aiHiddenAtBoot,
@@ -3411,26 +3569,33 @@ async function runSmokeTest(window: BrowserWindow) {
         ?.getBoundingClientRect();
       const controlHeights = [
         ...document.querySelectorAll('.top-actions .icon-button, .top-actions .runtime-select'),
-        ...document.querySelectorAll('.editor-command-bar button'),
-        ...document.querySelectorAll('.terminal-controls button')
+        ...document.querySelectorAll('.editor-command-bar button')
       ].map(item => Math.round(item.getBoundingClientRect().height)).filter(Boolean);
       const terminalSessionHeights = [...document.querySelectorAll('.terminal-session-control')]
-        .map(item => Math.round(item.getBoundingClientRect().height));
+        .map(item => Math.round(item.getBoundingClientRect().height))
+        .filter(Boolean);
       const terminalToggleForLayout = document.querySelector('.terminal-toggle');
-      const openedTerminalForLayout = !document.querySelector('.terminal-panel');
+      const existingTerminalPanel = document.querySelector('.terminal-panel');
+      const openedTerminalForLayout =
+        !existingTerminalPanel ||
+        existingTerminalPanel.hidden === true ||
+        getComputedStyle(existingTerminalPanel).display === 'none';
       if (openedTerminalForLayout) {
         terminalToggleForLayout?.click();
         for (let attempt = 0; attempt < 40; attempt += 1) {
-          if (document.querySelector('.terminal-panel')) break;
+          const panel = document.querySelector('.terminal-panel');
+          if (panel && panel.hidden === false && getComputedStyle(panel).display !== 'none') break;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
+      document.querySelector('.terminal-mode-tab.shell')?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
       const terminalTabRail = document.querySelector(
-        '.terminal-session-row[data-horizontal-menu]'
+        '.terminal-shell-scroll[data-horizontal-menu]'
       );
-      const terminalActionRail = document.querySelector(
-        '.terminal-tools-row[data-horizontal-menu]'
-      );
+      const terminalSessionToolbar = document.querySelector('.terminal-session-toolbar');
+      const terminalSessionActions = document.querySelector('.terminal-session-actions');
+      const terminalSessionDivider = document.querySelector('.terminal-session-divider');
       const exerciseTerminalRail = async rail => {
         if (!(rail instanceof HTMLElement)) {
           return { ready: false, missing: true };
@@ -3472,20 +3637,40 @@ async function runSmokeTest(window: BrowserWindow) {
       const terminalTabScrollCheck = await exerciseTerminalRail(
         terminalTabRail
       );
-      const terminalActionScrollCheck = await exerciseTerminalRail(
-        terminalActionRail
-      );
       const terminalTabScrollReady = terminalTabScrollCheck.ready;
-      const terminalActionScrollReady = terminalActionScrollCheck.ready;
       const terminalTabRect = terminalTabRail?.getBoundingClientRect();
-      const terminalActionRect = terminalActionRail?.getBoundingClientRect();
-      const terminalDualScrollReady = Boolean(
+      const terminalToolbarRect = terminalSessionToolbar?.getBoundingClientRect();
+      const terminalActionRect = terminalSessionActions?.getBoundingClientRect();
+      const terminalDividerRect = terminalSessionDivider?.getBoundingClientRect();
+      const terminalShellLayoutReady = Boolean(
         terminalTabScrollReady &&
-        terminalActionScrollReady &&
         terminalTabRect &&
+        terminalToolbarRect &&
         terminalActionRect &&
-        terminalTabRect.bottom <= terminalActionRect.top + 3
+        terminalDividerRect &&
+        terminalTabRect.top >= terminalToolbarRect.top &&
+        terminalTabRect.bottom <= terminalToolbarRect.bottom + 1 &&
+        terminalActionRect.left >= terminalTabRect.right - 1 &&
+        terminalDividerRect.left >= terminalTabRect.right - 1
       );
+      document.querySelector('.terminal-mode-tab.python')?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const terminalPythonEnvironment = document.querySelector(
+        '.terminal-python-environment-bar'
+      );
+      const terminalPythonActions = document.querySelector(
+        '.terminal-python-actions[data-horizontal-menu]'
+      );
+      const terminalPythonLayoutReady = Boolean(
+        terminalPythonEnvironment instanceof HTMLElement &&
+        terminalPythonActions instanceof HTMLElement &&
+        terminalPythonEnvironment.getBoundingClientRect().height >= 60 &&
+        terminalPythonActions.getBoundingClientRect().height >= 54 &&
+        getComputedStyle(terminalPythonActions).overflowX === 'auto'
+      );
+      document.querySelector('.terminal-mode-tab.shell')?.click();
+      const terminalRailLayoutReady =
+        terminalShellLayoutReady && terminalPythonLayoutReady;
       const horizontalMenu = activityStrip;
       let globalActivityScrollReady = false;
       if (activityStrip instanceof HTMLElement) {
@@ -3567,12 +3752,12 @@ async function runSmokeTest(window: BrowserWindow) {
             Math.max(...terminalSessionHeights) - Math.min(...terminalSessionHeights) <= 1
           )
         ),
-        terminalDualScrollReady,
-        terminalDualScroll: {
+        terminalRailLayoutReady,
+        terminalRailLayout: {
           tabs: terminalTabScrollCheck,
-          actions: terminalActionScrollCheck,
-          tabBottom: terminalTabRect?.bottom,
-          actionTop: terminalActionRect?.top
+          tabRight: terminalTabRect?.right,
+          actionLeft: terminalActionRect?.left,
+          pythonLayout: terminalPythonLayoutReady
         },
         globalActivityScrollReady,
         nonDownloadProgressHidden,
@@ -3614,11 +3799,11 @@ async function runSmokeTest(window: BrowserWindow) {
           { terminalSessionControlsBalanced?: boolean } | undefined
       )?.terminalSessionControlsBalanced,
     );
-    result.terminalDualScrollReady = Boolean(
+    result.terminalRailLayoutReady = Boolean(
       (
         result.globalSearchLayout as
-          { terminalDualScrollReady?: boolean } | undefined
-      )?.terminalDualScrollReady,
+          { terminalRailLayoutReady?: boolean } | undefined
+      )?.terminalRailLayoutReady,
     );
     result.horizontalMenuScrollReady = Boolean(
       (
@@ -3813,7 +3998,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.nonDownloadProgressHidden !== true ||
       result.balancedControlSizing !== true ||
       result.terminalSessionControlsBalanced !== true ||
-      result.terminalDualScrollReady !== true ||
+      result.terminalRailLayoutReady !== true ||
       result.horizontalMenuScrollReady !== true ||
       result.lightThemeReady !== true ||
       result.pythonPackageManagerReady !== true ||
@@ -4720,6 +4905,7 @@ function registerIpc() {
     });
     if (result.canceled) return null;
     const nextRoot = await fs.realpath(result.filePaths[0]);
+    await retireLegacyProjectPythonStorage(nextRoot);
     setSenderProject(event, nextRoot);
     return {
       root: nextRoot,
@@ -4742,6 +4928,7 @@ function registerIpc() {
       throw new Error("A file already exists with that name");
     if (!existing) await fs.mkdir(requestedRoot);
     const nextRoot = await fs.realpath(requestedRoot);
+    await retireLegacyProjectPythonStorage(nextRoot);
     setSenderProject(event, nextRoot);
     return {
       root: nextRoot,
@@ -4754,6 +4941,7 @@ function registerIpc() {
     const stat = await fs.stat(resolved);
     if (!stat.isDirectory()) throw new Error("That path is not a folder");
     const nextRoot = await fs.realpath(resolved);
+    await retireLegacyProjectPythonStorage(nextRoot);
     setSenderProject(event, nextRoot);
     return {
       root: nextRoot,
@@ -5379,6 +5567,10 @@ function registerIpc() {
       const command = isWin
         ? "powershell.exe"
         : process.env.SHELL || "/bin/bash";
+      if (terminals.has(id)) {
+        terminalOwners.set(id, event.sender);
+        return { shell: path.basename(command), restored: true };
+      }
       const terminalEnv: Record<string, string> = Object.fromEntries(
         Object.entries(process.env).filter(
           (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -5415,7 +5607,6 @@ function registerIpc() {
             `${binaryDir}${path.delimiter}${terminalEnv[pathKey] || ""}`;
         }
       }
-      terminals.get(id)?.kill();
       const terminal = pty.spawn(
         command,
         isWin
@@ -5576,15 +5767,11 @@ function registerIpc() {
             .relative(root, owned.environment)
             .replace(/\\/g, "/");
           const environmentName =
-            relativeEnvironment === ".venv"
-              ? ".venv"
-              : relativeEnvironment.startsWith(".oscode/envs/")
-                ? `env “${path.basename(relativeEnvironment)}”`
-                : relativeEnvironment;
+            relativeEnvironment === ".venv" ? ".venv" : relativeEnvironment;
           projectRuntimes.push({
             version:
               owned.location === "app"
-                ? `App environment · ${inspected.fullVersion}`
+                ? `osCode · Python ${inspected.fullVersion}`
                 : `Project ${environmentName} · ${
                     owned.manager === "conda" ? "Conda · " : ""
                   }${inspected.fullVersion}`,
@@ -5670,50 +5857,68 @@ function registerIpc() {
       activateSender(event);
       if (!projectRoot) throw new Error("Open a project first");
       if (!interpreter) throw new Error("Select a Python interpreter first");
-      const name = requestedName.trim();
-      if (name && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$/.test(name))
-        throw new Error(
-          "Environment names may use letters, numbers, dashes, and underscores",
-        );
-      const destination = name
-        ? path.join(
-            await projectPrivateDirectory([".oscode", "envs"], true),
-            name,
-          )
-        : path.join(await fs.realpath(projectRoot), ".venv");
-      if (!withinRoot(destination))
+      const name = validProjectPythonEnvironmentName(requestedName || ".venv");
+      const root = await fs.realpath(projectRoot);
+      const destination = path.join(root, name);
+      const relativeDestination = path.relative(root, destination);
+      if (
+        !relativeDestination ||
+        relativeDestination.startsWith("..") ||
+        path.isAbsolute(relativeDestination)
+      )
         throw new Error("Environment path is outside the project");
-      if (await fs.lstat(destination).catch(() => null))
-        throw new Error(
-          name
-            ? `Environment “${name}” already exists`
-            : "Project .venv already exists",
-        );
-      const base = await inspectPython(interpreter);
+      if (await fs.lstat(destination).catch(() => null)) {
+        for (const candidate of await projectEnvironmentInterpreters(root)) {
+          try {
+            const existing = await ownedProjectPythonEnvironment(
+              candidate,
+              root,
+            );
+            if ((await fs.realpath(existing.environment)) !== destination)
+              continue;
+            await rememberProjectPython(existing.inspected.path);
+            if (!event.sender.isDestroyed())
+              event.sender.send("python:environment-changed");
+            return {
+              version: `Project ${name} · ${existing.inspected.fullVersion}`,
+              path: existing.inspected.path,
+              installed: true,
+              scope: "project" as const,
+              manager: existing.manager,
+            };
+          } catch {
+            /* keep looking for a valid interpreter in the existing .venv */
+          }
+        }
+        const owner = BrowserWindow.fromWebContents(event.sender);
+        const replacement = await dialog.showMessageBox(owner || undefined, {
+          type: "warning",
+          title: `Replace incomplete ${name}?`,
+          message: `The project’s ${name} environment is incomplete.`,
+          detail:
+            "Replace it with a fresh Python environment? Files inside the incomplete environment will be removed.",
+          buttons: ["Cancel", `Replace ${name}`],
+          defaultId: 1,
+          cancelId: 0,
+        });
+        if (replacement.response !== 1)
+          throw new Error("Project environment creation was cancelled");
+        await fs.rm(destination, { recursive: true, force: true });
+      }
       try {
-        await fs.mkdir(uvCacheRoot(), { recursive: true });
-        await exec(
-          await uvExecutable(),
-          ["venv", "--python", base.path, "--seed", destination],
-          {
-            cwd: projectRoot,
-            timeout: 10 * 60_000,
-            env: uvEnvironment({ UV_PYTHON_DOWNLOADS: "never" }),
-          },
-        );
-        const python = path.join(
+        const created = await createProjectPythonEnvironment(
+          interpreter,
           destination,
-          process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
         );
-        const created = await inspectPython(python);
+        await rememberProjectPython(created.inspected.path);
+        if (!event.sender.isDestroyed())
+          event.sender.send("python:environment-changed");
         return {
-          version: name
-            ? `Project env “${name}” · ${created.fullVersion}`
-            : `Project .venv · ${created.fullVersion}`,
-          path: created.path,
+          version: `Project ${name} · ${created.inspected.fullVersion}`,
+          path: created.inspected.path,
           installed: true,
           scope: "project" as const,
-          manager: "venv" as const,
+          manager: created.manager,
         };
       } catch (error) {
         await fs.rm(destination, { recursive: true, force: true });
@@ -5721,6 +5926,40 @@ function registerIpc() {
       }
     },
   );
+  ipcMain.handle("python:delete-venv", async (event, interpreter: string) => {
+    activateSender(event);
+    if (!projectRoot) throw new Error("Open a project first");
+    if (typeof interpreter !== "string" || !interpreter)
+      throw new Error("Select a project environment to delete");
+    const root = await fs.realpath(projectRoot);
+    const owned = await ownedProjectPythonEnvironment(interpreter, root);
+    if (owned.location !== "project")
+      throw new Error(
+        "Only environments stored inside this project can be deleted",
+      );
+    const environment = await fs.realpath(owned.environment);
+    const relative = path.relative(root, environment);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+      throw new Error("The environment is outside this project");
+    await shell.trashItem(environment);
+    const selections = await readPythonSelections();
+    const savedInterpreter = selections[root] || "";
+    const comparable = (value: string) =>
+      process.platform === "win32" ? value.toLowerCase() : value;
+    if (
+      savedInterpreter &&
+      comparable(path.resolve(savedInterpreter)) ===
+        comparable(path.resolve(owned.inspected.path))
+    ) {
+      await savePythonSelections(setPythonSelection(selections, root, ""));
+    }
+    if (!event.sender.isDestroyed())
+      event.sender.send("python:environment-changed");
+    return {
+      name: relative.replace(/\\/g, "/"),
+      environment,
+    };
+  });
   ipcMain.handle(
     "python:install-package",
     async (event, interpreter: string, requestedPackage: string) => {
@@ -6212,10 +6451,14 @@ app.on("will-quit", () => {
   openMacInstallerAfterExit(installerPath);
 });
 app.on("activate", () => {
-  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-  else {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-  }
+  // macOS may dispatch activate while Electron is still completing startup.
+  // BrowserWindow construction is only legal after ready has resolved.
+  void app.whenReady().then(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    else {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
 });

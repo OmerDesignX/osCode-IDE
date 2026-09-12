@@ -46,7 +46,7 @@ test("accepts versioned local editor preferences", () => {
       telemetry: true,
     }),
     {
-      version: 18,
+      version: 19,
       theme: "blue-dark",
       locale: "ar",
       sidebarSide: "right",
@@ -170,11 +170,11 @@ test("new projects use the wider file tree and migrate the old default width", (
 });
 
 test("new chats show every control and preserve user-sized Files and Chat panels", () => {
-  assert.equal(defaultPreferences.aiPanelWidth, 560);
-  assert.equal(validPreferences({}).aiPanelWidth, 560);
+  assert.equal(defaultPreferences.aiPanelWidth, 680);
+  assert.equal(validPreferences({}).aiPanelWidth, 680);
   assert.equal(
     validPreferences({ version: 14, aiPanelWidth: 330 }).aiPanelWidth,
-    560,
+    680,
   );
   assert.equal(
     validPreferences({ version: 15, aiPanelWidth: 330 }).aiPanelWidth,
@@ -183,6 +183,18 @@ test("new chats show every control and preserve user-sized Files and Chat panels
   assert.equal(
     validPreferences({ version: 14, aiPanelWidth: 410 }).aiPanelWidth,
     410,
+  );
+  assert.equal(
+    validPreferences({ version: 18, aiPanelWidth: 560 }).aiPanelWidth,
+    680,
+  );
+  assert.equal(
+    validPreferences({ version: 19, aiPanelWidth: 560 }).aiPanelWidth,
+    560,
+  );
+  assert.equal(
+    validPreferences({ version: 19, aiPanelWidth: 1100 }).aiPanelWidth,
+    1100,
   );
   assert.equal(validPreferences({ aiVisible: true }).aiVisible, true);
   assert.equal(

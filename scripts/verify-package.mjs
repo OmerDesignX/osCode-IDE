@@ -52,6 +52,10 @@ const requireLargeFile = (file, label, minimum = 100_000) => {
 };
 const first = (predicate) => releaseFiles.find(predicate);
 const all = (predicate) => releaseFiles.filter(predicate);
+const newest = (predicate) =>
+  all(predicate).sort(
+    (left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs,
+  )[0];
 const hasMagic = (file, bytes) => {
   const header = readFileSync(file).subarray(0, bytes.length);
   return bytes.every((value, index) => header[index] === value);
@@ -118,7 +122,7 @@ if (platform === "windows") {
   );
   appRoot = path.resolve(executable, "..", "..", "..");
   artifacts = [
-    first((file) =>
+    newest((file) =>
       new RegExp(`-mac-${expectedMacArch}\\.dmg$`, "i").test(file),
     ),
   ].filter(Boolean);

@@ -34,6 +34,10 @@ const terminal = await fs.readFile(
   new URL("../src/components/TerminalPanel.tsx", import.meta.url),
   "utf8",
 );
+const terminalWorkspace = await fs.readFile(
+  new URL("../src/terminal-workspace.ts", import.meta.url),
+  "utf8",
+);
 const mediaPreview = await fs.readFile(
   new URL("../src/components/MediaPreview.tsx", import.meta.url),
   "utf8",
@@ -184,6 +188,17 @@ test("built-in autonomous coding runs use bounded local supervisor checkpoints",
   assert.match(aiMain, /maxAgentSteps = supervisorEnabled \? 72 : 24/);
   assert.match(aiMain, /tool: "supervisor_review"/);
   assert.match(aiMain, /forcedAgentPhase === "finish"[\s\S]*?complete_goal/);
+});
+
+test("icon-bearing buttons change as one control without losing glyph contrast", () => {
+  assert.match(
+    styles,
+    /Icon-bearing buttons transition as one control[\s\S]*color-mix\(in srgb, currentColor 78%, var\(--muted\)\)/,
+  );
+  assert.match(
+    styles,
+    /button\.primary:hover > svg[\s\S]*color-mix\(in srgb, var\(--onaccent\) 76%, var\(--accent\)\)/,
+  );
 });
 
 test("new-chat creation is idempotent and widget protocols stay out of search previews", () => {
@@ -511,7 +526,8 @@ test("external edits, autosave, undo, redo, and encrypted save history stay visi
     /tabsRef\.current\.some\(\(tab\) => tab\.path === change\.path\)/,
   );
   assert.doesNotMatch(app, /Autosave on/);
-  assert.match(app, /editor-command-divider/);
+  assert.match(app, /className="editor-command-tabs horizontal-menu-scroll"/);
+  assert.match(app, /aria-label="Editor command groups"/);
   assert.match(app, /Save history/);
   assert.match(app, /restoreSaveHistory/);
   assert.match(app, /trigger\("toolbar", "undo"/);
@@ -521,6 +537,36 @@ test("external edits, autosave, undo, redo, and encrypted save history stay visi
   assert.match(localEditor, /isLocalEcho/);
   assert.doesNotMatch(localEditor, /\.setValue\(/);
   assert.match(styles, /\.save-history-dialog/);
+});
+
+test("editor commands use scrollable view, editing, and contextual Python groups", () => {
+  assert.match(app, /aria-label="Editor command groups"/);
+  assert.match(app, /editorCommandTab === "view"/);
+  assert.match(app, /editorCommandTab === "editing"/);
+  assert.match(app, /\{pythonFileActive && \(/);
+  assert.match(app, /editorCommandTab === "python" && pythonFileActive/);
+  assert.match(app, /<FeatherIcon icon="layout" size="14" \/> View/);
+  assert.match(app, /aria-label="Editor zoom"/);
+  assert.match(app, /editor\.action\.formatDocument/);
+  assert.match(app, /editor\.action\.commentLine/);
+  assert.match(app, /> Debug/);
+  assert.match(app, /> Environment/);
+  assert.match(app, /> Packages/);
+  assert.match(styles, /\.editor-command-tabs[\s\S]*?overflow-x: auto/);
+  assert.match(
+    styles,
+    /\.editor-command-bar,[\s\S]*?overflow-x: auto !important/,
+  );
+  assert.match(
+    styles,
+    /\.editor-command-tabs > button[\s\S]*?border-radius: 10px 10px 0 0/,
+  );
+  assert.match(
+    styles,
+    /\.editor-command-tabs > button\[aria-selected="true"\]::after/,
+  );
+  assert.match(styles, /\.editor-command-section-divider/);
+  assert.match(styles, /\.editor-command-zoom select/);
 });
 
 test("agent paths and development commands are grounded in the open project", () => {
@@ -577,13 +623,35 @@ test("Computer Control system permissions, linked completion, and native badges 
   );
 });
 
+test("visible chat responses clear their attention state as soon as the app is focused", () => {
+  assert.match(ai, /chatId: executionChatId/);
+  assert.match(app, /\[activeAiChatId, setActiveAiChatId\]/);
+  assert.match(app, /window\.addEventListener\("focus", markVisibleChatSeen\)/);
+  assert.match(app, /document\.hasFocus\(\)/);
+  assert.match(
+    app,
+    /aiAttention\.chatId && aiAttention\.chatId !== activeAiChatId/,
+  );
+});
+
 test("AI defaults to Small, bundled context maximum, and custom 8k", () => {
   assert.match(ai, /function preferredTier[\s\S]*return "small"/);
   assert.match(ai, /osCodeGgufTier\(model\)[\s\S]*262_144/);
   assert.match(ai, /model\.preferredContext \|\| 8_192/);
   assert.match(app, /\{preferencesReady && \(/);
   assert.match(app, /hidden=\{!aiVisible\}/);
-  assert.match(app, /\[aiPanelWidth, setAiPanelWidth\] = useState\(560\)/);
+  assert.match(
+    app,
+    /AI_PANEL_COMPACT_MIN_WIDTH = 280[\s\S]*AI_PANEL_DEFAULT_WIDTH = 680[\s\S]*AI_PANEL_LARGE_MAX_WIDTH = 1_200/,
+  );
+  assert.match(
+    app,
+    /\[aiPanelWidth, setAiPanelWidth\] = useState\(AI_PANEL_DEFAULT_WIDTH\)/,
+  );
+  assert.match(
+    app,
+    /reservedWidth =[\s\S]*EDITOR_USABLE_MIN_WIDTH[\s\S]*sidebarVisible \? sidebarWidth \+ 5 : 0[\s\S]*Math\.min\(AI_PANEL_LARGE_MAX_WIDTH, window\.innerWidth - reservedWidth\)/,
+  );
   assert.match(
     app,
     /setSidebarWidth\(preferences\.sidebarWidth\);[\s\S]*setAiPanelWidth\(preferences\.aiPanelWidth\);[\s\S]*setSidebarVisible\(preferences\.sidebarVisible\);[\s\S]*setAiVisible\(preferences\.aiVisible\);/,
@@ -594,7 +662,7 @@ test("AI defaults to Small, bundled context maximum, and custom 8k", () => {
   );
   assert.match(
     main,
-    /aiPanelWidth: aiPanel\.getBoundingClientRect\(\)\.width[\s\S]*aiPanel\.getBoundingClientRect\(\)\.width >= 550[\s\S]*aiPanel\.getBoundingClientRect\(\)\.width <= 570/,
+    /aiPanelWidth: aiPanel\.getBoundingClientRect\(\)\.width[\s\S]*aiPanel\.getBoundingClientRect\(\)\.width >= 670[\s\S]*aiPanel\.getBoundingClientRect\(\)\.width <= 690/,
   );
 });
 
@@ -644,11 +712,11 @@ test("user chat identity is an icon and compact controls cannot wrap labels", ()
     styles,
     /\.ai-permission-row > \.icon-button span[\s\S]*display: none !important/,
   );
-  assert.match(app, /className="terminal-tools-row horizontal-menu-scroll"/);
+  assert.match(app, /className="terminal-shell-scroll horizontal-menu-scroll"/);
   assert.match(app, /className="terminal-session-actions"/);
   assert.match(
     styles,
-    /\.terminal-session-actions \.icon-button,[\s\S]*width: 34px/,
+    /\.terminal-session-actions > \.terminal-session-control\s*\{[\s\S]*width: 42px !important/,
   );
   assert.match(
     styles,
@@ -697,7 +765,7 @@ test("the default theme uses neutral gunmetal surfaces with baby-blue accents", 
   assert.match(app, /Gunmetal \+ blue/);
 });
 
-test("app-managed and optional project Python environments are package-ready", () => {
+test("osCode and project Python environments are package-ready", () => {
   assert.match(
     main,
     /\["venv", "--python", base\.path, "--seed", destination\]/,
@@ -716,6 +784,12 @@ test("app-managed and optional project Python environments are package-ready", (
   assert.match(main, /ensureProjectPythonEnvironment/);
   assert.match(main, /appProjectEnvironmentRoot/);
   assert.match(main, /project-environments/);
+  assert.match(main, /retireLegacyProjectPythonStorage/);
+  assert.doesNotMatch(main, /projectPrivateDirectory/);
+  assert.doesNotMatch(
+    main,
+    /relativeEnvironment\.startsWith\("\.oscode\/envs\/"\)/,
+  );
   assert.match(main, /discoverProjectPythonEnvironments/);
   assert.match(main, /condaPythonList/);
   assert.match(main, /\["conda", "mamba", "micromamba"\]/);
@@ -731,7 +805,7 @@ test("app-managed and optional project Python environments are package-ready", (
     /startProjectWatcher[\s\S]*"\.venv"[\s\S]*"__pycache__"/,
     "project environment files must not flood the live editor watcher",
   );
-  assert.match(main, /app-managed environment/);
+  assert.match(main, /app-managed environment|osCode environment/);
   assert.match(
     main,
     /\["pip", "install", "--python", inspected\.path, \.\.\.packages\]/,
@@ -741,11 +815,22 @@ test("app-managed and optional project Python environments are package-ready", (
   assert.match(app, /aria-label="Package to install"/);
   assert.match(app, /aria-label="Filter installed Python packages"/);
   assert.match(app, /outside project/);
-  assert.match(app, /Create project \.venv/);
-  assert.match(app, /Rescan project/);
-  assert.match(app, /Poetry, tox, and Conda/);
-  assert.match(app, /Use app environment/);
+  assert.match(app, /Python interpreters/);
+  assert.match(app, /App only · stored in osCode application data/);
+  assert.match(app, /Create a project environment/);
+  assert.match(app, /Environment name/);
+  assert.match(app, /Python version/);
+  assert.match(app, /Delete this environment/);
+  assert.match(app, /window\.oscode\.deleteVenv/);
+  assert.match(app, /Conda environment/);
+  assert.doesNotMatch(app, /Poetry, tox, and Conda/);
   assert.match(app, /item\.scope === "app"/);
+  assert.match(main, /validProjectPythonEnvironmentName/);
+  assert.match(main, /"python:delete-venv"/);
+  assert.match(main, /shell\.trashItem\(environment\)/);
+  assert.match(preload, /deleteVenv/);
+  assert.match(styles, /\.python-environment-manager-dialog/);
+  assert.match(styles, /\.python-environment-confirm-dialog/);
   assert.match(app, /className="uv-helpbook"/);
   assert.match(app, /Project libraries/);
   assert.match(app, /Python environment unavailable/);
@@ -754,7 +839,33 @@ test("app-managed and optional project Python environments are package-ready", (
   assert.match(app, /uvHelpEntries/);
   assert.match(app, /installPythonPackage\([\s\S]*runtime,[\s\S]*packageSpec/);
   assert.match(terminal, /\.createTerminal\(id, interpreter\)/);
-  assert.match(terminal, /\[id, interpreter\]/);
+  assert.match(terminal, /\[id, interpreter, persistenceId, projectRoot\]/);
+  assert.doesNotMatch(terminal, /terminalDispose\(id\)/);
+  assert.match(terminal, /lastPtyDimensions/);
+  assert.match(terminal, /nextDimensions !== lastPtyDimensions/);
+  assert.match(terminal, /requestFitRef\.current\?\.\(\)/);
+  assert.match(terminal, /t\.refresh\(0, t\.rows - 1\)/);
+  assert.doesNotMatch(
+    terminal,
+    /fit\.fit\(\);\s*window\.oscode\.terminalResize/,
+  );
+  assert.doesNotMatch(terminal, /dispatchEvent\(new Event\("resize"\)\)/);
+  assert.match(
+    terminal,
+    /readTerminalTranscript\(projectRoot, persistenceId\)/,
+  );
+  assert.match(terminal, /saveTerminalTranscript\(projectRoot, persistenceId/);
+  assert.match(app, /loadTerminalWorkspace\(nextProject\.root\)/);
+  assert.match(app, /saveTerminalWorkspace\(project\.root/);
+  assert.match(app, /hidden=\{terminalView !== "python"\}/);
+  assert.match(app, /view: terminalView/);
+  assert.match(terminalWorkspace, /parsed\.view === "python"/);
+  assert.match(main, /if \(terminals\.has\(id\)\)[\s\S]*restored: true/);
+  assert.match(
+    main,
+    /\["-m", "venv", destination\][\s\S]*pythonRuntimeEnvironment\(app\.getPath\("userData"\)\)/,
+  );
+  assert.match(app, /window\.oscode\.refreshProject\(\)/);
   assert.match(main, /if \(terminals\.get\(id\) !== terminal\) return/);
   assert.match(main, /No Python environment was found for this project/);
   assert.match(
@@ -797,7 +908,7 @@ test("the global toolbar and Python drawers use one balanced padded control syst
     /\.python-help > \.python-package-list\s*\{[\s\S]*flex-direction: column/,
   );
   assert.match(styles, /\.python-package-progress/);
-  assert.match(styles, /\.terminal-python-tools/);
+  assert.match(styles, /\.terminal-python-actions/);
   assert.match(app, /activityIsDownload &&/);
   assert.match(app, /global-activity-strip horizontal-menu-scroll/);
   assert.match(
@@ -882,19 +993,23 @@ test("AI chat shows a steerable queue and can expand to the full window", () => 
   );
   assert.match(
     styles,
-    /\.ai-panel\.expanded \.ai-footer-controls\s*\{[\s\S]*gap: 16px;[\s\S]*padding: 18px 0 0;/,
+    /\.ai-panel\.expanded \.ai-footer-controls\s*\{[\s\S]*padding: 18px 0 0;/,
   );
   assert.match(
     styles,
-    /\.ai-panel\.expanded \.ai-bottom-model,[\s\S]*\.ai-panel\.expanded \.ai-footer-controls \.ai-capability-drawer\s*\{[\s\S]*height: 64px;/,
+    /Full-window chat keeps the same compact footer controls as the docked[\s\S]*?flex: 0 0 var\(--ui-control-height\) !important;/,
   );
   assert.match(
     styles,
-    /\.ai-panel\.expanded \.ai-footer-controls \.ai-tier-toggle,[\s\S]*\.ai-panel\.expanded \.ai-footer-controls \.ai-capability-toggle\s*\{[\s\S]*height: 64px;[\s\S]*min-height: 64px;[\s\S]*padding-inline: 20px;/,
+    /Full-window chat keeps the same compact footer controls as the docked[\s\S]*?border-radius: 50% !important;/,
   );
   assert.match(
     styles,
-    /\.ai-panel\.expanded \.ai-footer-controls \.ai-tier-toggle b,[\s\S]*font-size: 15px;[\s\S]*\.ai-panel\.expanded \.ai-footer-controls \.ai-tier-toggle small,[\s\S]*font-size: 13px;/,
+    /\.ai-panel\.expanded[\s\S]*?> \.ai-auto-install-toggle:is\(:hover, :focus, :focus-visible\)[\s\S]*?width: var\(--ui-control-height\) !important;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-panel\.expanded[\s\S]*?:is\(\.ai-tier-toggle, \.ai-capability-toggle, \.ai-auto-install-toggle\)[\s\S]*?\.ai-footer-label,[\s\S]*?display: none !important;/,
   );
   assert.match(
     styles,
@@ -955,11 +1070,19 @@ test("all serialized osCode roles use bounded quantized long-context KV caches",
     /Four private roles share one serialized local inference pipeline/,
   );
   assert.match(aiMain, /promptCharacterBudget/);
-  assert.match(aiMain, /"--cache-type-k"[\s\S]{0,120}"q8_0"/);
-  assert.match(aiMain, /"--cache-type-v"[\s\S]{0,120}"q8_0"/);
+  assert.match(aiMain, /function kvCacheProfile/);
+  assert.match(
+    aiMain,
+    /return \{ llama: "q8_0" as const, mlxBits: 8 as const \}/,
+  );
+  assert.match(aiMain, /"--cache-type-k"[\s\S]{0,120}cacheProfile\.llama/);
+  assert.match(aiMain, /"--cache-type-v"[\s\S]{0,120}cacheProfile\.llama/);
   assert.match(aiMain, /maybe_quantize_kv_cache/);
-  assert.match(aiMain, /KV_BITS=8/);
+  assert.match(aiMain, /KV_BITS=\$\{mlxBits\}/);
   assert.match(aiMain, /quantized_kv_start/);
+  assert.match(aiMain, /--spec-type/);
+  assert.match(aiMain, /num_ctx: request\.contextLimit/);
+  assert.match(aiMain, /projectMemoryPrompt/);
 });
 
 test("accelerated llama.cpp lets memory fitting choose GPU layers", () => {
@@ -1067,11 +1190,11 @@ test("final Git, terminal, and PlatformIO controls use matching padded heights",
 test("revision 0.3 keeps Python, terminal, and agent process state synchronized", () => {
   assert.match(
     app,
-    /title=\{activeRuntimeLabel\}[\s\S]*\{activeRuntimeLabel\}/,
+    /className="terminal-python-environment-copy"[\s\S]*\{activeRuntimeLabel\}/,
   );
   assert.match(
     app,
-    /Run script[\s\S]*terminal-run-stop[\s\S]*stopPythonProcess/,
+    /terminal-mode-tab python[\s\S]*Python[\s\S]*terminal-run-stop[\s\S]*stopPythonProcess/,
   );
   assert.match(app, /onPythonEnvironmentChanged/);
   assert.match(main, /aiService\.isProjectCommandRunning\(\)/);
@@ -1086,7 +1209,7 @@ test("revision 0.3 keeps Python, terminal, and agent process state synchronized"
   );
   assert.match(
     styles,
-    /\.terminal-tabs > button,[\s\S]*min-height: 44px;[\s\S]*height: 44px/,
+    /\.terminal-mode-tabs > \.terminal-mode-tab[\s\S]*min-height: 40px;[\s\S]*height: 40px/,
   );
   assert.match(ai, /requestEpochRef[\s\S]*setStatus\("Stopped"\)/);
 });
@@ -1328,15 +1451,16 @@ test("dense command menus keep padded controls and scroll horizontally", () => {
   assert.doesNotMatch(app, /className="terminal-tabs horizontal-menu-scroll"/);
   assert.match(
     app,
-    /className="terminal-session-row horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+    /className="terminal-shell-scroll horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+  );
+  assert.match(app, /className="terminal-session-divider"/);
+  assert.match(
+    app,
+    /className="terminal-python-actions horizontal-menu-scroll"/,
   );
   assert.match(
     app,
-    /className="terminal-tools-row horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
-  );
-  assert.match(
-    app,
-    /className="editor-command-bar horizontal-menu-scroll"[\s\S]*data-horizontal-menu/,
+    /className=\{`editor-command-bar editor-command-\$\{editorCommandTab\} horizontal-menu-scroll`\}[\s\S]*data-horizontal-menu/,
   );
   assert.match(
     ai,
@@ -1352,11 +1476,30 @@ test("dense command menus keep padded controls and scroll horizontally", () => {
   );
   assert.match(
     styles,
-    /two lower rails scroll independently|long-running agent controls/,
+    /long-running agent controls and the terminal remain unambiguous/,
   );
   assert.match(
     styles,
-    /\.terminal-mode-row,[\s\S]*\.terminal-session-row,[\s\S]*\.terminal-tools-row\s*\{[\s\S]*overflow-x: auto !important;/,
+    /\.terminal-shell-scroll\s*\{[\s\S]*overflow-x: auto !important;/,
+  );
+  assert.match(
+    styles,
+    /\.terminal-python-environment-bar\s*\{[\s\S]*grid-template-columns:/,
+  );
+});
+
+test("editor file tabs use one unsnapped wheel scrolling path", () => {
+  assert.match(
+    app,
+    /className="tabs horizontal-menu-scroll"[\s\S]{0,160}data-horizontal-menu/,
+  );
+  assert.doesNotMatch(
+    app,
+    /className="tabs horizontal-menu-scroll"[\s\S]{0,300}onWheel=/,
+  );
+  assert.match(
+    styles,
+    /\.tabs\.horizontal-menu-scroll\s*\{[\s\S]*scroll-behavior: auto !important;[\s\S]*scroll-snap-type: none;/,
   );
 });
 
@@ -1463,6 +1606,13 @@ test("model selector collapses after configuration and queued windows get a bann
 
 test("model and permission controls share a comfortable footer above the chat composer", () => {
   assert.match(ai, /permissionsDrawerOpen/);
+  assert.match(ai, /const footerControlsRef = useRef<HTMLDivElement>\(null\)/);
+  assert.match(ai, /data-side=\{side\}/);
+  assert.match(ai, /ref=\{footerControlsRef\}/);
+  assert.match(
+    ai,
+    /if \(!tierPickerOpen && !permissionsDrawerOpen\) return;[\s\S]*?footerControlsRef\.current\?\.contains\(target\)[\s\S]*?document\.addEventListener\("pointerdown", closeFooterPopovers, true\)/,
+  );
   assert.match(ai, /className="ai-footer-controls"/);
   assert.match(ai, /className="ai-bottom-model"/);
   assert.match(ai, /<FeatherIcon icon="cpu" size="18" \/>/);
@@ -1483,6 +1633,18 @@ test("model and permission controls share a comfortable footer above the chat co
     /fileAccess: true,[\s\S]*editMode: "auto",[\s\S]*webAccess: true,[\s\S]*browserAccess: true,[\s\S]*terminalMode: "auto",[\s\S]*computerAccess: false/,
   );
   assert.match(ai, /Computer Control[\s\S]*is not enabled by Auto/);
+  assert.match(
+    styles,
+    /\.ai-auto-install-toggle > svg\[data-icon="robot"\]\s*\{[\s\S]*stroke-width: 1\.6;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-auto-install-toggle:not\(\.enabled\):is\(:hover, :focus-visible\)\s*\{[\s\S]*opacity: 1;[\s\S]*background: var\(--control-hover-fill-strong\) !important;[\s\S]*color: var\(--accent\) !important;/,
+  );
+  assert.match(
+    styles,
+    /\.ai-auto-install-toggle\.enabled:is\(:hover, :focus-visible\)\s*\{[\s\S]*var\(--control-selected-fill\) 84%[\s\S]*var\(--accent\) 16%/,
+  );
   assert.match(
     ai,
     /const \[permissionsDrawerOpen, setPermissionsDrawerOpen\] = useState\(false\)/,
@@ -1630,10 +1792,12 @@ test("panel cohesion keeps Python, chats, permissions, and the top rail responsi
   );
 
   assert.doesNotMatch(app, /env-manager-addon/);
-  assert.match(app, /project-environment-settings/);
+  assert.doesNotMatch(app, /project-environment-settings/);
+  assert.match(app, /terminal-python-environment-bar/);
   assert.match(app, /advanced-action-grid/);
   assert.match(app, /Use installed Python/);
-  assert.match(app, /Create project \.venv/);
+  assert.match(app, /Create environment/);
+  assert.match(app, /Project environments/);
   assert.match(
     cohesion,
     /\.advanced-subsection\s*\{[\s\S]*padding: 16px;[\s\S]*border-radius: 18px;/,
@@ -1849,7 +2013,7 @@ test("responsive workspace controls reflow instead of clipping", () => {
   );
   assert.match(
     main,
-    /const projectTreeIgnored = new Set\(\["\.git", "node_modules", "__pycache__"\]\)/,
+    /const projectTreeIgnored = new Set\(\[[\s\S]*?"\.git"[\s\S]*?"\.oscode"[\s\S]*?"node_modules"[\s\S]*?"__pycache__"[\s\S]*?\]\)/,
   );
   assert.match(
     main,
@@ -1882,33 +2046,57 @@ test("terminal sessions and auxiliary panels keep the revised workspace hierarch
     app,
     /className="editor-run-action"[\s\S]*onClick=\{\(\) => void run\(\)\}/,
   );
-  assert.match(app, /className="terminal-view-tabs"/);
   assert.match(
     app,
-    /className="terminal-session-row horizontal-menu-scroll"[\s\S]*className="shell-tab-strip"[\s\S]*role="tablist"/,
+    /className="terminal-primary-toolbar"[\s\S]*className="terminal-mode-tabs"[\s\S]*Python[\s\S]*label="Close terminal panel"[\s\S]*className="terminal-python-environment-bar"[\s\S]*Packages[\s\S]*UV help/,
   );
   assert.match(
     app,
-    /className="terminal-session-row horizontal-menu-scroll"[\s\S]*className="terminal-tools-row horizontal-menu-scroll"/,
+    /className="terminal-session-toolbar"[\s\S]*className="terminal-shell-scroll horizontal-menu-scroll"[\s\S]*className="shell-tab-strip"[\s\S]*role="tablist"/,
   );
-  assert.doesNotMatch(app, /Close terminal panel/);
+  assert.match(
+    app,
+    /className="terminal-session-divider"[\s\S]*className="terminal-session-actions"[\s\S]*className="terminal-python-environment-bar"/,
+  );
+  assert.match(app, /hidden=\{terminalOpen\}/);
   assert.match(app, /className="terminal-height-resizer"/);
   assert.match(app, /style=\{\{ height: terminalHeight \}\}/);
   assert.match(styles, /1\.0 workspace refinement/);
   assert.match(styles, /\.env-badge\s*\{[\s\S]*font-size: 12px !important/);
   assert.match(
     styles,
-    /\.terminal-session-row,[\s\S]*overflow-x: auto !important/,
+    /\.terminal-shell-scroll\s*\{[\s\S]*overflow-x: auto !important/,
   );
-  assert.match(styles, /\.terminal-python-tools,[\s\S]*margin: 0;/);
+  assert.match(
+    styles,
+    /\.terminal-python-environment-bar\s*\{[\s\S]*grid-template-columns:/,
+  );
+  assert.match(
+    styles,
+    /terminal chrome refinement:[\s\S]*\.terminal-mode-tabs\s*\{[\s\S]*border: 0;[\s\S]*\.terminal-session-toolbar,[\s\S]*\.terminal-python-actions\s*\{[\s\S]*border: 0;/,
+  );
+  assert.match(
+    styles,
+    /Compact terminal spacing:[\s\S]*\.terminal-toggle\s*\{[\s\S]*height: 40px;[\s\S]*\.terminal-panel\s*\{[\s\S]*min-height: 280px;[\s\S]*margin-bottom: 12px;/,
+  );
+  assert.match(
+    styles,
+    /Compact terminal spacing:[\s\S]*\.shell-tab-strip > div\s*\{[\s\S]*position: relative;[\s\S]*display: grid;[\s\S]*\.shell-tab-strip > div > button:first-child\s*\{[\s\S]*padding-inline: 40px;[\s\S]*\.shell-tab-strip > div > button:last-child\s*\{[\s\S]*position: absolute;/,
+  );
+  assert.match(
+    styles,
+    /Compact terminal spacing:[\s\S]*\.terminal-host\s*\{[\s\S]*padding: 16px 20px 76px;[\s\S]*scroll-padding-bottom: 76px;/,
+  );
+  assert.match(app, /\[terminalHeight, setTerminalHeight\] = useState\(320\)/);
+  assert.match(app, /aria-valuemin=\{280\}[\s\S]*aria-valuemax=\{700\}/);
   assert.match(
     styles,
     /\.terminal-height-resizer[\s\S]*z-index: 3[\s\S]*cursor: ns-resize|cursor: ns-resize[\s\S]*z-index: 3/,
   );
-  assert.match(main, /terminalDualScrollReady/);
+  assert.match(main, /terminalRailLayoutReady/);
   assert.match(
     main,
-    /terminalTabScrollReady[\s\S]*terminalActionScrollReady[\s\S]*terminalTabRect\.bottom <= terminalActionRect\.top \+ 3/,
+    /terminalTabScrollReady[\s\S]*terminalActionRect\.left >= terminalTabRect\.right - 1[\s\S]*terminalPythonLayoutReady/,
   );
   assert.match(ai, /className="ai-expand-toggle"/);
   assert.match(
@@ -1943,5 +2131,43 @@ test("notifications keep readable copy separate from wrapping actions", () => {
   assert.match(
     notificationStyles,
     /\.notification-choice\.update-actions\s*\{[\s\S]*flex-wrap: wrap;/,
+  );
+});
+
+test("startup, media, and dense controls keep their cross-platform safeguards", () => {
+  assert.match(
+    main,
+    /app\.on\("activate", \(\) => \{[\s\S]*?app\.whenReady\(\)\.then\(\(\) => \{[\s\S]*?createWindow\(\)/,
+  );
+  assert.match(
+    main,
+    /params\.mediaType === "image"[\s\S]*?label: "Copy Image"[\s\S]*?label: "Save Image As\\u2026"/,
+  );
+  const finalPolish = styles.slice(
+    styles.lastIndexOf("/* Cross-platform fit-and-finish overrides"),
+  );
+  assert.match(
+    finalPolish,
+    /\.python-environment-manager-actions\.horizontal-menu-scroll[\s\S]*?overflow-x: auto !important/,
+  );
+  assert.match(
+    finalPolish,
+    /\.shell-tab-strip > div\s*\{[\s\S]*?width: 126px;[\s\S]*?\.terminal-host \.xterm\s*\{[\s\S]*?height: calc\(100% - 22px\)/,
+  );
+  assert.match(
+    finalPolish,
+    /\.terminal-primary-toolbar > \.terminal-panel-close,[\s\S]*?\.terminal-session-actions > \.terminal-session-control\s*\{[\s\S]*?inline-size: 38px !important;[\s\S]*?block-size: 38px !important;[\s\S]*?aspect-ratio: 1 \/ 1;[\s\S]*?border-radius: 50% !important;/,
+  );
+  assert.match(
+    finalPolish,
+    /\.git-body \.git-empty-card \.git-primary-action[\s\S]*?border-radius: var\(--radius-pill\) !important/,
+  );
+  assert.match(
+    finalPolish,
+    /\.ai-panel:not\(\.expanded\)\[data-side="right"\][\s\S]*?:is\(\.ai-tier-picker, \.ai-capability-bar\)[\s\S]*?right: 0 !important;[\s\S]*?left: auto !important/,
+  );
+  assert.match(
+    finalPolish,
+    /\.ai-panel:not\(\.expanded\)\[data-side="left"\][\s\S]*?:is\(\.ai-tier-picker, \.ai-capability-bar\)[\s\S]*?right: auto !important;[\s\S]*?left: 0 !important/,
   );
 });

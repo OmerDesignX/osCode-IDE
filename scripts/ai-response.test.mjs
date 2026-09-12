@@ -30,7 +30,7 @@ import {
   workRequestForAgent,
 } from "../dist-electron/main/ai.js";
 
-test("osCode supervisor is limited to fully autonomous built-in model runs", () => {
+test("osCode advisory agents stay active for built-in models without broad permissions", () => {
   const autonomous = {
     builtInModel: true,
     implementationRequest: true,
@@ -46,11 +46,20 @@ test("osCode supervisor is limited to fully autonomous built-in model runs", () 
   );
   assert.equal(
     shouldUseOsCodeSupervisor({ ...autonomous, autoInstall: false }),
-    false,
+    true,
   );
   assert.equal(
     shouldUseOsCodeSupervisor({ ...autonomous, terminalMode: "ask" }),
-    false,
+    true,
+  );
+  assert.equal(
+    shouldUseOsCodeSupervisor({
+      ...autonomous,
+      implementationRequest: false,
+      fileAccess: false,
+      editMode: "read-only",
+    }),
+    true,
   );
 });
 

@@ -1813,7 +1813,7 @@ kbd {
 .ai-panel {
   flex: none;
   min-width: 280px;
-  max-width: 560px;
+  max-width: min(1200px, calc(100vw - 280px));
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -4524,6 +4524,617 @@ textarea,
     justify-content: center;
     font-size: 0 !important;
   }
+}
+
+/* Auto is neutral while off, previews the interaction on hover, and only
+   retains the selected blue surface after it has actually been enabled. The
+   custom robot has more internal detail than a Feather glyph, so a lighter
+   stroke keeps its visual weight aligned with the neighbouring controls. */
+.ai-auto-install-toggle > svg[data-icon="robot"] {
+  stroke-width: 1.6;
+  shape-rendering: geometricPrecision;
+}
+
+.ai-auto-install-toggle:not(.enabled) {
+  opacity: 0.72;
+  background: color-mix(
+    in srgb,
+    var(--control-hover-fill) 82%,
+    var(--bg)
+  ) !important;
+  color: var(--muted) !important;
+}
+
+.ai-auto-install-toggle:not(.enabled) > svg {
+  color: var(--muted) !important;
+}
+
+.ai-auto-install-toggle:not(.enabled):is(:hover, :focus-visible) {
+  opacity: 1;
+  background: var(--control-hover-fill-strong) !important;
+  color: var(--accent) !important;
+}
+
+.ai-auto-install-toggle:not(.enabled):is(:hover, :focus-visible) > svg,
+.ai-auto-install-toggle:not(.enabled):is(:hover, :focus-visible)
+  .ai-footer-label
+  > :where(b, small) {
+  color: var(--accent) !important;
+}
+
+.ai-auto-install-toggle.enabled {
+  opacity: 1;
+  background: var(--control-selected-fill) !important;
+  color: var(--accent) !important;
+}
+
+.ai-auto-install-toggle.enabled:is(:hover, :focus-visible) {
+  background: color-mix(
+    in srgb,
+    var(--control-selected-fill) 84%,
+    var(--accent) 16%
+  ) !important;
+}
+
+.ai-auto-install-toggle.enabled > svg,
+.ai-auto-install-toggle.enabled .ai-footer-label > :where(b, small) {
+  color: var(--accent) !important;
+}
+
+/* Python interpreter manager -------------------------------------------------
+   This is the single place for selecting, creating, refreshing, and removing
+   interpreters. It follows the same quiet cards, pill controls, and blue-fill
+   interaction language as the rest of osCode. */
+.python-environment-manager-scrim {
+  z-index: 118;
+  padding: 16px;
+}
+
+.python-environment-manager-dialog {
+  position: relative;
+  width: min(820px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--overlay-surface);
+  box-shadow: 0 28px 90px color-mix(in srgb, #000 46%, transparent);
+}
+
+.python-environment-manager-head {
+  min-height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--overlay-surface);
+}
+
+.python-environment-manager-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  color: var(--accent);
+}
+
+.python-environment-manager-title > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.python-environment-manager-title h2,
+.python-environment-manager-title small {
+  margin: 0;
+}
+
+.python-environment-manager-title h2 {
+  color: var(--text);
+  font-family: "Playfair Display", serif;
+  font-size: 24px;
+  line-height: 1.12;
+}
+
+.python-environment-manager-title small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.python-environment-manager-head > .icon-button,
+.python-environment-create-card header > .icon-button,
+.python-environment-confirm-dialog header > .icon-button {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--control-hover-fill);
+}
+
+.python-environment-manager-head > .icon-button span,
+.python-environment-create-card header > .icon-button span,
+.python-environment-confirm-dialog header > .icon-button span {
+  display: none;
+}
+
+.python-environment-manager-body {
+  min-height: 0;
+  display: grid;
+  gap: 16px;
+  padding: 20px 22px 28px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 20px 28px;
+}
+
+.python-environment-active-select {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(170px, 0.72fr) minmax(260px, 1.28fr);
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: 17px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.python-environment-active-select > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.python-environment-active-select b,
+.python-environment-active-select small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.python-environment-active-select b {
+  font-size: 14px;
+}
+
+.python-environment-active-select small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.python-environment-active-select select,
+.python-environment-create-fields select {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 46px 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  outline: 0;
+  background-color: var(--control-hover-fill);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.python-environment-manager-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 1px;
+  scrollbar-width: thin;
+}
+
+.python-environment-manager-actions > button {
+  min-width: max-content;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+  color: var(--muted);
+}
+
+.python-environment-manager-actions > .icon-button {
+  width: 42px;
+  min-width: 42px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.python-environment-manager-actions > .icon-button span {
+  display: none;
+}
+
+.python-environment-create-card,
+.python-environment-group {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+}
+
+.python-environment-create-card {
+  display: grid;
+  gap: 16px;
+  padding: 17px;
+}
+
+.python-environment-create-card > header,
+.python-environment-group > header,
+.python-environment-confirm-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.python-environment-create-card header > span,
+.python-environment-group header > span,
+.python-environment-confirm-dialog header > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.python-environment-create-card b,
+.python-environment-group header b {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.python-environment-create-card small,
+.python-environment-group header small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.python-environment-create-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.python-environment-create-fields label {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.python-environment-create-fields label > span {
+  padding-inline: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.python-environment-create-fields input {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  outline: 0;
+  background: var(--control-hover-fill);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.python-environment-create-card > footer,
+.python-environment-confirm-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.python-environment-create-card > footer button,
+.python-environment-confirm-dialog > footer button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 17px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+  color: var(--text);
+}
+
+.python-environment-create-card > footer button.primary {
+  background: var(--accent);
+  color: var(--onaccent);
+}
+
+.python-environment-group > header {
+  min-height: 72px;
+  padding: 15px 17px;
+  border-bottom: 1px solid var(--line);
+}
+
+.python-environment-list {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.python-environment-list article {
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 7px;
+  border-radius: 15px;
+  background: var(--control-hover-fill);
+  overflow: hidden;
+}
+
+.python-environment-list article.selected {
+  background: var(--control-selected-fill);
+}
+
+.python-environment-list article > button:first-child {
+  min-width: 0;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 11px;
+  flex: 1 1 auto;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: 15px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.python-environment-list article > button:first-child > svg {
+  color: var(--accent);
+}
+
+.python-environment-list
+  article
+  > button:first-child
+  > span:not(.python-environment-status) {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.python-environment-list article > button:first-child b,
+.python-environment-list article > button:first-child small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.python-environment-list article > button:first-child b {
+  font-size: 13px;
+}
+
+.python-environment-list article > button:first-child small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.python-environment-status {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.python-environment-list article > .icon-button {
+  width: 42px;
+  min-width: 42px;
+  align-self: center;
+  justify-content: center;
+  margin-inline-end: 8px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.python-environment-list article > .icon-button span {
+  display: none;
+}
+
+.python-environment-list article > .icon-button:hover:not(:disabled) {
+  background: var(
+    --danger-surface,
+    color-mix(in srgb, #ef7777 14%, transparent)
+  );
+  color: var(--danger, #ef7777);
+}
+
+.python-environment-empty {
+  margin: 0;
+  padding: 18px 17px 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.python-environment-confirm-scrim {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border-radius: inherit;
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(3px);
+}
+
+.python-environment-confirm-dialog {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 19px;
+  background: var(--overlay-surface);
+  box-shadow: 0 24px 70px color-mix(in srgb, #000 48%, transparent);
+}
+
+.python-environment-confirm-dialog h3,
+.python-environment-confirm-dialog p {
+  margin: 0;
+}
+
+.python-environment-confirm-dialog header small {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+}
+
+.python-environment-confirm-dialog h3 {
+  font-family: "Playfair Display", serif;
+  font-size: 22px;
+}
+
+.python-environment-confirm-dialog p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.python-environment-confirm-dialog p b {
+  color: var(--text);
+}
+
+.python-environment-confirm-dialog > footer button.danger {
+  background: var(
+    --danger-surface,
+    color-mix(in srgb, #ef7777 16%, var(--panel))
+  );
+  color: var(--danger, #ef7777);
+}
+
+.terminal-python-environment-actions > .python-open-environment-manager {
+  min-width: max-content;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 17px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .python-environment-manager-scrim {
+    padding: 8px;
+  }
+
+  .python-environment-manager-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    border-radius: 18px;
+  }
+
+  .python-environment-manager-head {
+    min-height: 78px;
+    padding: 14px;
+  }
+
+  .python-environment-manager-title h2 {
+    font-size: 21px;
+  }
+
+  .python-environment-manager-title small {
+    white-space: normal;
+  }
+
+  .python-environment-manager-body {
+    gap: 13px;
+    padding: 14px 14px 22px;
+  }
+
+  .python-environment-active-select,
+  .python-environment-create-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .python-environment-active-select {
+    gap: 11px;
+    padding: 14px;
+  }
+
+  .python-environment-list article > button:first-child {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .python-environment-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .terminal-python-environment-actions > .python-open-environment-manager {
+    width: auto;
+  }
+}
+
+/* Icon-bearing buttons transition as one control. Labels inherit the button
+   state, while glyphs keep a nearby but distinct shade so they never vanish
+   into either the selected blue fill or the surrounding text. */
+.app button:not(:disabled) {
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease;
+}
+
+.app button:not(:disabled) > svg {
+  color: color-mix(in srgb, currentColor 78%, var(--muted));
+  transition: color 150ms ease;
+}
+
+.app
+  button:not(:disabled):not(.primary):not(.danger):not(.danger-text):is(
+    :hover,
+    :focus-visible,
+    .active,
+    [aria-expanded="true"]
+  )
+  > svg {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
+.app button.primary,
+.app button.primary:hover,
+.app button.primary:focus-visible {
+  color: var(--onaccent);
+}
+
+.app button.primary > svg,
+.app button.primary:hover > svg,
+.app button.primary:focus-visible > svg {
+  color: color-mix(in srgb, var(--onaccent) 76%, var(--accent));
 }
 
 /* Shared icon geometry, a distinct chat canvas, and restrained scrollbars. */
@@ -9660,7 +10271,8 @@ textarea,
   position: absolute;
   z-index: 9;
   inset: 10px 10px 10px auto;
-  width: min(440px, calc(100% - 20px));
+  width: clamp(280px, calc(100% - 20px), 440px);
+  max-width: calc(100vw - 20px);
   max-height: none;
   box-sizing: border-box;
   padding: 14px;
@@ -10170,6 +10782,10 @@ textarea,
 .tabs.horizontal-menu-scroll {
   min-height: 43px;
   height: 43px;
+  /* File tabs use free, immediate scrolling. Snapping each wheel/trackpad
+     update back to a pill makes a busy tab strip feel locked. */
+  scroll-behavior: auto !important;
+  scroll-snap-type: none;
 }
 
 .markdown-toolbar.horizontal-menu-scroll {
@@ -14361,6 +14977,15 @@ button > svg * {
   max-height: min(700px, calc(100vh - 250px));
 }
 
+/* Keep terminal processes mounted while their views are hidden. Explicitly
+   honour the hidden state so later flex declarations cannot expose an
+   inactive shell or Run output surface. */
+.terminal-panel[hidden],
+.terminal-host[hidden],
+.run-console[hidden] {
+  display: none !important;
+}
+
 .terminal-height-resizer {
   position: absolute;
   z-index: 30;
@@ -14593,7 +15218,7 @@ button > svg * {
   width: min(583px, calc(100vw - 32px));
 }
 
-/* 1.3.0: long-running agent controls and the terminal remain unambiguous at
+/* 1.3.1: long-running agent controls and the terminal remain unambiguous at
    every saved panel width. Off means neutral grey; enabled means blue. */
 .ai-auto-install-toggle:not(.enabled),
 .ai-auto-install-toggle:not(.enabled):hover,
@@ -14623,6 +15248,56 @@ button > svg * {
   color: var(--accent) !important;
 }
 
+/* Full-window footer parity: Auto follows the exact same 64px resting control,
+   320px revealed control, padding, and type scale as Model and Permissions. */
+.ai-panel.expanded .ai-auto-install-toggle {
+  height: 64px;
+  min-height: 64px;
+}
+
+.ai-panel.expanded .ai-auto-install-toggle .ai-footer-label {
+  gap: 3px;
+}
+
+.ai-panel.expanded .ai-auto-install-toggle .ai-footer-label b {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.ai-panel.expanded .ai-auto-install-toggle .ai-footer-label small {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 521px) {
+  .ai-panel.expanded .ai-auto-install-toggle {
+    flex: 0 0 64px;
+    width: 64px;
+    min-width: 64px;
+    max-width: 64px;
+  }
+
+  .ai-panel.expanded
+    .ai-auto-install-toggle:is(:hover, :focus, :focus-visible) {
+    flex-basis: 320px;
+    width: 320px;
+    min-width: 320px;
+    max-width: 320px;
+    gap: 9px;
+    padding-inline: 20px;
+  }
+
+  .ai-panel.expanded
+    .ai-auto-install-toggle:is(:hover, :focus, :focus-visible)
+    .ai-footer-label {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
 body.terminal-resizing {
   cursor: ns-resize !important;
   user-select: none !important;
@@ -14648,60 +15323,71 @@ body.terminal-resizing {
   min-width: 0;
   flex: 0 0 auto;
   display: grid;
-  grid-auto-rows: minmax(48px, auto);
+  grid-auto-rows: minmax(56px, auto);
   overflow: hidden;
   border-bottom: 1px solid var(--line);
   background: var(--terminal-surface);
 }
 
-.terminal-mode-row,
-.terminal-session-row,
-.terminal-tools-row {
+.terminal-session-toolbar {
   min-width: 0;
-  min-height: 48px;
+  min-height: 58px;
   display: flex;
-  flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
+  overflow: hidden;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.terminal-shell-scroll {
+  min-width: 0;
+  min-height: 58px;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px 7px 12px;
   overflow-x: auto !important;
   overflow-y: hidden !important;
   overscroll-behavior-inline: contain;
   scroll-padding-inline: 12px;
+  touch-action: pan-x;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--terminal-muted) 36%, transparent)
     transparent;
 }
 
-.terminal-mode-row,
-.terminal-session-row {
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+.terminal-session-divider {
+  width: 1px;
+  height: 32px;
+  flex: 0 0 1px;
+  background: color-mix(in srgb, var(--line) 84%, transparent);
 }
 
-.terminal-mode-row::-webkit-scrollbar,
-.terminal-session-row::-webkit-scrollbar,
-.terminal-tools-row::-webkit-scrollbar {
+.terminal-session-actions {
+  min-width: max-content;
+  min-height: 58px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 7px 12px 7px 10px;
+  background: var(--terminal-surface);
+}
+
+.terminal-shell-scroll::-webkit-scrollbar {
   height: 4px;
 }
 
-.terminal-mode-row::-webkit-scrollbar-thumb,
-.terminal-session-row::-webkit-scrollbar-thumb,
-.terminal-tools-row::-webkit-scrollbar-thumb {
+.terminal-shell-scroll::-webkit-scrollbar-thumb {
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--terminal-muted) 36%, transparent);
 }
 
-.terminal-mode-row > *,
-.terminal-session-row > *,
-.terminal-tools-row > * {
+.terminal-shell-scroll > * {
   min-width: max-content;
   flex: 0 0 auto;
 }
 
-.terminal-view-tabs,
-.terminal-run-actions,
-.terminal-session-actions,
-.terminal-python-tools,
 .shell-tab-strip {
   display: flex;
   flex-wrap: nowrap;
@@ -14735,7 +15421,8 @@ body.terminal-resizing {
 }
 
 .shell-tab-strip > div {
-  min-height: 38px;
+  min-height: 42px;
+  height: 42px;
   display: flex;
   align-items: stretch;
   border-radius: var(--radius-pill);
@@ -14744,14 +15431,82 @@ body.terminal-resizing {
 }
 
 .shell-tab-strip > div > button {
+  min-height: 42px;
+  height: 42px;
   border-radius: 0;
   background: transparent;
 }
 
+.shell-tab-strip > div > button:first-child {
+  min-width: 88px;
+  max-width: 180px;
+  padding: 0 10px 0 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .shell-tab-strip > div > button:last-child {
-  width: 38px;
-  min-width: 38px;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  min-height: 42px;
   padding: 0;
+}
+
+.terminal-session-actions > .terminal-session-control {
+  width: 42px !important;
+  min-width: 42px !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  background: var(--control-hover-fill);
+}
+
+.terminal-session-actions > .terminal-session-control span {
+  display: none !important;
+}
+
+.terminal-python-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(132px, 100%), 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: var(--terminal-surface);
+}
+
+.terminal-python-grid > button {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  height: auto;
+  padding: 8px 12px;
+  line-height: 1.2;
+}
+
+@media (max-width: 560px) {
+  .terminal-shell-scroll {
+    padding-inline: 8px;
+  }
+
+  .terminal-session-actions {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .terminal-session-actions > .terminal-session-control {
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+  }
+
+  .terminal-python-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 8px;
+  }
 }
 
 .terminal-workspace,
@@ -14773,4 +15528,850 @@ body.terminal-resizing {
 .run-console {
   padding-bottom: 30px;
   scroll-padding-bottom: 30px;
+}
+
+/* 1.3.4: Terminal is two durable workspaces. Shell sessions stay mounted while
+   Python owns interpreter selection, environments, packages, and run output. */
+.terminal-toggle {
+  width: calc(100% - 24px);
+  min-height: 48px;
+  height: 48px;
+  margin: 8px 12px 0;
+  padding: 0 18px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--panel2) 90%, var(--bg));
+  color: var(--text);
+}
+
+.terminal-toggle[hidden] {
+  display: none !important;
+}
+
+.terminal-toggle:hover,
+.terminal-toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  outline: 0;
+  background: var(--control-hover-fill);
+  color: var(--accent);
+}
+
+.terminal-panel {
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 0;
+  background: var(--terminal-bg);
+}
+
+.terminal-controls {
+  min-width: 0;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: visible;
+  border-bottom: 1px solid var(--line);
+  background: var(--terminal-surface);
+}
+
+/* 1.3.4 terminal chrome refinement: the open panel uses one quiet top bar.
+   The view tabs and close action stay together without outlined wrapper rails. */
+.terminal-primary-toolbar {
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: var(--terminal-surface);
+}
+
+.terminal-mode-tabs {
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.terminal-mode-tabs > .terminal-mode-tab {
+  min-width: 104px;
+  min-height: 40px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+}
+
+.terminal-mode-tabs > .terminal-mode-tab.shell.active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--terminal-bg));
+  color: var(--accent);
+}
+
+.terminal-mode-tabs > .terminal-mode-tab.python.active {
+  background: color-mix(in srgb, #a98be8 22%, var(--terminal-bg));
+  color: color-mix(in srgb, #c8b3ff 82%, var(--text));
+}
+
+.terminal-primary-toolbar > .terminal-panel-close {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  flex: 0 0 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--control-hover-fill);
+  color: var(--accent);
+}
+
+.terminal-primary-toolbar > .terminal-panel-close span {
+  display: none;
+}
+
+.terminal-session-toolbar,
+.terminal-python-environment-bar,
+.terminal-python-actions {
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.terminal-session-toolbar {
+  min-height: 58px;
+  border-bottom: 0;
+}
+
+.terminal-shell-scroll,
+.terminal-session-actions {
+  min-height: 58px;
+}
+
+.terminal-python-environment-bar {
+  min-width: 0;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: minmax(170px, 0.7fr) minmax(240px, 1.3fr) max-content;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 6px;
+}
+
+.terminal-python-environment-copy {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent);
+}
+
+.terminal-python-environment-copy > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.terminal-python-environment-copy b,
+.terminal-python-environment-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-python-environment-copy b {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.terminal-python-environment-copy small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.terminal-python-environment-bar > .runtime-select {
+  width: 100%;
+  min-width: 0;
+  height: 46px;
+  padding-inline: 17px 42px;
+}
+
+.terminal-python-environment-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.terminal-python-environment-actions > button {
+  min-height: 44px;
+}
+
+.terminal-python-environment-actions > .icon-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.terminal-python-environment-actions > .icon-button span {
+  display: none;
+}
+
+.terminal-python-actions {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.terminal-python-actions > button {
+  min-width: max-content;
+  min-height: 42px;
+  flex: 0 0 auto;
+  padding-inline: 16px;
+}
+
+.terminal-action-divider {
+  width: 1px;
+  height: 30px;
+  flex: 0 0 1px;
+  margin-inline: 2px;
+  background: var(--line);
+}
+
+.terminal-workspace,
+.terminal-main {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.terminal-main {
+  padding: 0;
+}
+
+.terminal-host {
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 18px 20px 52px;
+  overflow: hidden;
+}
+
+.terminal-host .xterm {
+  height: 100%;
+}
+
+.terminal-host .xterm-viewport {
+  overflow-y: scroll !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.run-console {
+  box-sizing: border-box;
+  padding: 20px 22px 58px;
+  overflow: auto;
+  scroll-padding-block: 20px 58px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.run-input {
+  min-height: 46px;
+  height: auto;
+  padding: 7px 10px 8px 16px;
+}
+
+@media (max-width: 920px) {
+  .terminal-python-environment-bar {
+    grid-template-columns: minmax(150px, 0.7fr) minmax(210px, 1.3fr);
+  }
+
+  .terminal-python-environment-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 620px) {
+  .terminal-toggle {
+    width: calc(100% - 16px);
+    margin-inline: 8px;
+  }
+
+  .terminal-controls {
+    padding-inline: 0;
+  }
+
+  .terminal-mode-tabs {
+    width: auto;
+    flex: 1 1 auto;
+  }
+
+  .terminal-mode-tabs > .terminal-mode-tab {
+    min-width: 0;
+    flex: 0 1 112px;
+  }
+
+  .terminal-python-environment-bar {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 10px 8px 6px;
+  }
+
+  .terminal-python-environment-actions {
+    grid-column: auto;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .terminal-primary-toolbar {
+    gap: 8px;
+    padding-inline: 8px;
+  }
+
+  .terminal-python-actions {
+    padding-inline: 8px;
+  }
+
+  .terminal-host {
+    padding: 16px 14px 48px;
+  }
+}
+
+/* Compact terminal spacing: the label is centred against the full session
+   tab, while its close target floats at the trailing edge. The terminal keeps
+   a quiet gutter below the final prompt and clear space above the window edge. */
+.terminal-toggle {
+  min-height: 40px;
+  height: 40px;
+  margin: 7px 12px 11px;
+  padding-inline: 15px;
+}
+
+.terminal-panel {
+  min-height: 280px;
+  margin-bottom: 12px;
+}
+
+.terminal-primary-toolbar {
+  min-height: 46px;
+  padding-block: 5px;
+}
+
+.terminal-mode-tabs {
+  min-height: 36px;
+}
+
+.terminal-mode-tabs > .terminal-mode-tab {
+  min-height: 36px;
+  height: 36px;
+}
+
+.terminal-primary-toolbar > .terminal-panel-close {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  flex-basis: 36px;
+}
+
+.terminal-session-toolbar,
+.terminal-shell-scroll,
+.terminal-session-actions {
+  min-height: 50px;
+}
+
+.shell-tab-strip > div {
+  position: relative;
+  min-width: 156px;
+  min-height: 40px;
+  height: 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  overflow: hidden;
+}
+
+.shell-tab-strip > div > button:first-child {
+  width: 100%;
+  min-width: 156px;
+  max-width: 210px;
+  min-height: 40px;
+  height: 40px;
+  grid-column: 1;
+  grid-row: 1;
+  padding-inline: 40px;
+  justify-content: center;
+  text-align: center;
+}
+
+.shell-tab-strip > div > button:last-child {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 4px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  transform: translateY(-50%);
+}
+
+.terminal-session-actions > .terminal-session-control {
+  width: 38px !important;
+  min-width: 38px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+}
+
+.terminal-main {
+  padding-bottom: 18px;
+}
+
+.terminal-host {
+  padding: 16px 20px 76px;
+  scroll-padding-bottom: 76px;
+}
+
+.terminal-host .xterm-viewport {
+  scroll-padding-bottom: 76px;
+}
+
+@media (max-width: 620px) {
+  .terminal-toggle {
+    margin: 7px 8px 10px;
+  }
+
+  .terminal-panel {
+    margin-bottom: 10px;
+  }
+
+  .terminal-host {
+    padding: 14px 14px 68px;
+    scroll-padding-bottom: 68px;
+  }
+}
+
+/* Keep the editor's growing command set compact without hiding actions. The
+   first row is a conventional tab strip; the divided second row owns
+   independent horizontal scrolling so narrow panes retain every command. */
+.editor-command-stack {
+  min-width: 0;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-rows: auto auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.editor-command-tabs,
+.editor-command-tabs.horizontal-menu-scroll {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: end;
+  gap: 2px;
+  padding: 7px 12px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-padding-inline: 12px;
+  scrollbar-width: thin;
+  background: color-mix(in srgb, var(--control-hover-fill) 42%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+
+.editor-command-tabs > button {
+  min-width: max-content;
+  min-height: 37px;
+  height: 37px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  position: relative;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.editor-command-tabs > button:hover {
+  background: var(--control-hover-fill);
+  color: var(--text);
+}
+
+.editor-command-tabs > button.active,
+.editor-command-tabs > button[aria-selected="true"] {
+  background: var(--panel);
+  color: var(--accent);
+}
+
+.editor-command-tabs > button[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 12px -1px;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--accent);
+}
+
+.editor-command-bar,
+.editor-command-bar.horizontal-menu-scroll {
+  min-width: 0;
+  min-height: 54px;
+  height: 54px;
+  gap: 8px;
+  padding: 5px 12px 9px;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  border: 0;
+  background: transparent;
+  scroll-padding-inline: 12px;
+}
+
+.editor-command-bar button {
+  width: auto;
+  min-width: max-content;
+  min-height: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  gap: 7px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+  font-size: 13px !important;
+  white-space: nowrap;
+}
+
+.editor-command-bar button:hover:not(:disabled) {
+  background: var(--control-hover-fill-strong);
+  color: var(--accent);
+}
+
+.editor-command-bar button.active,
+.editor-command-bar .editor-run-action:not(:disabled) {
+  background: var(--control-selected-fill);
+  color: var(--accent);
+}
+
+.editor-command-section-divider {
+  width: 1px;
+  height: 26px;
+  flex: 0 0 1px;
+  align-self: center;
+  margin-inline: 2px;
+  background: var(--line);
+}
+
+.editor-command-zoom {
+  min-width: max-content;
+  min-height: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--control-hover-fill);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.editor-command-zoom:hover,
+.editor-command-zoom:focus-within {
+  background: var(--control-hover-fill-strong);
+  color: var(--accent);
+}
+
+.editor-command-zoom select {
+  min-width: 68px;
+  height: 32px;
+  padding: 0 27px 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  outline: 0;
+  background-color: color-mix(in srgb, var(--panel) 72%, transparent);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .editor-command-tabs,
+  .editor-command-tabs.horizontal-menu-scroll,
+  .editor-command-bar,
+  .editor-command-bar.horizontal-menu-scroll {
+    padding-inline: 8px;
+    scroll-padding-inline: 8px;
+  }
+
+  .editor-command-bar button {
+    width: auto;
+    min-width: max-content;
+    padding-inline: 13px;
+    font-size: 13px !important;
+  }
+}
+
+/* Cross-platform fit-and-finish overrides intentionally remain last. */
+.python-environment-manager-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.python-environment-manager-actions.horizontal-menu-scroll {
+  min-height: 56px;
+  height: auto;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 6px 1px 8px;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scroll-padding-inline: 1px;
+}
+
+.python-environment-manager-actions > button {
+  align-self: center;
+}
+
+.editor-command-zoom {
+  column-gap: 10px;
+  padding-right: 7px;
+}
+
+.editor-command-zoom select {
+  margin-left: 2px;
+}
+
+.shell-tab-strip > div {
+  width: 126px;
+  min-width: 126px;
+  max-width: 126px;
+}
+
+.shell-tab-strip > div > button:first-child {
+  width: 126px;
+  min-width: 126px;
+  max-width: 126px;
+  padding-inline: 34px;
+  line-height: 1;
+}
+
+/* Keep terminal icon actions perfectly circular at every interface scale and
+   on every platform. Explicit inline/block sizing prevents flex or native
+   button metrics from stretching the hit target into an oval. */
+.terminal-primary-toolbar > .terminal-panel-close,
+.terminal-session-actions > .terminal-session-control {
+  inline-size: 38px !important;
+  min-inline-size: 38px !important;
+  max-inline-size: 38px !important;
+  block-size: 38px !important;
+  min-block-size: 38px !important;
+  max-block-size: 38px !important;
+  flex: 0 0 38px !important;
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
+  display: inline-grid !important;
+  place-items: center;
+  gap: 0;
+  padding: 0 !important;
+  border-radius: 50% !important;
+}
+
+.terminal-primary-toolbar > .terminal-panel-close > svg,
+.terminal-session-actions > .terminal-session-control > svg {
+  display: block;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.terminal-host {
+  padding: 14px 18px 10px;
+}
+
+.terminal-host .xterm {
+  height: calc(100% - 22px);
+}
+
+.terminal-host .xterm-viewport {
+  scroll-padding-bottom: 22px;
+}
+
+.git-body .git-empty-card .git-primary-action {
+  border-radius: var(--radius-pill) !important;
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls .ai-tier-picker,
+.ai-panel:not(.expanded) .ai-footer-controls .ai-capability-bar {
+  max-width: calc(100vw - 40px);
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls .ai-tier-picker {
+  width: min(460px, calc(100vw - 40px));
+}
+
+.ai-panel:not(.expanded) .ai-footer-controls .ai-capability-bar {
+  width: min(620px, calc(100vw - 40px));
+  grid-template-columns: repeat(3, minmax(156px, 1fr));
+}
+
+/* Compact footer menus open toward the workspace, never back into the narrow
+   chat column. This keeps every permission and model label readable whether
+   the user places AI on the left or right. */
+.ai-panel:not(.expanded)[data-side="right"]
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar) {
+  right: 0 !important;
+  left: auto !important;
+}
+
+.ai-panel:not(.expanded)[data-side="left"]
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar) {
+  right: auto !important;
+  left: 0 !important;
+}
+
+.ai-panel:not(.expanded)
+  .ai-footer-controls
+  .ai-capability-bar
+  > button
+  > span {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+@media (max-width: 700px) {
+  .ai-panel:not(.expanded) .ai-footer-controls .ai-tier-picker,
+  .ai-panel:not(.expanded) .ai-footer-controls .ai-capability-bar {
+    width: min(520px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+  }
+
+  .ai-panel:not(.expanded) .ai-footer-controls .ai-capability-bar {
+    grid-template-columns: repeat(2, minmax(132px, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .terminal-host {
+    padding: 12px 14px 8px;
+  }
+
+  .terminal-host .xterm {
+    height: calc(100% - 18px);
+  }
+}
+
+/* Full-window chat keeps the same compact footer controls as the docked
+   column. Opening a selector must not stretch its trigger into an oversized
+   pill: the menu carries the readable labels while the trigger stays a
+   predictable circular target. */
+.ai-panel.expanded .ai-footer-controls {
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-panel.expanded
+  .ai-footer-controls
+  > :is(.ai-bottom-model, .ai-capability-drawer, .ai-auto-install-toggle),
+.ai-panel.expanded
+  .ai-footer-controls
+  > :is(.ai-bottom-model, .ai-capability-drawer):is(
+    :hover,
+    :focus-within,
+    :has([aria-expanded="true"])
+  ),
+.ai-panel.expanded
+  .ai-footer-controls
+  > .ai-auto-install-toggle:is(:hover, :focus, :focus-visible) {
+  flex: 0 0 var(--ui-control-height) !important;
+  width: var(--ui-control-height) !important;
+  min-width: var(--ui-control-height) !important;
+  max-width: var(--ui-control-height) !important;
+  height: var(--ui-control-height) !important;
+  min-height: var(--ui-control-height) !important;
+}
+
+.ai-panel.expanded .ai-footer-controls .ai-tier-toggle,
+.ai-panel.expanded .ai-footer-controls .ai-capability-toggle,
+.ai-panel.expanded .ai-footer-controls .ai-auto-install-toggle,
+.ai-panel.expanded
+  .ai-footer-controls
+  :is(.ai-bottom-model, .ai-capability-drawer):is(
+    :hover,
+    :focus-within,
+    :has([aria-expanded="true"])
+  )
+  :is(.ai-tier-toggle, .ai-capability-toggle) {
+  width: var(--ui-control-height) !important;
+  min-width: var(--ui-control-height) !important;
+  max-width: var(--ui-control-height) !important;
+  height: var(--ui-control-height) !important;
+  min-height: var(--ui-control-height) !important;
+  display: grid;
+  grid-template-columns: 1fr !important;
+  place-items: center;
+  gap: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border-radius: 50% !important;
+}
+
+.ai-panel.expanded .ai-footer-controls .ai-capability-toggle > span {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  grid-template-columns: 1fr !important;
+  place-items: center;
+  gap: 0 !important;
+}
+
+.ai-panel.expanded
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle)
+  .ai-footer-label,
+.ai-panel.expanded .ai-footer-controls .ai-tier-toggle > svg:last-child,
+.ai-panel.expanded .ai-footer-controls .ai-capability-toggle > svg:last-child {
+  display: none !important;
+}
+
+.ai-panel.expanded
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle)
+  > svg,
+.ai-panel.expanded .ai-footer-controls .ai-capability-toggle > span > svg {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  margin: 0;
 }

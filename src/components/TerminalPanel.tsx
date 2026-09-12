@@ -2,6 +2,11 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { EditorPreferences } from "../types";
+import {
+  readTerminalTranscript,
+  saveTerminalTranscript,
+  trimTerminalTranscript,
+} from "../terminal-workspace";
 
 const terminalPalette = (theme: EditorPreferences["theme"]) =>
   theme === "blue-light"
@@ -35,14 +40,20 @@ export function TerminalPanel({
   interpreter,
   active,
   theme,
+  projectRoot,
+  persistenceId,
 }: {
   id: string;
   interpreter: string;
   active: boolean;
   theme: EditorPreferences["theme"];
+  projectRoot: string;
+  persistenceId: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
+  const requestFitRef = useRef<(() => void) | null>(null);
+  const repaintAfterFitRef = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
   useEffect(() => {
@@ -51,7 +62,7 @@ export function TerminalPanel({
       fontFamily: "Fira Code",
       fontSize: 13,
       letterSpacing: 0,
-      lineHeight: 1.1,
+      lineHeight: 1.25,
       theme: terminalPalette(theme),
       cursorBlink: true,
       convertEol: true,
@@ -60,8 +71,19 @@ export function TerminalPanel({
     t.loadAddon(fit);
     t.open(host.current);
     terminal.current = t;
+    let transcript = readTerminalTranscript(projectRoot, persistenceId);
+    let persistenceTimer = 0;
+    if (transcript) t.write(transcript);
+    const persistTranscript = () => {
+      window.clearTimeout(persistenceTimer);
+      saveTerminalTranscript(projectRoot, persistenceId, transcript);
+    };
     const off = window.oscode.onTerminalData((termId, data) => {
-      if (termId === id) t.write(data);
+      if (termId !== id) return;
+      t.write(data);
+      transcript = trimTerminalTranscript(`${transcript}${data}`);
+      window.clearTimeout(persistenceTimer);
+      persistenceTimer = window.setTimeout(persistTranscript, 180);
     });
     void window.oscode
       .createTerminal(id, interpreter)
@@ -70,12 +92,12 @@ export function TerminalPanel({
           `\r\nUnable to start terminal: ${error instanceof Error ? error.message : String(error)}\r\n`,
         ),
       );
-    t.onData((data) => window.oscode.terminalWrite(id, data));
-    t.onResize(({ cols, rows }) =>
-      window.oscode.terminalResize(id, cols, rows),
+    const inputDisposable = t.onData((data) =>
+      window.oscode.terminalWrite(id, data),
     );
     let fitFrame = 0;
     let secondFitFrame = 0;
+    let lastPtyDimensions = "";
     let disposed = false;
     const fitTerminal = () => {
       if (
@@ -87,7 +109,15 @@ export function TerminalPanel({
       )
         return;
       fit.fit();
-      window.oscode.terminalResize(id, t.cols, t.rows);
+      const nextDimensions = `${t.cols}x${t.rows}`;
+      if (nextDimensions !== lastPtyDimensions) {
+        lastPtyDimensions = nextDimensions;
+        window.oscode.terminalResize(id, t.cols, t.rows);
+      }
+      if (repaintAfterFitRef.current && t.rows > 0) {
+        repaintAfterFitRef.current = false;
+        t.refresh(0, t.rows - 1);
+      }
     };
     const resize = () => {
       cancelAnimationFrame(fitFrame);
@@ -96,6 +126,7 @@ export function TerminalPanel({
         secondFitFrame = requestAnimationFrame(fitTerminal);
       });
     };
+    requestFitRef.current = resize;
     const observer = new ResizeObserver(resize);
     observer.observe(host.current);
     window.addEventListener("resize", resize);
@@ -105,21 +136,24 @@ export function TerminalPanel({
       disposed = true;
       cancelAnimationFrame(fitFrame);
       cancelAnimationFrame(secondFitFrame);
+      persistTranscript();
       off();
-      window.oscode.terminalDispose(id);
+      inputDisposable.dispose();
       observer.disconnect();
       window.removeEventListener("resize", resize);
+      if (requestFitRef.current === resize) requestFitRef.current = null;
       t.dispose();
     };
-  }, [id, interpreter]);
+  }, [id, interpreter, persistenceId, projectRoot]);
   useEffect(() => {
     if (!terminal.current) return;
     terminal.current.options.theme = terminalPalette(theme);
   }, [theme]);
   useEffect(() => {
     if (!active || !terminal.current) return;
+    repaintAfterFitRef.current = true;
+    requestFitRef.current?.();
     terminal.current.focus();
-    window.dispatchEvent(new Event("resize"));
   }, [active]);
   return (
     <div

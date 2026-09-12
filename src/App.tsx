@@ -13,6 +13,12 @@ import { MediaPreview } from "./components/MediaPreview";
 import { PlatformioPanel } from "./components/PlatformioPanel";
 import osCodeIcon from "./assets/oscode-icon.png";
 import { chatSearchPreview } from "./chat-search-preview";
+import {
+  loadTerminalWorkspace,
+  removeTerminalTranscript,
+  saveTerminalWorkspace,
+  terminalProcessId,
+} from "./terminal-workspace";
 import type {
   AiEditMode,
   AiEngine,
@@ -74,6 +80,10 @@ type ProjectContextAction = {
   run: () => unknown | Promise<unknown>;
 };
 const NOTICE_AUTO_DISMISS_MS = 10_000;
+const AI_PANEL_COMPACT_MIN_WIDTH = 280;
+const AI_PANEL_DEFAULT_WIDTH = 680;
+const AI_PANEL_LARGE_MAX_WIDTH = 1_200;
+const EDITOR_USABLE_MIN_WIDTH = 360;
 
 function scrollHorizontalMenu(event: WheelEvent) {
   const origin = event.target;
@@ -464,12 +474,13 @@ export function App() {
       chats: Array<{ id: string; title: string; preview: string }>;
     }>({ code: [], chats: [] }),
     [requestedAiChat, setRequestedAiChat] = useState(""),
+    [activeAiChatId, setActiveAiChatId] = useState(""),
     [pendingRevealLine, setPendingRevealLine] = useState(0),
     [gitHelpOpen, setGitHelpOpen] = useState(false),
     [gitHelpSearch, setGitHelpSearch] = useState(""),
     [detachedRef, setDetachedRef] = useState("");
   const [terminalOpen, setTerminalOpen] = useState(false),
-    [terminalView, setTerminalView] = useState<"shell" | "run">("shell"),
+    [terminalView, setTerminalView] = useState<"shell" | "python">("shell"),
     [shellTabs, setShellTabs] = useState(() => [
       {
         id: `shell-${globalThis.crypto.randomUUID()}`,
@@ -514,7 +525,6 @@ export function App() {
     "file" | "folder" | "rename" | null
   >(null);
   const [projectItemName, setProjectItemName] = useState("");
-  const [envName, setEnvName] = useState("");
   const [suggestions, setSuggestions] = useState(true),
     [wordWrap, setWordWrap] = useState(false),
     [proseWrap, setProseWrap] = useState(true),
@@ -525,8 +535,8 @@ export function App() {
     [editorFontSize, setEditorFontSize] = useState(14),
     [sidebarWidth, setSidebarWidth] = useState(520),
     [gitHeight, setGitHeight] = useState(390),
-    [terminalHeight, setTerminalHeight] = useState(400),
-    [aiPanelWidth, setAiPanelWidth] = useState(560),
+    [terminalHeight, setTerminalHeight] = useState(320),
+    [aiPanelWidth, setAiPanelWidth] = useState(AI_PANEL_DEFAULT_WIDTH),
     [sidebarVisible, setSidebarVisible] = useState(true),
     [aiVisible, setAiVisible] = useState(false),
     [markdownView, setMarkdownView] = useState<"edit" | "split" | "preview">(
@@ -535,6 +545,9 @@ export function App() {
     [editorView, setEditorView] = useState<"single" | "split" | "compare">(
       "single",
     ),
+    [editorCommandTab, setEditorCommandTab] = useState<
+      "view" | "editing" | "python"
+    >("editing"),
     [splitLeftPath, setSplitLeftPath] = useState(""),
     [splitRightPath, setSplitRightPath] = useState(""),
     [compareOpen, setCompareOpen] = useState(false),
@@ -565,6 +578,15 @@ export function App() {
       currentVersion: "",
     }),
     [pythonManagerOpen, setPythonManagerOpen] = useState(false),
+    [pythonEnvironmentManagerOpen, setPythonEnvironmentManagerOpen] =
+      useState(false),
+    [pythonEnvironmentCreateOpen, setPythonEnvironmentCreateOpen] =
+      useState(false),
+    [pythonEnvironmentName, setPythonEnvironmentName] = useState(".venv"),
+    [pythonEnvironmentBase, setPythonEnvironmentBase] = useState(""),
+    [pythonEnvironmentPendingDelete, setPythonEnvironmentPendingDelete] =
+      useState<PythonRuntime | null>(null),
+    [pythonEnvironmentOperation, setPythonEnvironmentOperation] = useState(""),
     [uvHelpOpen, setUvHelpOpen] = useState(false),
     [uvHelpSearch, setUvHelpSearch] = useState(""),
     [installing, setInstalling] = useState(""),
@@ -624,7 +646,7 @@ export function App() {
       (item) =>
         item.scope === "app" && item.version === "3.12" && item.installed,
     ) || runtimes.find((item) => item.scope === "app" && item.installed);
-  const projectEnvironment =
+  const environmentActive =
     selectedRuntime?.scope === "project" ||
     selectedRuntime?.scope === "app-project";
   const pythonProject = Boolean(
@@ -645,8 +667,13 @@ export function App() {
         ].includes(entry.name.toLowerCase()),
     ),
   );
-  const pythonContext =
-    active?.name.toLowerCase().endsWith(".py") || pythonProject;
+  const pythonFileActive = Boolean(active?.name.toLowerCase().endsWith(".py"));
+  const pythonContext = pythonFileActive || pythonProject;
+  useEffect(() => {
+    if (!pythonFileActive && editorCommandTab === "python") {
+      setEditorCommandTab("editing");
+    }
+  }, [editorCommandTab, pythonFileActive]);
   useEffect(() => {
     document.addEventListener("wheel", scrollHorizontalMenu, {
       capture: true,
@@ -672,14 +699,20 @@ export function App() {
       document.removeEventListener("keydown", key);
     };
   }, [projectContextMenu]);
-  useEffect(() => {
-    if (!pythonContext && terminalView !== "shell") setTerminalView("shell");
-  }, [pythonContext, terminalView]);
   const aiPanelSide = sidebarSide === "left" ? "right" : "left";
   const activeTerminalId = activeShellId || shellTabs[0]?.id || "";
   useEffect(() => {
     if (!activeShellId && shellTabs[0]) setActiveShellId(shellTabs[0].id);
   }, [activeShellId, shellTabs]);
+  useEffect(() => {
+    if (!project?.root) return;
+    saveTerminalWorkspace(project.root, {
+      tabs: shellTabs,
+      activeId: activeTerminalId,
+      open: terminalOpen,
+      view: terminalView,
+    });
+  }, [activeTerminalId, project?.root, shellTabs, terminalOpen, terminalView]);
   useEffect(() => {
     setBranchTarget(git.branch);
   }, [project?.root, git.branch]);
@@ -710,7 +743,9 @@ export function App() {
         setSidebarSide(preferences.sidebarSide);
         setUiScale(preferences.uiScale);
         setEditorFontSize(preferences.editorFontSize);
-        setTerminalHeight(Math.max(360, preferences.terminalHeight));
+        setTerminalHeight(
+          Math.max(280, Math.min(700, preferences.terminalHeight)),
+        );
         setAiPanelWidth(preferences.aiPanelWidth);
         setAiEngine(preferences.aiEngine);
         setAiModel(preferences.aiModel);
@@ -889,7 +924,7 @@ export function App() {
   useEffect(() => {
     const a = window.oscode.onRunData((x) => {
       setTerminalOpen(true);
-      setTerminalView("run");
+      setTerminalView("python");
       setRunOutput((current) => current + x);
       setRunning(true);
     });
@@ -953,9 +988,6 @@ export function App() {
       }),
     [],
   );
-  useEffect(() => {
-    if (!pythonContext && terminalView === "run") setTerminalView("shell");
-  }, [pythonContext, terminalView]);
   const activateProject = async (nextProject: ProjectState) => {
     await window.oscode.stopAgentControl();
     setAiEditMode("ask");
@@ -967,6 +999,25 @@ export function App() {
     setBrowserActivity(null);
     setBrowserViewOpen(false);
     setBrowserSnapshot(null);
+    for (const shell of shellTabs)
+      void window.oscode.terminalDispose(terminalProcessId(shell));
+    const restoredTerminal = loadTerminalWorkspace(nextProject.root);
+    const restoredShells = restoredTerminal?.tabs.length
+      ? restoredTerminal.tabs
+      : [
+          {
+            id: `shell-${globalThis.crypto.randomUUID()}`,
+            title: "Shell 1",
+            restart: 0,
+          },
+        ];
+    shellSequenceRef.current = restoredShells.reduce((highest, shell) => {
+      const match = /^Shell (\d+)$/.exec(shell.title);
+      return Math.max(highest, match ? Number(match[1]) : 0);
+    }, 1);
+    setShellTabs(restoredShells);
+    setActiveShellId(restoredTerminal?.activeId || restoredShells[0].id);
+    setTerminalView(restoredTerminal?.view || "shell");
     setProject(nextProject);
     setSelectedEntry(null);
     setProjectClipboard(null);
@@ -976,7 +1027,7 @@ export function App() {
     setActivePath("");
     setComparison(null);
     setCompareOpen(false);
-    setTerminalOpen(false);
+    setTerminalOpen(restoredTerminal?.open === true);
     setRunning(false);
     setPythonManagerOpen(false);
     setUvHelpOpen(false);
@@ -1971,7 +2022,7 @@ export function App() {
       if (dirty && !(await save())) return;
       setRunOutput("");
       setTerminalOpen(true);
-      setTerminalView("run");
+      setTerminalView("python");
       await window.oscode.runPython(active.path, runtime);
       setRunning(true);
     } catch (e) {
@@ -1999,7 +2050,7 @@ export function App() {
       if (dirty && !(await save())) return;
       setRunOutput("");
       setTerminalOpen(true);
-      setTerminalView("run");
+      setTerminalView("python");
       await window.oscode.runPython(active.path, runtime, true);
       setRunning(true);
       setAdvanced(false);
@@ -2047,7 +2098,9 @@ export function App() {
         setEditorFontSize(preferences.editorFontSize);
         setSidebarWidth(preferences.sidebarWidth);
         setGitHeight(preferences.gitHeight);
-        setTerminalHeight(Math.max(360, preferences.terminalHeight));
+        setTerminalHeight(
+          Math.max(280, Math.min(700, preferences.terminalHeight)),
+        );
         setAiPanelWidth(preferences.aiPanelWidth);
         setSidebarVisible(preferences.sidebarVisible);
         setAiVisible(preferences.aiVisible);
@@ -2120,7 +2173,7 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 18,
+      version: 19,
       theme,
       locale,
       sidebarSide,
@@ -2221,17 +2274,62 @@ export function App() {
       setNotice(errorMessage(e, "Interpreter could not be added"));
     }
   };
-  const createVenv = async (requestedName: unknown = "") => {
-    const name = typeof requestedName === "string" ? requestedName : "";
+  const createVenv = async (
+    baseInterpreter = runtime,
+    requestedName = ".venv",
+  ) => {
+    const name = requestedName.trim();
+    if (!baseInterpreter || !name) return;
+    setPythonEnvironmentOperation(`Creating ${name}`);
     try {
-      const created = await window.oscode.createVenv(runtime, name);
-      await refreshRuntimes();
+      const created = await window.oscode.createVenv(baseInterpreter, name);
+      const [found, tree] = await Promise.all([
+        window.oscode.listPython(),
+        window.oscode.refreshProject(),
+      ]);
+      setRuntimes(found);
+      setProject((current) => (current ? { ...current, tree } : current));
       setRuntime(created.path);
       await window.oscode.setProjectPython(created.path);
-      setEnvName("");
-      setNotice(name ? `Environment ${name} created` : "Local .venv created");
+      setPythonEnvironmentCreateOpen(false);
+      setPythonEnvironmentName(".venv");
+      setNotice(`${name} created and selected`);
     } catch (e) {
       setNotice(errorMessage(e, "Could not create environment"));
+    } finally {
+      setPythonEnvironmentOperation("");
+    }
+  };
+  const deleteProjectEnvironment = async (target: PythonRuntime) => {
+    setPythonEnvironmentOperation(`Deleting ${runtimeLabel(target)}`);
+    try {
+      const deletingCurrent = target.path === runtime;
+      const removed = await window.oscode.deleteVenv(target.path);
+      const [found, tree] = await Promise.all([
+        window.oscode.listPython(),
+        window.oscode.refreshProject(),
+      ]);
+      setRuntimes(found);
+      setProject((current) => (current ? { ...current, tree } : current));
+      if (deletingCurrent) {
+        const fallback =
+          found.find(
+            (item) => item.scope === "app-project" && item.installed,
+          ) ||
+          found.find(
+            (item) =>
+              item.scope === "app" && item.version === "3.12" && item.installed,
+          ) ||
+          found.find((item) => item.installed);
+        setRuntime(fallback?.path || "");
+        if (project) await window.oscode.setProjectPython(fallback?.path || "");
+      }
+      setPythonEnvironmentPendingDelete(null);
+      setNotice(`${removed.name} moved to Trash`);
+    } catch (e) {
+      setNotice(errorMessage(e, "Environment could not be deleted"));
+    } finally {
+      setPythonEnvironmentOperation("");
     }
   };
   const useDetectedProjectEnvironment = async (interpreter: string) => {
@@ -2289,7 +2387,7 @@ export function App() {
       await refreshPythonPackages(installed.interpreter);
       setNotice(
         `${installed.package} installed${
-          installed.createdEnvironment ? " in a new app environment" : ""
+          installed.createdEnvironment ? " in a new osCode environment" : ""
         }`,
       );
     } catch (e) {
@@ -2324,7 +2422,16 @@ export function App() {
   useEffect(
     () =>
       window.oscode.onPythonEnvironmentChanged(() => {
-        void refreshRuntimes(true).then(() => {
+        void Promise.all([
+          refreshRuntimes(true),
+          window.oscode
+            .refreshProject()
+            .then((tree) =>
+              setProject((current) =>
+                current ? { ...current, tree } : current,
+              ),
+            ),
+        ]).then(() => {
           if (pythonManagerOpen) void refreshPythonPackages();
         });
       }),
@@ -2744,35 +2851,69 @@ export function App() {
     if (item.version.startsWith("Conda ")) return item.version;
     const location =
       item.scope === "app"
-        ? " · app runtime"
+        ? " · osCode"
         : item.scope === "system"
           ? " · system"
           : "";
     return `Python ${item.version}${location}`;
   };
-  const runtimeOptions = useMemo(
-    () =>
-      runtimes.map((r) => (
-        <option
-          key={`${r.version}:${r.path}`}
-          value={r.installed ? r.path : `download:${r.version}`}
-          disabled={Boolean(installing)}
-        >
-          {runtimeLabel(r)}
-          {r.installed
-            ? ""
-            : installing === r.version
-              ? " · installing…"
-              : " · download"}
-        </option>
-      )),
-    [installing, runtimes],
+  const osCodeRuntimes = runtimes.filter(
+    (item) => item.scope === "app" || item.scope === "app-project",
+  );
+  const projectRuntimes = runtimes.filter(
+    (item) => item.scope === "project" && item.installed,
+  );
+  const systemRuntimes = runtimes.filter(
+    (item) => item.scope === "system" && item.installed,
+  );
+  const basePythonRuntimes = runtimes.filter(
+    (item) =>
+      item.installed &&
+      (item.scope === "app" || item.scope === "system") &&
+      !item.version.startsWith("Conda "),
+  );
+  const runtimeOption = (item: PythonRuntime) => (
+    <option
+      key={`${item.version}:${item.path || "download"}`}
+      value={item.installed ? item.path : `download:${item.version}`}
+      disabled={Boolean(installing)}
+    >
+      {runtimeLabel(item)}
+      {item.installed
+        ? ""
+        : installing === item.version
+          ? " · installing…"
+          : " · download"}
+    </option>
   );
   const activeRuntimeLabel = useMemo(() => {
     const selected = runtimes.find((item) => item.path === runtime);
     if (!selected) return "selected Python";
     return runtimeLabel(selected);
   }, [runtime, runtimes]);
+  useEffect(() => {
+    if (!pythonEnvironmentManagerOpen) return;
+    if (
+      pythonEnvironmentBase &&
+      basePythonRuntimes.some((item) => item.path === pythonEnvironmentBase)
+    )
+      return;
+    const selectedBase = basePythonRuntimes.find(
+      (item) => item.path === runtime,
+    );
+    setPythonEnvironmentBase(
+      selectedBase?.path ||
+        appRuntime?.path ||
+        basePythonRuntimes[0]?.path ||
+        "",
+    );
+  }, [
+    appRuntime?.path,
+    pythonEnvironmentBase,
+    pythonEnvironmentManagerOpen,
+    runtime,
+    runtimes,
+  ]);
   const filteredPythonPackages = useMemo(
     () =>
       pythonPackages.filter((item) =>
@@ -2823,10 +2964,10 @@ export function App() {
     document.body.classList.add("terminal-resizing");
     const start = event.clientY;
     const initial = terminalHeight;
-    const maxHeight = Math.max(360, Math.min(760, window.innerHeight - 190));
+    const maxHeight = Math.max(320, Math.min(700, window.innerHeight - 190));
     const move = (next: PointerEvent) =>
       setTerminalHeight(
-        Math.max(300, Math.min(maxHeight, initial + start - next.clientY)),
+        Math.max(280, Math.min(maxHeight, initial + start - next.clientY)),
       );
     const stop = () => {
       window.removeEventListener("pointermove", move);
@@ -2842,12 +2983,21 @@ export function App() {
     event.preventDefault();
     const start = event.clientX;
     const initial = aiPanelWidth;
+    const reservedWidth =
+      EDITOR_USABLE_MIN_WIDTH + (sidebarVisible ? sidebarWidth + 5 : 0);
+    const maximum = Math.max(
+      AI_PANEL_DEFAULT_WIDTH,
+      Math.min(AI_PANEL_LARGE_MAX_WIDTH, window.innerWidth - reservedWidth),
+    );
     const move = (next: PointerEvent) => {
       const delta = next.clientX - start;
       setAiPanelWidth(
         Math.max(
-          280,
-          Math.min(560, initial + (aiPanelSide === "left" ? delta : -delta)),
+          AI_PANEL_COMPACT_MIN_WIDTH,
+          Math.min(
+            maximum,
+            initial + (aiPanelSide === "left" ? delta : -delta),
+          ),
         ),
       );
     };
@@ -3016,6 +3166,27 @@ export function App() {
       ];
     });
   };
+  useEffect(() => {
+    const markVisibleChatSeen = () => {
+      if (
+        !aiVisible ||
+        !aiAttention ||
+        aiAttention.kind === "permission" ||
+        document.visibilityState !== "visible" ||
+        !document.hasFocus() ||
+        (aiAttention.chatId && aiAttention.chatId !== activeAiChatId)
+      )
+        return;
+      handleAiAttentionChange(null);
+    };
+    window.addEventListener("focus", markVisibleChatSeen);
+    document.addEventListener("visibilitychange", markVisibleChatSeen);
+    markVisibleChatSeen();
+    return () => {
+      window.removeEventListener("focus", markVisibleChatSeen);
+      document.removeEventListener("visibilitychange", markVisibleChatSeen);
+    };
+  }, [aiVisible, aiAttention, activeAiChatId]);
   const completeComputerPermission = async () => {
     if (!permissionCompletionRef.current || permissionCompleting) return;
     setPermissionCompleting(true);
@@ -3266,17 +3437,6 @@ export function App() {
               </div>
             )}
             <div className="top-actions">
-              {pythonContext && (
-                <select
-                  className="runtime-select"
-                  value={runtime}
-                  onChange={(event) => chooseRuntimeValue(event.target.value)}
-                  aria-label="Python interpreter"
-                >
-                  {runtimeOptions}
-                  <option value="more">Download more…</option>
-                </select>
-              )}
               {showUpdateAction && (
                 <IconButton
                   icon={
@@ -3607,6 +3767,393 @@ export function App() {
               </button>
             </div>
           ))}
+        </div>
+      )}
+      {pythonEnvironmentManagerOpen && (
+        <div
+          className="modal-scrim python-environment-manager-scrim"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !pythonEnvironmentOperation
+            ) {
+              setPythonEnvironmentManagerOpen(false);
+              setPythonEnvironmentCreateOpen(false);
+              setPythonEnvironmentPendingDelete(null);
+            }
+          }}
+        >
+          <section
+            className="python-environment-manager-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="python-environment-manager-title"
+          >
+            <header className="python-environment-manager-head">
+              <span className="python-environment-manager-title">
+                <FeatherIcon icon="cpu" size="18" />
+                <span>
+                  <h2 id="python-environment-manager-title">
+                    Python interpreters
+                  </h2>
+                  <small>
+                    Choose the Python used by Run, packages, debugging, and
+                    terminals.
+                  </small>
+                </span>
+              </span>
+              <IconButton
+                icon="x"
+                label="Close Python interpreters"
+                disabled={Boolean(pythonEnvironmentOperation)}
+                onClick={() => {
+                  setPythonEnvironmentManagerOpen(false);
+                  setPythonEnvironmentCreateOpen(false);
+                  setPythonEnvironmentPendingDelete(null);
+                }}
+              />
+            </header>
+            <div className="python-environment-manager-body">
+              <label className="python-environment-active-select">
+                <span>
+                  <b>Active interpreter</b>
+                  <small>{activeRuntimeLabel}</small>
+                </span>
+                <select
+                  value={runtime}
+                  aria-label="Active Python interpreter"
+                  disabled={Boolean(pythonEnvironmentOperation)}
+                  onChange={(event) =>
+                    chooseRuntimeValue(event.currentTarget.value)
+                  }
+                >
+                  <option value="" disabled>
+                    Choose an interpreter
+                  </option>
+                  {!!osCodeRuntimes.length && (
+                    <optgroup label="osCode environments">
+                      {osCodeRuntimes.map(runtimeOption)}
+                    </optgroup>
+                  )}
+                  {!!projectRuntimes.length && (
+                    <optgroup label="Project environments">
+                      {projectRuntimes.map(runtimeOption)}
+                    </optgroup>
+                  )}
+                  {!!systemRuntimes.length && (
+                    <optgroup label="System interpreters">
+                      {systemRuntimes.map(runtimeOption)}
+                    </optgroup>
+                  )}
+                  <option value="more">Download more…</option>
+                </select>
+              </label>
+
+              <div
+                className="python-environment-manager-actions horizontal-menu-scroll"
+                data-horizontal-menu
+              >
+                <button
+                  type="button"
+                  className={pythonEnvironmentCreateOpen ? "active" : ""}
+                  disabled={!project || Boolean(pythonEnvironmentOperation)}
+                  onClick={() => {
+                    setPythonEnvironmentCreateOpen((open) => !open);
+                    setPythonEnvironmentPendingDelete(null);
+                  }}
+                >
+                  <FeatherIcon icon="folder-plus" size="15" />
+                  Create environment
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(pythonEnvironmentOperation)}
+                  onClick={() => void chooseRuntime()}
+                >
+                  <FeatherIcon icon="hard-drive" size="15" />
+                  Add installed Python
+                </button>
+                <IconButton
+                  icon="refresh-cw"
+                  label="Refresh Python interpreters"
+                  disabled={Boolean(pythonEnvironmentOperation)}
+                  onClick={() => void refreshRuntimes(false)}
+                />
+              </div>
+
+              {pythonEnvironmentCreateOpen && (
+                <form
+                  className="python-environment-create-card"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void createVenv(
+                      pythonEnvironmentBase,
+                      pythonEnvironmentName,
+                    );
+                  }}
+                >
+                  <header>
+                    <span>
+                      <b>Create a project environment</b>
+                      <small>
+                        This environment is stored inside{" "}
+                        {project?.name || "the project"}.
+                      </small>
+                    </span>
+                    <IconButton
+                      icon="x"
+                      label="Close environment creation"
+                      disabled={Boolean(pythonEnvironmentOperation)}
+                      onClick={() => setPythonEnvironmentCreateOpen(false)}
+                    />
+                  </header>
+                  <div className="python-environment-create-fields">
+                    <label>
+                      <span>Environment name</span>
+                      <input
+                        autoFocus
+                        value={pythonEnvironmentName}
+                        placeholder=".venv"
+                        maxLength={80}
+                        disabled={Boolean(pythonEnvironmentOperation)}
+                        onChange={(event) =>
+                          setPythonEnvironmentName(event.currentTarget.value)
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Python version</span>
+                      <select
+                        value={pythonEnvironmentBase}
+                        disabled={Boolean(pythonEnvironmentOperation)}
+                        onChange={(event) =>
+                          setPythonEnvironmentBase(event.currentTarget.value)
+                        }
+                      >
+                        {basePythonRuntimes.map((item) => (
+                          <option key={item.path} value={item.path}>
+                            {runtimeLabel(item)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <footer>
+                    <button
+                      type="button"
+                      disabled={Boolean(pythonEnvironmentOperation)}
+                      onClick={() => setPythonEnvironmentCreateOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="primary"
+                      disabled={
+                        !pythonEnvironmentName.trim() ||
+                        !pythonEnvironmentBase ||
+                        Boolean(pythonEnvironmentOperation)
+                      }
+                    >
+                      <FeatherIcon icon="folder-plus" size="15" />
+                      {pythonEnvironmentOperation || "Create environment"}
+                    </button>
+                  </footer>
+                </form>
+              )}
+
+              <section className="python-environment-group">
+                <header>
+                  <span>
+                    <b>osCode environments</b>
+                    <small>
+                      App only · stored in osCode application data, never in
+                      this project.
+                    </small>
+                  </span>
+                </header>
+                <div className="python-environment-list">
+                  {osCodeRuntimes.map((item) => (
+                    <article
+                      className={item.path === runtime ? "selected" : ""}
+                      key={`${item.version}:${item.path || "download"}`}
+                    >
+                      <button
+                        type="button"
+                        disabled={Boolean(pythonEnvironmentOperation)}
+                        onClick={() =>
+                          item.installed
+                            ? void selectRuntime(item.path)
+                            : void installRuntime(item.version)
+                        }
+                      >
+                        <FeatherIcon icon="cpu" size="16" />
+                        <span>
+                          <b>{runtimeLabel(item)}</b>
+                          <small>
+                            {item.scope === "app-project"
+                              ? "Packages for this project · outside project"
+                              : item.installed
+                                ? "Ready in osCode application data"
+                                : "Not installed"}
+                          </small>
+                        </span>
+                        <span className="python-environment-status">
+                          {item.path === runtime
+                            ? "Active"
+                            : item.installed
+                              ? "Use"
+                              : installing === item.version
+                                ? "Installing…"
+                                : "Download"}
+                        </span>
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="python-environment-group">
+                <header>
+                  <span>
+                    <b>Project environments</b>
+                    <small>
+                      Custom virtual environments stored inside this project.
+                    </small>
+                  </span>
+                </header>
+                {projectRuntimes.length ? (
+                  <div className="python-environment-list">
+                    {projectRuntimes.map((item) => (
+                      <article
+                        className={item.path === runtime ? "selected" : ""}
+                        key={item.path}
+                      >
+                        <button
+                          type="button"
+                          disabled={Boolean(pythonEnvironmentOperation)}
+                          onClick={() => void selectRuntime(item.path)}
+                        >
+                          <FeatherIcon icon="folder" size="16" />
+                          <span>
+                            <b>{runtimeLabel(item)}</b>
+                            <small>{item.path}</small>
+                          </span>
+                          <span className="python-environment-status">
+                            {item.path === runtime ? "Active" : "Use"}
+                          </span>
+                        </button>
+                        <IconButton
+                          icon="trash-2"
+                          label={`Delete ${runtimeLabel(item)}`}
+                          disabled={Boolean(pythonEnvironmentOperation)}
+                          onClick={() => {
+                            setPythonEnvironmentCreateOpen(false);
+                            setPythonEnvironmentPendingDelete(item);
+                          }}
+                        />
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="python-environment-empty">
+                    No project environments yet. Create one here or refresh to
+                    detect an environment made by another editor.
+                  </p>
+                )}
+              </section>
+
+              {!!systemRuntimes.length && (
+                <section className="python-environment-group">
+                  <header>
+                    <span>
+                      <b>Installed interpreters</b>
+                      <small>
+                        Python and Conda interpreters available on this
+                        computer.
+                      </small>
+                    </span>
+                  </header>
+                  <div className="python-environment-list">
+                    {systemRuntimes.map((item) => (
+                      <article
+                        className={item.path === runtime ? "selected" : ""}
+                        key={item.path}
+                      >
+                        <button
+                          type="button"
+                          disabled={Boolean(pythonEnvironmentOperation)}
+                          onClick={() => void selectRuntime(item.path)}
+                        >
+                          <FeatherIcon icon="hard-drive" size="16" />
+                          <span>
+                            <b>{runtimeLabel(item)}</b>
+                            <small>{item.path}</small>
+                          </span>
+                          <span className="python-environment-status">
+                            {item.path === runtime ? "Active" : "Use"}
+                          </span>
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+
+            {pythonEnvironmentPendingDelete && (
+              <div className="python-environment-confirm-scrim">
+                <section
+                  className="python-environment-confirm-dialog"
+                  role="alertdialog"
+                  aria-modal="true"
+                  aria-labelledby="python-environment-delete-title"
+                >
+                  <header>
+                    <span>
+                      <small>PROJECT ENVIRONMENT</small>
+                      <h3 id="python-environment-delete-title">
+                        Delete this environment?
+                      </h3>
+                    </span>
+                    <IconButton
+                      icon="x"
+                      label="Cancel environment deletion"
+                      disabled={Boolean(pythonEnvironmentOperation)}
+                      onClick={() => setPythonEnvironmentPendingDelete(null)}
+                    />
+                  </header>
+                  <p>
+                    <b>{runtimeLabel(pythonEnvironmentPendingDelete)}</b> will
+                    be moved to Trash. Your source files will not be changed.
+                  </p>
+                  <footer>
+                    <button
+                      type="button"
+                      disabled={Boolean(pythonEnvironmentOperation)}
+                      onClick={() => setPythonEnvironmentPendingDelete(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={Boolean(pythonEnvironmentOperation)}
+                      onClick={() =>
+                        void deleteProjectEnvironment(
+                          pythonEnvironmentPendingDelete,
+                        )
+                      }
+                    >
+                      <FeatherIcon icon="trash-2" size="15" />
+                      {pythonEnvironmentOperation || "Move to Trash"}
+                    </button>
+                  </footer>
+                </section>
+              </div>
+            )}
+          </section>
         </div>
       )}
       {selectedCommit && (
@@ -4667,11 +5214,6 @@ export function App() {
             className="tabs horizontal-menu-scroll"
             data-horizontal-menu
             ref={editorTabsRef}
-            onWheel={(event) => {
-              const strip = event.currentTarget;
-              if (strip.scrollWidth <= strip.clientWidth) return;
-              strip.scrollLeft += event.deltaY || event.deltaX;
-            }}
           >
             {browserViewOpen && (
               <div
@@ -4786,129 +5328,286 @@ export function App() {
             <MediaPreview file={active.media} name={active.name} />
           ) : active ? (
             <>
-              <div
-                className="editor-command-bar horizontal-menu-scroll"
-                data-horizontal-menu
-                role="toolbar"
-                aria-label="Editor commands"
-              >
-                <button
-                  title={`${shortcutModifier}+Z`}
-                  onClick={() => {
-                    editorRef.current?.trigger("toolbar", "undo", null);
-                    editorRef.current?.focus();
-                  }}
+              <div className="editor-command-stack">
+                <div
+                  className="editor-command-tabs horizontal-menu-scroll"
+                  data-horizontal-menu
+                  role="tablist"
+                  aria-label="Editor command groups"
                 >
-                  <FeatherIcon icon="corner-up-left" size="15" /> Undo
-                </button>
-                <button
-                  title={`${shortcutModifier}+Shift+Z`}
-                  onClick={() => {
-                    editorRef.current?.trigger("toolbar", "redo", null);
-                    editorRef.current?.focus();
-                  }}
-                >
-                  <FeatherIcon icon="corner-up-right" size="15" /> Redo
-                </button>
-                <button
-                  className={dirty ? "active" : ""}
-                  title={`${shortcutModifier}+S`}
-                  onClick={() => void save()}
-                >
-                  <FeatherIcon icon="save" size="15" /> Save
-                </button>
-                <button onClick={() => void saveEntryAs(entryForTab(active))}>
-                  <FeatherIcon icon="copy" size="15" /> Save As
-                </button>
-                <button disabled={!hasDirtyTabs} onClick={() => void saveAll()}>
-                  <FeatherIcon icon="layers" size="15" /> Save All
-                </button>
-                <button onClick={() => void openSaveHistory()}>
-                  <FeatherIcon icon="clock" size="15" /> Save history
-                </button>
-                {pythonContext && (
-                  <>
-                    <span
-                      className="editor-command-divider"
-                      aria-hidden="true"
-                    />
-                    <button
-                      className="editor-run-action"
-                      onClick={() => void run()}
-                      disabled={
-                        running || !runtime || !active?.name.endsWith(".py")
-                      }
-                    >
-                      <FeatherIcon icon="play" size="15" /> Run
-                    </button>
-                    <button
-                      className="editor-stop-action"
-                      onClick={stopPythonProcess}
-                      disabled={!running}
-                    >
-                      <FeatherIcon icon="square" size="15" /> Stop
-                    </button>
-                  </>
-                )}
-                <span className="editor-command-divider" aria-hidden="true" />
-                <button
-                  onClick={() =>
-                    editorRef.current?.getAction("actions.find")?.run()
-                  }
-                >
-                  <FeatherIcon icon="search" size="15" /> Find
-                </button>
-                <button
-                  onClick={() =>
-                    editorRef.current
-                      ?.getAction("editor.action.startFindReplaceAction")
-                      ?.run()
-                  }
-                >
-                  <FeatherIcon icon="repeat" size="15" /> Replace
-                </button>
-                {isProseFile(active.name) && (
                   <button
-                    className={spellcheck ? "active" : ""}
-                    aria-pressed={spellcheck}
-                    title="Right-click an underlined word for suggestions, Replace all, or Add to dictionary"
-                    onClick={() => {
-                      const next = !spellcheck;
-                      setSpellcheck(next);
-                      setNotice(
-                        next
-                          ? "Spellcheck on · right-click an underlined word"
-                          : "Spellcheck off",
-                      );
-                    }}
+                    role="tab"
+                    aria-selected={editorCommandTab === "view"}
+                    className={editorCommandTab === "view" ? "active" : ""}
+                    onClick={() => setEditorCommandTab("view")}
                   >
-                    <FeatherIcon
-                      icon={spellcheck ? "check-square" : "square"}
-                      size="15"
-                    />{" "}
-                    Spellcheck
+                    <FeatherIcon icon="layout" size="14" /> View
                   </button>
-                )}
-                {!isMarkdownFile(active.name) && (
-                  <>
+                  <button
+                    role="tab"
+                    aria-selected={editorCommandTab === "editing"}
+                    className={editorCommandTab === "editing" ? "active" : ""}
+                    onClick={() => setEditorCommandTab("editing")}
+                  >
+                    <FeatherIcon icon="edit-3" size="14" /> Editing
+                  </button>
+                  {pythonFileActive && (
                     <button
-                      className={editorView === "split" ? "active" : ""}
-                      onClick={toggleSplitView}
+                      role="tab"
+                      aria-selected={editorCommandTab === "python"}
+                      className={editorCommandTab === "python" ? "active" : ""}
+                      onClick={() => setEditorCommandTab("python")}
                     >
-                      <FeatherIcon icon="columns" size="15" /> Split
+                      <FeatherIcon icon="code" size="14" /> Python
                     </button>
-                    <button
-                      className={editorView === "compare" ? "active" : ""}
-                      onClick={() =>
-                        editorView === "compare"
-                          ? setEditorView("single")
-                          : openCompare()
-                      }
-                    >
-                      <FeatherIcon icon="git-merge" size="15" /> Compare
-                    </button>
-                  </>
-                )}
+                  )}
+                </div>
+                <div
+                  className={`editor-command-bar editor-command-${editorCommandTab} horizontal-menu-scroll`}
+                  data-horizontal-menu
+                  role="toolbar"
+                  aria-label={`${editorCommandTab[0].toUpperCase()}${editorCommandTab.slice(1)} commands`}
+                >
+                  {editorCommandTab === "editing" && (
+                    <>
+                      <button
+                        title={`${shortcutModifier}+Z`}
+                        onClick={() => {
+                          editorRef.current?.trigger("toolbar", "undo", null);
+                          editorRef.current?.focus();
+                        }}
+                      >
+                        <FeatherIcon icon="corner-up-left" size="15" /> Undo
+                      </button>
+                      <button
+                        title={`${shortcutModifier}+Shift+Z`}
+                        onClick={() => {
+                          editorRef.current?.trigger("toolbar", "redo", null);
+                          editorRef.current?.focus();
+                        }}
+                      >
+                        <FeatherIcon icon="corner-up-right" size="15" /> Redo
+                      </button>
+                      <span
+                        className="editor-command-section-divider"
+                        aria-hidden="true"
+                      />
+                      <button
+                        className={dirty ? "active" : ""}
+                        title={`${shortcutModifier}+S`}
+                        onClick={() => void save()}
+                      >
+                        <FeatherIcon icon="save" size="15" /> Save
+                      </button>
+                      <button
+                        onClick={() => void saveEntryAs(entryForTab(active))}
+                      >
+                        <FeatherIcon icon="copy" size="15" /> Save As
+                      </button>
+                      <button
+                        disabled={!hasDirtyTabs}
+                        onClick={() => void saveAll()}
+                      >
+                        <FeatherIcon icon="layers" size="15" /> Save All
+                      </button>
+                      <button onClick={() => void openSaveHistory()}>
+                        <FeatherIcon icon="clock" size="15" /> Save history
+                      </button>
+                      <span
+                        className="editor-command-section-divider"
+                        aria-hidden="true"
+                      />
+                      <button
+                        onClick={() =>
+                          runEditorAction("editor.action.formatDocument")
+                        }
+                      >
+                        <FeatherIcon icon="align-left" size="15" /> Format
+                      </button>
+                      <button
+                        onClick={() =>
+                          runEditorAction("editor.action.commentLine")
+                        }
+                      >
+                        <FeatherIcon icon="message-square" size="15" /> Comment
+                      </button>
+                      <button
+                        onClick={() =>
+                          runEditorAction("editor.action.copyLinesDownAction")
+                        }
+                      >
+                        <FeatherIcon icon="copy" size="15" /> Duplicate line
+                      </button>
+                    </>
+                  )}
+                  {editorCommandTab === "view" && (
+                    <>
+                      <button
+                        onClick={() =>
+                          editorRef.current?.getAction("actions.find")?.run()
+                        }
+                      >
+                        <FeatherIcon icon="search" size="15" /> Find
+                      </button>
+                      <button
+                        onClick={() =>
+                          editorRef.current
+                            ?.getAction("editor.action.startFindReplaceAction")
+                            ?.run()
+                        }
+                      >
+                        <FeatherIcon icon="repeat" size="15" /> Replace
+                      </button>
+                      <button
+                        onClick={() =>
+                          runEditorAction("editor.action.gotoLine")
+                        }
+                      >
+                        <FeatherIcon icon="hash" size="15" /> Go to line
+                      </button>
+                      <span
+                        className="editor-command-section-divider"
+                        aria-hidden="true"
+                      />
+                      <label className="editor-command-zoom">
+                        <FeatherIcon icon="zoom-in" size="15" />
+                        <span>Zoom</span>
+                        <select
+                          aria-label="Editor zoom"
+                          value={editorFontSize}
+                          onChange={(event) =>
+                            setEditorFontSize(Number(event.target.value))
+                          }
+                        >
+                          {[12, 14, 16, 18, 20, 22, 24].map((size) => (
+                            <option key={size} value={size}>
+                              {size}px
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        className={wordWrap ? "active" : ""}
+                        aria-pressed={wordWrap}
+                        onClick={() => setWordWrap((current) => !current)}
+                      >
+                        <FeatherIcon icon="corner-down-left" size="15" /> Wrap
+                      </button>
+                      <button
+                        className={minimap ? "active" : ""}
+                        aria-pressed={minimap}
+                        onClick={() => setMinimap((current) => !current)}
+                      >
+                        <FeatherIcon icon="map" size="15" /> Minimap
+                      </button>
+                      {isProseFile(active.name) && (
+                        <button
+                          className={spellcheck ? "active" : ""}
+                          aria-pressed={spellcheck}
+                          title="Right-click an underlined word for suggestions, Replace all, or Add to dictionary"
+                          onClick={() => {
+                            const next = !spellcheck;
+                            setSpellcheck(next);
+                            setNotice(
+                              next
+                                ? "Spellcheck on · right-click an underlined word"
+                                : "Spellcheck off",
+                            );
+                          }}
+                        >
+                          <FeatherIcon
+                            icon={spellcheck ? "check-square" : "square"}
+                            size="15"
+                          />{" "}
+                          Spellcheck
+                        </button>
+                      )}
+                      {!isMarkdownFile(active.name) && (
+                        <>
+                          <span
+                            className="editor-command-section-divider"
+                            aria-hidden="true"
+                          />
+                          <button
+                            className={editorView === "split" ? "active" : ""}
+                            onClick={toggleSplitView}
+                          >
+                            <FeatherIcon icon="columns" size="15" /> Split
+                          </button>
+                          <button
+                            className={editorView === "compare" ? "active" : ""}
+                            onClick={() =>
+                              editorView === "compare"
+                                ? setEditorView("single")
+                                : openCompare()
+                            }
+                          >
+                            <FeatherIcon icon="git-merge" size="15" /> Compare
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {editorCommandTab === "python" && pythonFileActive && (
+                    <>
+                      <button
+                        className="editor-run-action"
+                        onClick={() => void run()}
+                        disabled={running || !runtime}
+                      >
+                        <FeatherIcon icon="play" size="15" /> Run
+                      </button>
+                      <button
+                        className="editor-stop-action"
+                        onClick={stopPythonProcess}
+                        disabled={!running}
+                      >
+                        <FeatherIcon icon="square" size="15" /> Stop
+                      </button>
+                      <button
+                        onClick={() => void debug()}
+                        disabled={running || !runtime}
+                      >
+                        <FeatherIcon icon="activity" size="15" /> Debug
+                      </button>
+                      <span
+                        className="editor-command-section-divider"
+                        aria-hidden="true"
+                      />
+                      <button
+                        className={
+                          terminalOpen && terminalView === "python"
+                            ? "active"
+                            : ""
+                        }
+                        onClick={() => {
+                          setTerminalOpen(true);
+                          setTerminalView("python");
+                        }}
+                      >
+                        <FeatherIcon icon="terminal" size="15" /> Terminal
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPythonEnvironmentCreateOpen(false);
+                          setPythonEnvironmentManagerOpen(true);
+                        }}
+                      >
+                        <FeatherIcon icon="cpu" size="15" /> Environment
+                      </button>
+                      <button
+                        className={pythonManagerOpen ? "active" : ""}
+                        onClick={() => {
+                          setTerminalOpen(true);
+                          setTerminalView("python");
+                          setPythonManagerOpen(true);
+                        }}
+                      >
+                        <FeatherIcon icon="package" size="15" /> Packages
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
               {isMarkdownFile(active.name) && (
                 <div
@@ -5635,10 +6334,9 @@ export function App() {
               {advancedSection === "runtimes" && (
                 <div className="advanced-content advanced-runtime-content">
                   <p>
-                    Existing venv, virtualenv, Poetry, tox, and Conda
-                    environments inside the project are detected and selected
-                    automatically. Run, Debug, Terminal, packages, and the agent
-                    share the selected interpreter.
+                    Download another Python runtime for osCode. Project
+                    environments are created, detected, and selected from the
+                    Python view in Terminal.
                   </p>
                   <div className="advanced-action-grid">
                     <button
@@ -5648,75 +6346,7 @@ export function App() {
                       <FeatherIcon icon="hard-drive" size="16" />
                       Use installed Python
                     </button>
-                    <button
-                      className="secondary-action"
-                      disabled={!project || !runtime}
-                      onClick={() => createVenv("")}
-                    >
-                      <FeatherIcon icon="folder-plus" size="16" />
-                      Create project .venv
-                    </button>
-                    <button
-                      className="secondary-action"
-                      disabled={!project}
-                      onClick={() => {
-                        void refreshRuntimes(true).then((selected) =>
-                          setNotice(
-                            selected?.scope === "project"
-                              ? `Using ${runtimeLabel(selected)}`
-                              : "No project environment found; the bundled Python runtime is ready",
-                          ),
-                        );
-                      }}
-                    >
-                      <FeatherIcon icon="refresh-cw" size="16" />
-                      Rescan project
-                    </button>
                   </div>
-                  {project && (
-                    <section className="advanced-subsection project-environment-settings">
-                      <span className="settings-label">
-                        PROJECT ENVIRONMENTS
-                      </span>
-                      <label className="advanced-select-row">
-                        <span>Active environment</span>
-                        <select
-                          className="runtime-select"
-                          value={runtime}
-                          onChange={(event) =>
-                            chooseRuntimeValue(event.target.value)
-                          }
-                        >
-                          {runtimeOptions}
-                          <option value="more">Download more…</option>
-                        </select>
-                      </label>
-                      <div className="named-env">
-                        <input
-                          className="field"
-                          aria-label="New environment name"
-                          placeholder="Environment name"
-                          value={envName}
-                          onChange={(event) => setEnvName(event.target.value)}
-                        />
-                        <button
-                          className="primary"
-                          disabled={!envName.trim()}
-                          onClick={() => createVenv(envName)}
-                        >
-                          Create
-                        </button>
-                      </div>
-                      <p>
-                        The selected environment is shared by Run, Debug, and
-                        Terminal. Named environments are created in the project.
-                        PyPI packages use osCode's bundled uv installer, so pip
-                        does not need to be installed globally. Existing Conda
-                        environments remain supported when their interpreter is
-                        selected.
-                      </p>
-                    </section>
-                  )}
                   <section className="advanced-subsection runtime-catalog">
                     <span className="settings-label">AVAILABLE PYTHON</span>
                     {["3.10", "3.11", "3.12", "3.13", "3.14"].map((v) => {
@@ -5821,89 +6451,97 @@ export function App() {
           )}
           <button
             className="terminal-toggle"
+            hidden={terminalOpen}
+            aria-expanded={terminalOpen}
             onClick={() => setTerminalOpen(!terminalOpen)}
           >
             <span>
               <FeatherIcon icon="terminal" size="15" />
               {tr("Terminal", "الطرفية")}
-              {pythonContext && runtime && (
-                <i className="env-badge" title={activeRuntimeLabel}>
-                  {activeRuntimeLabel}
-                </i>
-              )}
             </span>
             <FeatherIcon
               icon={terminalOpen ? "chevron-down" : "chevron-up"}
               size="15"
             />
           </button>
-          {terminalOpen && (
-            <div className="terminal-panel" style={{ height: terminalHeight }}>
-              <div
-                className="terminal-height-resizer"
-                role="separator"
-                aria-label="Resize terminal height"
-                aria-orientation="horizontal"
-                aria-valuemin={300}
-                aria-valuemax={760}
-                aria-valuenow={terminalHeight}
-                tabIndex={0}
-                onPointerDown={beginTerminalResize}
-                onKeyDown={(event) => {
-                  if (event.key !== "ArrowUp" && event.key !== "ArrowDown")
-                    return;
-                  event.preventDefault();
-                  setTerminalHeight((current) =>
-                    Math.max(
-                      300,
-                      Math.min(
-                        760,
-                        current + (event.key === "ArrowUp" ? 20 : -20),
-                      ),
+          <div
+            className="terminal-panel"
+            style={{ height: terminalHeight }}
+            hidden={!terminalOpen}
+          >
+            <div
+              className="terminal-height-resizer"
+              role="separator"
+              aria-label="Resize terminal height"
+              aria-orientation="horizontal"
+              aria-valuemin={280}
+              aria-valuemax={700}
+              aria-valuenow={terminalHeight}
+              tabIndex={0}
+              onPointerDown={beginTerminalResize}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown")
+                  return;
+                event.preventDefault();
+                setTerminalHeight((current) =>
+                  Math.max(
+                    280,
+                    Math.min(
+                      700,
+                      current + (event.key === "ArrowUp" ? 20 : -20),
                     ),
-                  );
-                }}
-              />
-              <div
-                className="terminal-controls"
-                role="toolbar"
-                aria-label="Terminal controls"
-              >
-                {pythonContext && (
-                  <div
-                    className="terminal-mode-row horizontal-menu-scroll"
-                    data-horizontal-menu
-                    aria-label="Terminal mode"
-                  >
-                    <div className="terminal-view-tabs">
-                      <button
-                        type="button"
-                        className={terminalView === "shell" ? "active" : ""}
-                        aria-pressed={terminalView === "shell"}
-                        onClick={() => setTerminalView("shell")}
-                      >
-                        <FeatherIcon icon="terminal" size="14" /> Shell
-                      </button>
-                      <button
-                        type="button"
-                        className={terminalView === "run" ? "active" : ""}
-                        aria-pressed={terminalView === "run"}
-                        onClick={() => setTerminalView("run")}
-                      >
-                        <FeatherIcon icon="play" size="14" /> Run output
-                        {running && <i className="running-dot" />}
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  ),
+                );
+              }}
+            />
+            <div
+              className="terminal-controls"
+              role="toolbar"
+              aria-label="Terminal controls"
+            >
+              <div className="terminal-primary-toolbar">
                 <div
-                  className="terminal-session-row horizontal-menu-scroll"
-                  data-horizontal-menu
-                  aria-label={
-                    terminalView === "shell" ? "Shell sessions" : "Run controls"
-                  }
+                  className="terminal-mode-tabs"
+                  role="tablist"
+                  aria-label="Terminal views"
                 >
-                  {terminalView === "shell" && (
+                  <button
+                    type="button"
+                    role="tab"
+                    className={`terminal-mode-tab shell ${terminalView === "shell" ? "active" : ""}`}
+                    aria-selected={terminalView === "shell"}
+                    onClick={() => setTerminalView("shell")}
+                  >
+                    <FeatherIcon icon="terminal" size="15" /> Shell
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    className={`terminal-mode-tab python ${terminalView === "python" ? "active" : ""}`}
+                    aria-selected={terminalView === "python"}
+                    onClick={() => setTerminalView("python")}
+                  >
+                    <FeatherIcon icon="code" size="15" /> Python
+                    {running && <i className="running-dot" />}
+                  </button>
+                </div>
+                <IconButton
+                  icon="x"
+                  label="Close terminal panel"
+                  className="terminal-panel-close"
+                  onClick={() => setTerminalOpen(false)}
+                />
+              </div>
+              {terminalView === "shell" ? (
+                <div
+                  className="terminal-session-toolbar"
+                  aria-label="Shell sessions and actions"
+                >
+                  <div
+                    className="terminal-shell-scroll horizontal-menu-scroll"
+                    data-horizontal-menu
+                    aria-label="Scrollable shell sessions"
+                  >
                     <div
                       className="shell-tab-strip"
                       role="tablist"
@@ -5926,6 +6564,14 @@ export function App() {
                           <button
                             aria-label={`Close ${shell.title}`}
                             onClick={() => {
+                              void window.oscode.terminalDispose(
+                                terminalProcessId(shell),
+                              );
+                              if (project?.root)
+                                removeTerminalTranscript(
+                                  project.root,
+                                  shell.id,
+                                );
                               setShellTabs((current) =>
                                 current.filter((item) => item.id !== shell.id),
                               );
@@ -5942,420 +6588,463 @@ export function App() {
                         </div>
                       ))}
                     </div>
-                  )}
-                  {terminalView === "run" && (
-                    <div
-                      className="terminal-run-actions"
-                      aria-label="Run controls"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => void run()}
-                        disabled={
-                          running || !runtime || !active?.name.endsWith(".py")
-                        }
-                      >
-                        <FeatherIcon icon="play" size="14" /> Run script
-                      </button>
-                      <button
-                        type="button"
-                        className="terminal-run-stop"
-                        disabled={!running}
-                        onClick={stopPythonProcess}
-                      >
-                        <FeatherIcon icon="square" size="14" /> Stop
-                      </button>
-                      <button
-                        type="button"
-                        className="terminal-clear"
-                        disabled={!runOutput}
-                        onClick={() => setRunOutput("")}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <div
-                  className="terminal-tools-row horizontal-menu-scroll"
-                  data-horizontal-menu
-                  role="group"
-                  aria-label="Terminal actions"
-                >
-                  {terminalView === "shell" && (
-                    <div
-                      className="terminal-session-actions"
-                      aria-label="Terminal session controls"
-                    >
-                      <IconButton
-                        icon="plus"
-                        label="New terminal"
-                        className="terminal-session-control"
-                        onClick={() => {
-                          shellSequenceRef.current += 1;
-                          const next = {
-                            id: `shell-${globalThis.crypto.randomUUID()}`,
-                            title: `Shell ${shellSequenceRef.current}`,
-                            restart: 0,
-                          };
-                          setShellTabs((current) => [...current, next]);
-                          setActiveShellId(next.id);
-                        }}
-                      />
-                      <IconButton
-                        icon="refresh-cw"
-                        label="Restart terminal"
-                        className="terminal-session-control"
-                        disabled={!activeTerminalId}
-                        onClick={() => {
-                          if (
-                            !window.confirm(
-                              "Restart this terminal? Its current process will stop.",
-                            )
+                  </div>
+                  <span
+                    className="terminal-session-divider"
+                    aria-hidden="true"
+                  />
+                  <div
+                    className="terminal-session-actions"
+                    aria-label="Terminal session controls"
+                  >
+                    <IconButton
+                      icon="plus"
+                      label="New terminal"
+                      className="terminal-session-control"
+                      onClick={() => {
+                        shellSequenceRef.current += 1;
+                        const next = {
+                          id: `shell-${globalThis.crypto.randomUUID()}`,
+                          title: `Shell ${shellSequenceRef.current}`,
+                          restart: 0,
+                        };
+                        setShellTabs((current) => [...current, next]);
+                        setActiveShellId(next.id);
+                      }}
+                    />
+                    <IconButton
+                      icon="refresh-cw"
+                      label="Restart terminal"
+                      className="terminal-session-control"
+                      disabled={!activeTerminalId}
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            "Restart this terminal? Its current process will stop.",
                           )
-                            return;
-                          setShellTabs((current) =>
-                            current.map((item) =>
-                              item.id === activeTerminalId
-                                ? { ...item, restart: item.restart + 1 }
-                                : item,
+                        )
+                          return;
+                        const activeShell = shellTabs.find(
+                          (item) => item.id === activeTerminalId,
+                        );
+                        if (!activeShell) return;
+                        void window.oscode
+                          .terminalDispose(terminalProcessId(activeShell))
+                          .finally(() =>
+                            setShellTabs((current) =>
+                              current.map((item) =>
+                                item.id === activeTerminalId
+                                  ? { ...item, restart: item.restart + 1 }
+                                  : item,
+                              ),
                             ),
                           );
-                        }}
-                      />
-                    </div>
-                  )}
-                  {pythonContext && (
-                    <div className="terminal-python-tools">
-                      <button
-                        type="button"
-                        className={pythonManagerOpen ? "active" : ""}
-                        aria-expanded={pythonManagerOpen}
-                        onClick={() => {
-                          setPythonManagerOpen((open) => !open);
-                          setUvHelpOpen(false);
-                        }}
-                      >
-                        <FeatherIcon icon="package" size="13" /> Packages
-                      </button>
-                      <button
-                        type="button"
-                        className={uvHelpOpen ? "active" : ""}
-                        aria-expanded={uvHelpOpen}
-                        onClick={() => {
-                          setUvHelpOpen((open) => !open);
-                          setPythonManagerOpen(false);
-                        }}
-                      >
-                        <FeatherIcon icon="book-open" size="13" /> UV help
-                      </button>
-                    </div>
-                  )}
+                      }}
+                    />
+                  </div>
                 </div>
-              </div>
-              <div className="terminal-workspace">
-                <div className="terminal-main">
-                  {terminalView === "shell" ? (
-                    <>
-                      {shellTabs.map((shell) => (
-                        <TerminalPanel
-                          key={`${shell.id}-${shell.restart}`}
-                          id={`${shell.id}-${shell.restart}`}
-                          active={shell.id === activeTerminalId}
-                          interpreter={projectEnvironment ? runtime : ""}
-                          theme={theme}
-                        />
-                      ))}
-                      {!shellTabs.length && (
-                        <button
-                          className="terminal-empty-action"
-                          onClick={() => {
-                            const next = {
-                              id: `shell-${globalThis.crypto.randomUUID()}`,
-                              title: `Shell ${shellSequenceRef.current}`,
-                              restart: 0,
-                            };
-                            setShellTabs([next]);
-                            setActiveShellId(next.id);
-                          }}
-                        >
-                          Open a terminal
-                        </button>
+              ) : (
+                <>
+                  <div className="terminal-python-environment-bar">
+                    <span className="terminal-python-environment-copy">
+                      <FeatherIcon icon="cpu" size="16" />
+                      <span>
+                        <b>Python environment</b>
+                        <small>{activeRuntimeLabel}</small>
+                      </span>
+                    </span>
+                    <select
+                      className="runtime-select"
+                      value={runtime}
+                      onChange={(event) =>
+                        chooseRuntimeValue(event.target.value)
+                      }
+                      aria-label="Python interpreter"
+                    >
+                      <option value="" disabled>
+                        Choose an interpreter
+                      </option>
+                      {!!osCodeRuntimes.length && (
+                        <optgroup label="osCode environments">
+                          {osCodeRuntimes.map(runtimeOption)}
+                        </optgroup>
                       )}
-                    </>
-                  ) : (
-                    <pre className="run-console">
-                      {runOutput || "Run a Python file to see its output here."}
-                    </pre>
-                  )}
-                  {terminalView === "run" && running && (
-                    <form
-                      className="run-input"
-                      onSubmit={async (event) => {
-                        event.preventDefault();
-                        if (!runInput) return;
-                        try {
-                          await window.oscode.writePython(`${runInput}\n`);
-                          setRunInput("");
-                        } catch (e) {
-                          setNotice(
-                            errorMessage(e, "Process input could not be sent"),
-                          );
-                        }
+                      {!!projectRuntimes.length && (
+                        <optgroup label="Project environments">
+                          {projectRuntimes.map(runtimeOption)}
+                        </optgroup>
+                      )}
+                      {!!systemRuntimes.length && (
+                        <optgroup label="System interpreters">
+                          {systemRuntimes.map(runtimeOption)}
+                        </optgroup>
+                      )}
+                      <option value="more">Download more…</option>
+                    </select>
+                    <div className="terminal-python-environment-actions">
+                      <button
+                        type="button"
+                        className="python-open-environment-manager"
+                        disabled={!project}
+                        onClick={() => {
+                          setPythonEnvironmentManagerOpen(true);
+                          setPythonEnvironmentCreateOpen(false);
+                          setPythonEnvironmentPendingDelete(null);
+                        }}
+                      >
+                        <FeatherIcon icon="sliders" size="14" />
+                        Manage
+                      </button>
+                    </div>
+                  </div>
+                  <div
+                    className="terminal-python-actions horizontal-menu-scroll"
+                    data-horizontal-menu
+                    role="group"
+                    aria-label="Python actions"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void run()}
+                      disabled={
+                        running || !runtime || !active?.name.endsWith(".py")
+                      }
+                    >
+                      <FeatherIcon icon="play" size="14" /> Run
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-run-stop"
+                      disabled={!running}
+                      onClick={stopPythonProcess}
+                    >
+                      <FeatherIcon icon="square" size="14" /> Stop
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-clear"
+                      disabled={!runOutput}
+                      onClick={() => setRunOutput("")}
+                    >
+                      Clear
+                    </button>
+                    <span
+                      className="terminal-action-divider"
+                      aria-hidden="true"
+                    />
+                    <button
+                      type="button"
+                      className={pythonManagerOpen ? "active" : ""}
+                      aria-expanded={pythonManagerOpen}
+                      onClick={() => {
+                        setPythonManagerOpen((open) => !open);
+                        setUvHelpOpen(false);
                       }}
                     >
-                      <FeatherIcon icon="corner-down-left" size="14" />
-                      <input
-                        aria-label="Python process input"
-                        placeholder="Send input to the running script…"
-                        value={runInput}
-                        onChange={(event) => setRunInput(event.target.value)}
-                      />
-                      <button type="submit" disabled={!runInput}>
-                        Send
-                      </button>
-                    </form>
-                  )}
-                </div>
-                {pythonContext && pythonManagerOpen && (
-                  <aside className="python-help python-package-manager">
-                    <div className="python-drawer-head">
-                      <span>
-                        <b>Project libraries</b>
-                        <small>
-                          {pythonPackageLocation === "project"
-                            ? `Project ${
-                                pythonPackageManager === "conda"
-                                  ? "Conda"
-                                  : "Python"
-                              } environment · inside project`
-                            : "App environment · outside project"}{" "}
-                          · {pythonPackages.length} installed
-                        </small>
-                      </span>
-                      <div
-                        className="python-drawer-actions horizontal-menu-scroll"
-                        data-horizontal-menu
-                      >
-                        <button
-                          aria-label="Refresh installed Python packages"
-                          disabled={Boolean(packageOperation)}
-                          onClick={() => void refreshPythonPackages()}
-                        >
-                          <FeatherIcon icon="refresh-cw" size="15" />
-                          Refresh
-                        </button>
-                        <button
-                          aria-label="Close Python packages"
-                          onClick={() => setPythonManagerOpen(false)}
-                        >
-                          <FeatherIcon icon="x" size="15" />
-                          Close
-                        </button>
-                      </div>
-                    </div>
-                    {pythonPackageError && (
-                      <div className="python-package-error" role="alert">
-                        <FeatherIcon icon="alert-circle" size="17" />
-                        <span>
-                          <b>Python environment unavailable</b>
-                          <small>{pythonPackageError}</small>
-                        </span>
-                      </div>
-                    )}
-                    <div className="python-environment-summary">
-                      <span>
-                        <b>
-                          {pythonPackageLocation === "project"
-                            ? "Using the project environment"
-                            : "Using osCode application data"}
-                        </b>
-                        <small>
-                          {activeRuntimeLabel}
-                          {pythonPackageLocation === "project"
-                            ? ` · PyPI packages are installed into this project's ${
-                                pythonPackageManager === "conda"
-                                  ? "Conda environment"
-                                  : "Python environment"
-                              }.`
-                            : " · Packages stay outside the project folder."}
-                        </small>
-                      </span>
-                      {pythonPackageLocation === "project" ? (
-                        <button
-                          type="button"
-                          className="python-create-project-env"
-                          disabled={!appRuntime || Boolean(packageOperation)}
-                          onClick={() => {
-                            if (!appRuntime) return;
-                            void selectRuntime(appRuntime.path);
-                            setNotice(
-                              "Using an app-managed environment outside the project",
-                            );
-                          }}
-                        >
-                          <FeatherIcon icon="hard-drive" size="14" />
-                          Use app environment
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="python-create-project-env"
-                          disabled={Boolean(packageOperation)}
-                          onClick={() => void createVenv("")}
-                        >
-                          <FeatherIcon icon="folder-plus" size="14" />
-                          Create project .venv
-                        </button>
-                      )}
-                    </div>
-                    {packageOperation && (
-                      <div
-                        className="python-package-progress"
-                        role="progressbar"
-                        aria-label={packageOperation}
-                      >
-                        <span />
-                        <small>{packageOperation}…</small>
-                      </div>
-                    )}
-                    <div className="python-package-controls">
-                      <form
-                        className="python-package-form"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void installProjectPackage();
-                        }}
-                      >
-                        <input
-                          aria-label="Package to install"
-                          placeholder="Package name, e.g. ultralytics"
-                          value={pythonPackage}
-                          disabled={
-                            !project || !runtime || Boolean(packageOperation)
-                          }
-                          onChange={(event) =>
-                            setPythonPackage(event.target.value)
-                          }
-                        />
-                        <button
-                          type="submit"
-                          disabled={
-                            !project ||
-                            !runtime ||
-                            !pythonPackage.trim() ||
-                            Boolean(packageOperation)
-                          }
-                        >
-                          <FeatherIcon icon="plus" size="15" />
-                          Add
-                        </button>
-                      </form>
-                      {!!pythonPackages.length && (
-                        <label className="python-package-search">
-                          <FeatherIcon icon="search" size="15" />
-                          <input
-                            type="search"
-                            aria-label="Filter installed Python packages"
-                            placeholder="Filter installed libraries"
-                            value={pythonPackageSearch}
-                            onChange={(event) =>
-                              setPythonPackageSearch(event.target.value)
-                            }
-                          />
-                        </label>
-                      )}
-                    </div>
-                    {!pythonPackageEnvironment && !packageOperation && (
-                      <p className="python-package-hint">
-                        Add uses the selected project environment when one is
-                        present. Otherwise it creates an app-managed environment
-                        in osCode application data. The bundled uv installer is
-                        pip-compatible across macOS, Windows, and Linux.
-                      </p>
-                    )}
-                    <div
-                      className="python-package-list"
-                      aria-label="Installed Python packages"
+                      <FeatherIcon icon="package" size="13" /> Packages
+                    </button>
+                    <button
+                      type="button"
+                      className={uvHelpOpen ? "active" : ""}
+                      aria-expanded={uvHelpOpen}
+                      onClick={() => {
+                        setUvHelpOpen((open) => !open);
+                        setPythonManagerOpen(false);
+                      }}
                     >
-                      {filteredPythonPackages.map((item) => (
-                        <article key={item.name}>
-                          <span>
-                            <b>{item.name}</b>
-                            <small>
-                              {item.version}
-                              {item.editableProjectLocation
-                                ? " · editable"
-                                : ""}
-                            </small>
-                          </span>
-                          <button
-                            aria-label={`Remove ${item.name}`}
-                            title={`Remove ${item.name}`}
-                            disabled={Boolean(packageOperation)}
-                            onClick={() =>
-                              void uninstallProjectPackage(item.name)
-                            }
-                          >
-                            <FeatherIcon icon="trash-2" size="14" />
-                            Remove
-                          </button>
-                        </article>
-                      ))}
-                      {!packageOperation && !pythonPackages.length && (
-                        <p>
-                          No libraries installed yet. Add a package here, or
-                          create or open a project venv/Conda environment if you
-                          want dependencies stored with the project.
-                        </p>
-                      )}
-                      {!packageOperation &&
-                        Boolean(pythonPackages.length) &&
-                        !filteredPythonPackages.length && (
-                          <p>No installed libraries match this search.</p>
-                        )}
-                    </div>
-                  </aside>
+                      <FeatherIcon icon="book-open" size="13" /> UV help
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="terminal-workspace">
+              <div className="terminal-main">
+                {shellTabs.map((shell) => (
+                  <TerminalPanel
+                    key={`${shell.id}-${shell.restart}`}
+                    id={terminalProcessId(shell)}
+                    persistenceId={shell.id}
+                    projectRoot={project?.root || ""}
+                    active={
+                      terminalOpen &&
+                      terminalView === "shell" &&
+                      shell.id === activeTerminalId
+                    }
+                    interpreter={environmentActive ? runtime : ""}
+                    theme={theme}
+                  />
+                ))}
+                {terminalView === "shell" && !shellTabs.length && (
+                  <button
+                    className="terminal-empty-action"
+                    onClick={() => {
+                      const next = {
+                        id: `shell-${globalThis.crypto.randomUUID()}`,
+                        title: `Shell ${shellSequenceRef.current}`,
+                        restart: 0,
+                      };
+                      setShellTabs([next]);
+                      setActiveShellId(next.id);
+                    }}
+                  >
+                    Open a terminal
+                  </button>
                 )}
-                {pythonContext && uvHelpOpen && (
-                  <aside className="uv-helpbook">
-                    <div className="compact-panel-head">
-                      <b>UV help</b>
-                      <IconButton
-                        icon="x"
-                        label="Close UV help"
-                        onClick={() => setUvHelpOpen(false)}
-                      />
-                    </div>
+                <pre className="run-console" hidden={terminalView !== "python"}>
+                  {runOutput || "Run a Python file to see its output here."}
+                </pre>
+                {terminalView === "python" && running && (
+                  <form
+                    className="run-input"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      if (!runInput) return;
+                      try {
+                        await window.oscode.writePython(`${runInput}\n`);
+                        setRunInput("");
+                      } catch (e) {
+                        setNotice(
+                          errorMessage(e, "Process input could not be sent"),
+                        );
+                      }
+                    }}
+                  >
+                    <FeatherIcon icon="corner-down-left" size="14" />
                     <input
-                      autoFocus
-                      type="search"
-                      aria-label="Search UV help"
-                      placeholder="Search UV commands"
-                      value={uvHelpSearch}
-                      onChange={(event) => setUvHelpSearch(event.target.value)}
+                      aria-label="Python process input"
+                      placeholder="Send input to the running script…"
+                      value={runInput}
+                      onChange={(event) => setRunInput(event.target.value)}
                     />
-                    <div>
-                      {uvHelpEntries
-                        .filter((entry) =>
-                          entry
-                            .join(" ")
-                            .toLowerCase()
-                            .includes(uvHelpSearch.toLowerCase()),
-                        )
-                        .map(([title, command, detail]) => (
-                          <article key={command}>
-                            <b>{title}</b>
-                            <code>{command}</code>
-                            <p>{detail}</p>
-                          </article>
-                        ))}
-                    </div>
-                  </aside>
+                    <button type="submit" disabled={!runInput}>
+                      Send
+                    </button>
+                  </form>
                 )}
               </div>
+              {terminalView === "python" && pythonManagerOpen && (
+                <aside className="python-help python-package-manager">
+                  <div className="python-drawer-head">
+                    <span>
+                      <b>Project libraries</b>
+                      <small>
+                        {pythonPackageLocation === "project"
+                          ? `Project ${
+                              pythonPackageManager === "conda"
+                                ? "Conda"
+                                : "Python"
+                            } environment · inside project`
+                          : "osCode environment · outside project"}{" "}
+                        · {pythonPackages.length} installed
+                      </small>
+                    </span>
+                    <div
+                      className="python-drawer-actions horizontal-menu-scroll"
+                      data-horizontal-menu
+                    >
+                      <button
+                        aria-label="Refresh installed Python packages"
+                        disabled={Boolean(packageOperation)}
+                        onClick={() => void refreshPythonPackages()}
+                      >
+                        <FeatherIcon icon="refresh-cw" size="15" />
+                        Refresh
+                      </button>
+                      <button
+                        aria-label="Close Python packages"
+                        onClick={() => setPythonManagerOpen(false)}
+                      >
+                        <FeatherIcon icon="x" size="15" />
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                  {pythonPackageError && (
+                    <div className="python-package-error" role="alert">
+                      <FeatherIcon icon="alert-circle" size="17" />
+                      <span>
+                        <b>Python environment unavailable</b>
+                        <small>{pythonPackageError}</small>
+                      </span>
+                    </div>
+                  )}
+                  <div className="python-environment-summary">
+                    <span>
+                      <b>
+                        {pythonPackageLocation === "project"
+                          ? "Using the project environment"
+                          : "Using osCode application data"}
+                      </b>
+                      <small>
+                        {activeRuntimeLabel}
+                        {pythonPackageLocation === "project"
+                          ? ` · PyPI packages are installed into this project's ${
+                              pythonPackageManager === "conda"
+                                ? "Conda environment"
+                                : "Python environment"
+                            }.`
+                          : " · Packages stay outside the project folder."}
+                      </small>
+                    </span>
+                    <button
+                      type="button"
+                      className="python-create-project-env"
+                      disabled={Boolean(packageOperation)}
+                      onClick={() => {
+                        setPythonEnvironmentManagerOpen(true);
+                        setPythonEnvironmentCreateOpen(false);
+                        setPythonEnvironmentPendingDelete(null);
+                      }}
+                    >
+                      <FeatherIcon icon="sliders" size="14" />
+                      Manage interpreters
+                    </button>
+                  </div>
+                  {packageOperation && (
+                    <div
+                      className="python-package-progress"
+                      role="progressbar"
+                      aria-label={packageOperation}
+                    >
+                      <span />
+                      <small>{packageOperation}…</small>
+                    </div>
+                  )}
+                  <div className="python-package-controls">
+                    <form
+                      className="python-package-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void installProjectPackage();
+                      }}
+                    >
+                      <input
+                        aria-label="Package to install"
+                        placeholder="Package name, e.g. ultralytics"
+                        value={pythonPackage}
+                        disabled={
+                          !project || !runtime || Boolean(packageOperation)
+                        }
+                        onChange={(event) =>
+                          setPythonPackage(event.target.value)
+                        }
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          !project ||
+                          !runtime ||
+                          !pythonPackage.trim() ||
+                          Boolean(packageOperation)
+                        }
+                      >
+                        <FeatherIcon icon="plus" size="15" />
+                        Add
+                      </button>
+                    </form>
+                    {!!pythonPackages.length && (
+                      <label className="python-package-search">
+                        <FeatherIcon icon="search" size="15" />
+                        <input
+                          type="search"
+                          aria-label="Filter installed Python packages"
+                          placeholder="Filter installed libraries"
+                          value={pythonPackageSearch}
+                          onChange={(event) =>
+                            setPythonPackageSearch(event.target.value)
+                          }
+                        />
+                      </label>
+                    )}
+                  </div>
+                  {!pythonPackageEnvironment && !packageOperation && (
+                    <p className="python-package-hint">
+                      Add uses the selected project environment when one is
+                      present. Otherwise osCode creates an environment in
+                      application data. The bundled uv installer is
+                      pip-compatible across macOS, Windows, and Linux.
+                    </p>
+                  )}
+                  <div
+                    className="python-package-list"
+                    aria-label="Installed Python packages"
+                  >
+                    {filteredPythonPackages.map((item) => (
+                      <article key={item.name}>
+                        <span>
+                          <b>{item.name}</b>
+                          <small>
+                            {item.version}
+                            {item.editableProjectLocation ? " · editable" : ""}
+                          </small>
+                        </span>
+                        <button
+                          aria-label={`Remove ${item.name}`}
+                          title={`Remove ${item.name}`}
+                          disabled={Boolean(packageOperation)}
+                          onClick={() =>
+                            void uninstallProjectPackage(item.name)
+                          }
+                        >
+                          <FeatherIcon icon="trash-2" size="14" />
+                          Remove
+                        </button>
+                      </article>
+                    ))}
+                    {!packageOperation && !pythonPackages.length && (
+                      <p>
+                        No libraries installed yet. Add a package here, or
+                        create or open a project venv/Conda environment if you
+                        want dependencies stored with the project.
+                      </p>
+                    )}
+                    {!packageOperation &&
+                      Boolean(pythonPackages.length) &&
+                      !filteredPythonPackages.length && (
+                        <p>No installed libraries match this search.</p>
+                      )}
+                  </div>
+                </aside>
+              )}
+              {terminalView === "python" && uvHelpOpen && (
+                <aside className="uv-helpbook">
+                  <div className="compact-panel-head">
+                    <b>UV help</b>
+                    <IconButton
+                      icon="x"
+                      label="Close UV help"
+                      onClick={() => setUvHelpOpen(false)}
+                    />
+                  </div>
+                  <input
+                    autoFocus
+                    type="search"
+                    aria-label="Search UV help"
+                    placeholder="Search UV commands"
+                    value={uvHelpSearch}
+                    onChange={(event) => setUvHelpSearch(event.target.value)}
+                  />
+                  <div>
+                    {uvHelpEntries
+                      .filter((entry) =>
+                        entry
+                          .join(" ")
+                          .toLowerCase()
+                          .includes(uvHelpSearch.toLowerCase()),
+                      )
+                      .map(([title, command, detail]) => (
+                        <article key={command}>
+                          <b>{title}</b>
+                          <code>{command}</code>
+                          <p>{detail}</p>
+                        </article>
+                      ))}
+                  </div>
+                </aside>
+              )}
             </div>
-          )}
+          </div>
         </main>
         {preferencesReady && (
           <>
@@ -6405,7 +7094,8 @@ export function App() {
               onThinkingEnabled={setAiThinkingEnabled}
               onChanged={refreshAfterAiChanges}
               onNotice={setNotice}
-              onChatOpened={() => {
+              onChatOpened={(openedChatId) => {
+                setActiveAiChatId(openedChatId || "");
                 setRequestedAiChat("");
                 if (aiAttention?.kind !== "permission")
                   handleAiAttentionChange(null);

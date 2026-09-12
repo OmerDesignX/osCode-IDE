@@ -24,8 +24,114 @@ import {
   reviewProjectDownloadCommand,
   reviewRunCommand,
   isProjectDownloadCommand,
+  compactToolResultForModel,
+  fitPromptToContext,
+  kvCacheProfile,
+  llamaPerformanceArguments,
+  promptCharacterBudget,
+  shouldRunImplementationTracker,
+  shouldRunToolPlanner,
+  shouldUseOsCodeSupervisor,
   toolResultForModel,
 } from "../dist-electron/main/ai.js";
+
+test("the full 262k context stays available while inference helpers reduce repeated work", () => {
+  assert.ok(promptCharacterBudget(262144, 4096) > 800_000);
+  const oversized = `system:${"a".repeat(1_100_000)}:recent`;
+  const fitted = fitPromptToContext(oversized, 262144, 4096);
+  assert.ok(fitted.length > 800_000);
+  assert.match(fitted, /^system:/);
+  assert.match(fitted, /:recent$/);
+  assert.deepEqual(kvCacheProfile(262144), { llama: "q8_0", mlxBits: 8 });
+  assert.deepEqual(kvCacheProfile(262144, "fast"), {
+    llama: "q4_0",
+    mlxBits: 4,
+  });
+});
+
+test("llama performance options are capability-gated", () => {
+  assert.deepEqual(llamaPerformanceArguments("--spec-type TYPE"), [
+    "--spec-type",
+    "ngram-simple",
+  ]);
+  assert.deepEqual(llamaPerformanceArguments("ordinary help"), []);
+});
+
+test("role scheduling avoids redundant private passes on a focused edit", () => {
+  assert.equal(
+    shouldRunToolPlanner({
+      activeFile: "src/App.tsx",
+      projectFileCount: 40,
+      request: "fix the label in this button",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRunToolPlanner({
+      activeFile: "src/App.tsx",
+      projectFileCount: 40,
+      request: "install the package and run the build",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRunImplementationTracker({
+      trigger: "normal checkpoint",
+      changedFiles: ["src/App.tsx"],
+      failedTools: [],
+      wroteProjectFile: true,
+      verifiedProjectWork: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRunImplementationTracker({
+      trigger: "the worker stalled",
+      changedFiles: [],
+      failedTools: ["run_command"],
+      wroteProjectFile: false,
+      verifiedProjectWork: false,
+    }),
+    true,
+  );
+});
+
+test("the built-in osCode agent team stays available without Auto permissions", () => {
+  assert.equal(
+    shouldUseOsCodeSupervisor({
+      builtInModel: true,
+      implementationRequest: false,
+      fileAccess: false,
+      editMode: "read-only",
+      terminalMode: "ask",
+      autoInstall: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldUseOsCodeSupervisor({
+      builtInModel: false,
+      implementationRequest: true,
+      fileAccess: true,
+      editMode: "auto",
+      terminalMode: "auto",
+      autoInstall: true,
+    }),
+    false,
+  );
+});
+
+test("large command output is compacted around useful diagnostics", () => {
+  const result = JSON.stringify({
+    exitCode: 1,
+    stdout: `${"ordinary log\n".repeat(10_000)}fatal error: missing header\n`,
+    stderr: "build failed",
+  });
+  const compacted = compactToolResultForModel("run_command", result);
+  assert.ok(compacted.length < 64_000);
+  assert.match(compacted, /fatal error: missing header/);
+  assert.match(compacted, /build failed/);
+});
 
 test("automatic Intel macOS inference can retry without Metal", () => {
   assert.equal(shouldRetryLlamaOnCpu("darwin", "x64", "auto"), true);
@@ -199,6 +305,16 @@ test("attachments are decoded locally and represented honestly for each engine",
     attachmentContextForModel([image], "ollama")[0],
     /pixels are supplied directly to the selected local model/,
   );
+  const staleCapabilityPrompt = attachmentContextForModel([image], "mlx", {
+    text: true,
+    documents: true,
+    images: false,
+    video: false,
+    audio: false,
+    mediaInput: false,
+  })[0];
+  assert.match(staleCapabilityPrompt, /Inspect the image itself/);
+  assert.doesNotMatch(staleCapabilityPrompt, /cannot receive image pixels/i);
   assert.equal(
     hasPrivateAttachmentContext([
       { role: "user", content: "Review it", attachments: [image] },
@@ -291,7 +407,10 @@ test("private multimodal files are short-lived and local runtimes receive media 
       mediaInput: false,
     },
   );
-  assert.deepEqual(textOnlyRouting[0].attachments, []);
+  assert.deepEqual(
+    textOnlyRouting[0].attachments.map((attachment) => attachment.kind),
+    ["image"],
+  );
   await media.cleanup();
   await assert.rejects(fs.stat(media.root), { code: "ENOENT" });
 
@@ -1718,6 +1837,60 @@ test("AI write tool obeys the edit permission", async (t) => {
       chat.id,
     ),
     /disabled/,
+  );
+});
+
+test("focused replacements change one exact section and reject ambiguous edits", async (t) => {
+  const { root, base, service, chat } = await fixture();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+  const target = path.join(root, "src", "focused.ts");
+  await fs.writeFile(target, "const first = 1;\nconst second = 2;\n");
+  const changed = new Set();
+  const result = await service.runTool(
+    {
+      name: "replace_in_file",
+      arguments: {
+        path: "src/focused.ts",
+        old_text: "const second = 2;",
+        new_text: "const second = 3;",
+      },
+    },
+    "auto",
+    changed,
+    [],
+    true,
+    false,
+    chat.id,
+  );
+  assert.equal(result, "Saved src/focused.ts");
+  assert.deepEqual([...changed], ["src/focused.ts"]);
+  assert.equal(
+    await fs.readFile(target, "utf8"),
+    "const first = 1;\nconst second = 3;\n",
+  );
+
+  await fs.writeFile(target, "repeat\nrepeat\n");
+  await assert.rejects(
+    service.runTool(
+      {
+        name: "replace_in_file",
+        arguments: {
+          path: "src/focused.ts",
+          old_text: "repeat",
+          new_text: "changed",
+        },
+      },
+      "auto",
+      new Set(),
+      [],
+      true,
+      false,
+      chat.id,
+    ),
+    /matches more than once/,
   );
 });
 
@@ -3227,6 +3400,7 @@ test("coding work starts from the active file and cannot loop in inspection", as
       assert.deepEqual(names.sort(), [
         "copy_file",
         "delete_path",
+        "replace_in_file",
         "write_file",
       ]);
       return {

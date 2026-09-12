@@ -250,6 +250,8 @@ contextBridge.exposeInMainWorld("oscode", {
     ipcRenderer.invoke("python:install", version),
   createVenv: (interpreter: string, name?: string) =>
     ipcRenderer.invoke("python:create-venv", interpreter, name),
+  deleteVenv: (interpreter: string) =>
+    ipcRenderer.invoke("python:delete-venv", interpreter),
   listPythonPackages: (interpreter: string) =>
     ipcRenderer.invoke("python:list-packages", interpreter),
   installPythonPackage: (interpreter: string, packageSpec: string) =>

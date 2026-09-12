@@ -562,6 +562,7 @@ export function AiPanel({
     compacted: false,
   });
   const conversationRef = useRef<HTMLDivElement>(null);
+  const footerControlsRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const followConversationRef = useRef(true);
   const previousBusyRef = useRef(false);
@@ -1180,6 +1181,8 @@ export function AiPanel({
       setOllamaPickerOpen(false);
       setCustomListOpen(false);
       setChatTabMenuId("");
+      setTierPickerOpen(false);
+      setPermissionsDrawerOpen(false);
       if (expanded) setExpanded(false);
     };
     document.addEventListener("keydown", closeOnEscape);
@@ -1195,6 +1198,18 @@ export function AiPanel({
     document.addEventListener("pointerdown", closeMenu);
     return () => document.removeEventListener("pointerdown", closeMenu);
   }, [chatTabMenuId]);
+  useEffect(() => {
+    if (!tierPickerOpen && !permissionsDrawerOpen) return;
+    const closeFooterPopovers = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && footerControlsRef.current?.contains(target)) return;
+      setTierPickerOpen(false);
+      setPermissionsDrawerOpen(false);
+    };
+    document.addEventListener("pointerdown", closeFooterPopovers, true);
+    return () =>
+      document.removeEventListener("pointerdown", closeFooterPopovers, true);
+  }, [permissionsDrawerOpen, tierPickerOpen]);
   useEffect(() => {
     const openRequestedChat = (event: Event) => {
       const requested = (event as CustomEvent<string>).detail;
@@ -1724,6 +1739,7 @@ export function AiPanel({
         onAttentionChange?.(
           {
             kind: needsInput ? "input" : "response",
+            chatId: executionChatId,
             title: needsInput
               ? "osCode needs your input"
               : "osCode finished responding",
@@ -1832,6 +1848,7 @@ export function AiPanel({
         onAttentionChange?.(
           {
             kind: "response",
+            chatId: executionChatId,
             title: "osCode request stopped",
             detail: message,
           },
@@ -1924,6 +1941,7 @@ export function AiPanel({
         onAttentionChange?.(
           {
             kind: "permission",
+            chatId: chat.id,
             title: response.permissionRequest.title,
             detail: response.permissionRequest.detail,
             permissionKind: response.permissionRequest.kind,
@@ -2265,6 +2283,7 @@ export function AiPanel({
     onAttentionChange?.(
       {
         kind: "permission",
+        chatId,
         title: permissionRequest.title,
         detail: permissionRequest.detail,
         permissionKind: permissionRequest.kind,
@@ -2341,6 +2360,7 @@ export function AiPanel({
   return (
     <aside
       className={`ai-panel${expanded ? " expanded" : ""}`}
+      data-side={side}
       aria-label="Local AI chat"
       hidden={!visible}
       style={expanded ? undefined : { width }}
@@ -3955,7 +3975,11 @@ export function AiPanel({
         </div>
       )}
 
-      <div className="ai-footer-controls" aria-label="Chat controls">
+      <div
+        ref={footerControlsRef}
+        className="ai-footer-controls"
+        aria-label="Chat controls"
+      >
         <div className="ai-bottom-model">
           <button
             className="ai-tier-toggle"

@@ -25,6 +25,7 @@ const SKIPPED_SCAN_DIRECTORIES = new Set([
   ".git",
   ".hg",
   ".svn",
+  ".oscode",
   "__pycache__",
   "node_modules",
   "build",
@@ -104,7 +105,6 @@ function candidateRank(candidate: ProjectPythonEnvironmentCandidate) {
   const normalized = candidate.name.toLowerCase();
   const common = COMMON_ENVIRONMENT_NAMES.indexOf(normalized);
   if (common >= 0) return common;
-  if (normalized.startsWith(".oscode/envs/")) return 20;
   if (normalized.startsWith(".tox/") || normalized.startsWith(".nox/"))
     return 30;
   return 50;

@@ -13,7 +13,7 @@ export type ProjectItemOperationResult = {
   kind: TreeEntry["kind"];
 };
 export type EditorPreferences = {
-  version: 18;
+  version: 19;
   theme: "dark" | "blue-dark" | "blue-light";
   locale: "en" | "ar";
   sidebarSide: "left" | "right";
