@@ -224,7 +224,15 @@ test("native Computer Control is local, permissioned, and packaged", () => {
   );
   assert.match(
     packageVerifier,
-    /spawnSync\(command, args, \{ cwd: smokeCwd, stdio: "inherit" \}\)/,
+    /spawnSync\(command, args, \{[\s\S]*?cwd: smokeCwd,[\s\S]*?stdio: "inherit",?[\s\S]*?\}\)/,
+  );
+  assert.match(
+    packageVerifier,
+    /rmSync\(smokeCwd, \{[\s\S]*?maxRetries: 20,[\s\S]*?retryDelay: 150/,
+  );
+  assert.match(
+    packageVerifier,
+    /\["EBUSY", "ENOTEMPTY", "EPERM"\]\.includes\(String\(code\)\)/,
   );
   assert.match(
     packageVerifier,

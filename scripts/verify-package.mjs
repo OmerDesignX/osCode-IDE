@@ -766,17 +766,32 @@ if (flags.includes("--run-smoke")) {
   const smokeMarker = path.join(path.dirname(executable), ".oscode-smoke-test");
   const smokeCwd = mkdtempSync(path.join(tmpdir(), "oscode-package-smoke-"));
   writeFileSync(smokeMarker, "smoke\n", { mode: 0o600 });
-  const smoke = (() => {
-    try {
-      return spawnSync(command, args, { cwd: smokeCwd, stdio: "inherit" });
-    } finally {
-      rmSync(smokeMarker, { force: true });
-      rmSync(smokeCwd, { force: true, recursive: true });
-    }
-  })();
+  const smoke = spawnSync(command, args, {
+    cwd: smokeCwd,
+    stdio: "inherit",
+  });
+  rmSync(smokeMarker, { force: true });
   if (smoke.error) throw smoke.error;
   if (smoke.status !== 0)
     throw new Error(`Packaged ${platform} smoke test exited ${smoke.status}`);
+
+  try {
+    rmSync(smokeCwd, {
+      force: true,
+      recursive: true,
+      maxRetries: 20,
+      retryDelay: 150,
+    });
+  } catch (error) {
+    const code = error && typeof error === "object" ? error.code : undefined;
+    const transientWindowsLock =
+      platform === "windows" &&
+      ["EBUSY", "ENOTEMPTY", "EPERM"].includes(String(code));
+    if (!transientWindowsLock) throw error;
+    console.warn(
+      `Packaged Windows smoke test passed; deferred cleanup of a transiently locked directory: ${smokeCwd}`,
+    );
+  }
 
   if (platform === "macos") {
     const signatureAfterSmoke = spawnSync(
