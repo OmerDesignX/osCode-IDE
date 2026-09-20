@@ -30,7 +30,7 @@ To install please check releases.
 
 ## Local Ai coding agent
 
-- osCode offers local AI coding models in three sizes: Small, Medium, and Large. The app downloads the selected model's ZIP from https://models.omerdesign.com/oscode-models (V2 by default), verifies every shard, and stores it in application data. V1 archives are also mapped without changing the model names.
+- osCode offers local AI coding models in three sizes: Small, Medium, and Large. The app downloads the selected model's ZIP from https://www.omerdesign.com/models (V2 by default), verifies every shard, and stores it in application data. V1 archives are also mapped without changing the model names.
 
 - osCode Models can make mistakes and may be slow to run depending on your computer's hardware. However, it is all private and local. No cloud compute costs attached.
 
