@@ -2,7 +2,13 @@ import { useMemo } from "react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
-export function AiMessageContent({ content }: { content: string }) {
+export function AiMessageContent({
+  content,
+  onLinkError,
+}: {
+  content: string;
+  onLinkError?: (message: string) => void;
+}) {
   const html = useMemo(() => {
     const clean = DOMPurify.sanitize(marked.parse(content) as string, {
       FORBID_TAGS: [
@@ -31,9 +37,13 @@ export function AiMessageContent({ content }: { content: string }) {
       onClick={(event) => {
         const link = (event.target as HTMLElement).closest("a");
         const href = link?.getAttribute("href") || "";
-        if (!/^https:\/\//i.test(href)) return;
+        if (!/^https?:\/\//i.test(href)) return;
         event.preventDefault();
-        void window.oscode.openExternalUrl(href);
+        void window.oscode
+          .openExternalUrl(href)
+          .catch(() =>
+            onLinkError?.("Could not open this link in your browser."),
+          );
       }}
       dangerouslySetInnerHTML={{ __html: html }}
     />

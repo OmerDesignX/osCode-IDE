@@ -3662,7 +3662,10 @@ export function AiPanel({
                   </span>
                   <small>Expand</small>
                 </summary>
-                <AiMessageContent content={message.thinking} />
+                <AiMessageContent
+                  content={message.thinking}
+                  onLinkError={onNotice}
+                />
               </details>
             )}
             {!!message.actions?.length && (
@@ -3684,7 +3687,10 @@ export function AiPanel({
               </details>
             )}
             {message.role === "assistant" ? (
-              <AiMessageContent content={message.content} />
+              <AiMessageContent
+                content={message.content}
+                onLinkError={onNotice}
+              />
             ) : (
               <p>{message.content}</p>
             )}
@@ -3767,11 +3773,17 @@ export function AiPanel({
                     </span>
                     <small>Live</small>
                   </summary>
-                  <AiMessageContent content={liveModelOutput.reasoning} />
+                  <AiMessageContent
+                    content={liveModelOutput.reasoning}
+                    onLinkError={onNotice}
+                  />
                 </details>
               )}
               {liveModelOutput.answer && (
-                <AiMessageContent content={liveModelOutput.answer} />
+                <AiMessageContent
+                  content={liveModelOutput.answer}
+                  onLinkError={onNotice}
+                />
               )}
             </article>
           )}

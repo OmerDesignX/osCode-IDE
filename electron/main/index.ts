@@ -50,7 +50,8 @@ import { AppUpdateService } from "./updater.js";
 import { installOsCodeTouchBar, type TouchBarController } from "./touch-bar.js";
 import { SaveHistoryStore } from "./save-history.js";
 import { McpClientService } from "./mcp-client.js";
-import { assertReceiveOnlyPublicUrl } from "./outbound-guard.js";
+import { assertUserOpenedHttpUrl } from "./outbound-guard.js";
+import { textContextMenuItems } from "./text-context-menu.js";
 import {
   appLocalKeyProtector,
   archiveLegacySecureStore,
@@ -1839,12 +1840,31 @@ function createWindow(show = true, restoreLastProject = true) {
   });
   window.webContents.on("context-menu", (_event, params) => {
     const template: MenuItemConstructorOptions[] = [];
+    let link = "";
+    try {
+      if (params.linkURL) link = assertUserOpenedHttpUrl(params.linkURL);
+    } catch {
+      // Never offer navigation to file:, script:, or credentialed URLs.
+    }
+    if (link)
+      template.push(
+        {
+          label: "Open Link",
+          click: () => {
+            void shell
+              .openExternal(link, { activate: true })
+              .catch(() => dialog.showErrorBox("Couldn’t open link", link));
+          },
+        },
+        { label: "Copy Link Address", click: () => clipboard.writeText(link) },
+      );
     if (
       params.mediaType === "image" &&
       params.srcURL.startsWith("data:image/")
     ) {
       const image = nativeImage.createFromDataURL(params.srcURL);
       if (!image.isEmpty()) {
+        if (template.length) template.push({ type: "separator" });
         const imageName =
           (params.titleText || "osCode image")
             .replace(/\.[a-z0-9]{2,5}$/i, "")
@@ -1913,6 +1933,11 @@ function createWindow(show = true, restoreLastProject = true) {
             window.webContents.session.addWordToSpellCheckerDictionary(word),
         },
       );
+    }
+    const textItems = textContextMenuItems(params);
+    if (textItems.length) {
+      if (template.length) template.push({ type: "separator" });
+      template.push(...textItems);
     }
     if (template.length) Menu.buildFromTemplate(template).popup({ window });
   });
@@ -4434,7 +4459,7 @@ function registerIpc() {
   });
   ipcMain.handle("app:open-external-url", async (_event, rawUrl: unknown) => {
     if (typeof rawUrl !== "string") throw new Error("Invalid website address");
-    const url = assertReceiveOnlyPublicUrl(rawUrl).toString();
+    const url = assertUserOpenedHttpUrl(rawUrl);
     await shell.openExternal(url, { activate: true });
     return url;
   });
