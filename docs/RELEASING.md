@@ -26,7 +26,7 @@ Windows and macOS signing credentials and native packages can remain on maintain
 - Build each native package on its own operating system. Do not cross-compile the Windows installer or macOS DMG.
 - Do not rebuild an already-published Windows installer unless the version or Windows source has changed.
 
-Native packages never embed model weights. The application downloads a user-selected tier from the public `OmerDesignX/osCode-Models` catalogue, verifies its SHA-256 hashes, and stores it in the user's application-data directory.
+Native packages never embed model weights. The application downloads a user-selected tier from the `models.omerdesign.com/oscode-models` ZIP archives, checks archive length and ZIP CRCs, verifies the complete shard set, and stores it in the user's application-data directory.
 
 ## macOS DMG
 

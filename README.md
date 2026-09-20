@@ -30,7 +30,7 @@ To install please check releases.
 
 ## Local Ai coding agent
 
-- osCode comes with a local AI coding model. osCode Models are derived from Qwen 3.8 Max and rebuilt to run locally with a min of 8 GB of RAM. Models come in 3 sizes: Small, Medium, and Large. Models are downloaded within the app from this repo: https://github.com/OmerDesignX/osCode-Models
+- osCode offers local AI coding models in three sizes: Small, Medium, and Large. The app downloads the selected model's ZIP from https://models.omerdesign.com/oscode-models (V2 by default), verifies every shard, and stores it in application data. V1 archives are also mapped without changing the model names.
 
 - osCode Models can make mistakes and may be slow to run depending on your computer's hardware. However, it is all private and local. No cloud compute costs attached.
 
