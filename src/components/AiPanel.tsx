@@ -49,6 +49,7 @@ type Props = {
   activeFile?: string;
   visible?: boolean;
   openChatId?: string;
+  onOpenAppSettings?: () => void;
   onEngine: (engine: AiEngine) => void;
   onModel: (model: string) => void;
   onEditMode: (mode: AiEditMode) => void;
@@ -366,6 +367,7 @@ function publicAiError(error: unknown, fallback: string) {
 function inferredTier(model: AiModel) {
   if (model.tier && model.tier !== "custom") return model.tier;
   const label = `${model.name} ${model.path}`;
+  if (/\bxsmall\b/i.test(label)) return "xsmall";
   if (/\bmedium\b/i.test(label)) return "medium";
   if (/\bsmall\b/i.test(label)) return "small";
   if (/\blarge\b/i.test(label)) return "large";
@@ -381,7 +383,7 @@ function osCodeGgufTier(model: AiModel): Exclude<AiModelTier, "custom"> | null {
     return model.tier;
   const label = `${model.name} ${model.path}`;
   const match = label.match(
-    /oscode[-_\s]+gguf[-_\s]+(small|medium|large)(?:[-_\s.]|$)/i,
+    /oscode[-_\s]+gguf[-_\s]+(xsmall|small|medium|large)(?:[-_\s.]|$)/i,
   );
   return (match?.[1]?.toLowerCase() as Exclude<AiModelTier, "custom">) || null;
 }
@@ -463,6 +465,7 @@ export function AiPanel({
   activeFile,
   visible = true,
   openChatId,
+  onOpenAppSettings,
   onEngine,
   onModel,
   onEditMode,
@@ -513,6 +516,7 @@ export function AiPanel({
   >("");
   const [status, setStatus] = useState("Ready · local only");
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [mainMenuOpen, setMainMenuOpen] = useState(false);
   const [tierPickerOpen, setTierPickerOpen] = useState(false);
   const [permissionsDrawerOpen, setPermissionsDrawerOpen] = useState(false);
   const [autoInstallConfirmOpen, setAutoInstallConfirmOpen] = useState(false);
@@ -550,6 +554,7 @@ export function AiPanel({
   const [permissionSearch, setPermissionSearch] = useState("");
   const [chatSearch, setChatSearch] = useState("");
   const [goalDraft, setGoalDraft] = useState("");
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [queueDraft, setQueueDraft] = useState("");
   const [schedulePrompt, setSchedulePrompt] = useState("");
   const [scheduleAt, setScheduleAt] = useState("");
@@ -587,6 +592,7 @@ export function AiPanel({
     setHistoryOpen(false);
     setPermissionOpen(false);
     setModelsOpen(false);
+    setMainMenuOpen(false);
     setAddMenuOpen(false);
     setOllamaPickerOpen(false);
     setCustomListOpen(false);
@@ -1177,6 +1183,7 @@ export function AiPanel({
       setHistoryOpen(false);
       setPermissionOpen(false);
       setModelsOpen(false);
+      setMainMenuOpen(false);
       setAddMenuOpen(false);
       setOllamaPickerOpen(false);
       setCustomListOpen(false);
@@ -1188,6 +1195,24 @@ export function AiPanel({
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [browserAccess, computerAccess, expanded]);
+  useEffect(() => {
+    if (!mainMenuOpen) return;
+    const closeMenu = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest(".ai-main-menu, .ai-main-menu-toggle")) return;
+      setMainMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeMenu, true);
+    return () => document.removeEventListener("pointerdown", closeMenu, true);
+  }, [mainMenuOpen]);
+  useEffect(() => {
+    const textarea = composerInputRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(146, Math.max(28, textarea.scrollHeight));
+    textarea.style.height = `${nextHeight}px`;
+    setComposerExpanded(nextHeight > 42);
+  }, [input]);
   useEffect(() => {
     if (!chatTabMenuId) return;
     const closeMenu = (event: PointerEvent) => {
@@ -2407,12 +2432,18 @@ export function AiPanel({
               void refreshAgentState();
             }}
           />
-          <IconButton
-            icon="menu"
-            label="AI settings"
-            active={modelsOpen}
-            onClick={() => toggleAiPopup("models")}
-          />
+          <span className="ai-main-menu-toggle">
+            <IconButton
+              icon="menu"
+              label="Menu"
+              active={mainMenuOpen}
+              onClick={() => {
+                const shouldOpen = !mainMenuOpen;
+                closeAiPopups();
+                setMainMenuOpen(shouldOpen);
+              }}
+            />
+          </span>
           <IconButton
             icon={expanded ? "minimize-2" : "maximize-2"}
             label={expanded ? "Exit full-window chat" : "Open full-window chat"}
@@ -2425,6 +2456,36 @@ export function AiPanel({
           />
         </div>
       </div>
+
+      {mainMenuOpen &&
+        createPortal(
+          <div className="ai-main-menu" role="menu" aria-label="Chat menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMainMenuOpen(false);
+                openAiPopup("models");
+              }}
+            >
+              <FeatherIcon icon="cpu" size="16" /> AI settings
+            </button>
+            {onOpenAppSettings && <span className="ai-main-menu-divider" />}
+            {onOpenAppSettings && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMainMenuOpen(false);
+                  onOpenAppSettings();
+                }}
+              >
+                <FeatherIcon icon="settings" size="16" /> Settings
+              </button>
+            )}
+          </div>,
+          document.querySelector(".app") || document.body,
+        )}
 
       {openChatTabs.length > 1 && (
         <div
@@ -3637,7 +3698,7 @@ export function AiPanel({
               aria-label={message.role === "user" ? "You" : undefined}
             >
               {message.role === "user" ? (
-                <FeatherIcon icon="user" size="16" />
+                <span>You</span>
               ) : (
                 <>
                   <i>O</i>
@@ -3656,11 +3717,7 @@ export function AiPanel({
                 open={messageIndex === messages.length - 1}
               >
                 <summary>
-                  <span>
-                    <FeatherIcon icon="cpu" size="14" />
-                    Model reasoning notes
-                  </span>
-                  <small>Expand</small>
+                  <span>Thinking</span>
                 </summary>
                 <AiMessageContent
                   content={message.thinking}
@@ -3674,10 +3731,7 @@ export function AiPanel({
                 open={messageIndex === messages.length - 1}
               >
                 <summary>
-                  <span>
-                    <FeatherIcon icon="activity" size="14" />
-                    Work log
-                  </span>
+                  <span>Model log</span>
                   <small>
                     {message.actions.length} step
                     {message.actions.length === 1 ? "" : "s"}
@@ -3741,7 +3795,7 @@ export function AiPanel({
                 }
               >
                 <FeatherIcon
-                  icon={messages.at(-1)?.interrupted ? "play" : "refresh-cw"}
+                  icon={messages.at(-1)?.interrupted ? "play" : "loader"}
                   size="14"
                 />
                 {messages.at(-1)?.interrupted ? "Resume run" : "Retry response"}
@@ -3767,11 +3821,7 @@ export function AiPanel({
               {thinkingEnabled && liveModelOutput.reasoning && (
                 <details className="ai-reasoning ai-live-reasoning" open>
                   <summary>
-                    <span>
-                      <FeatherIcon icon="cpu" size="14" />
-                      Model thinking
-                    </span>
-                    <small>Live</small>
+                    <span>Thinking</span>
                   </summary>
                   <AiMessageContent
                     content={liveModelOutput.reasoning}
@@ -3796,7 +3846,7 @@ export function AiPanel({
                 <i />
               </span>
               <span>
-                <b>Current step</b>
+                <b>Thinking</b>
                 <small>{status}</small>
               </span>
             </div>
@@ -4015,14 +4065,7 @@ export function AiPanel({
           >
             <FeatherIcon icon="cpu" size="18" />
             <span className="ai-footer-label">
-              <b>{selectedModel?.name || "Choose a local model"}</b>
-              <small>
-                {selectedModel?.installed === false
-                  ? "Download required"
-                  : selectedModel
-                    ? "Ready"
-                    : "Small, Medium, Large, or Custom"}
-              </small>
+              <b>Model</b>
             </span>
             <FeatherIcon
               icon={tierPickerOpen ? "chevron-up" : "chevron-down"}
@@ -4036,7 +4079,7 @@ export function AiPanel({
               className="ai-tier-picker"
               aria-label="osCode model size"
             >
-              {(["small", "medium", "large"] as const).map((tier) => {
+              {(["xsmall", "small", "medium", "large"] as const).map((tier) => {
                 const item =
                   tierModels.find(
                     (entry) =>
@@ -4061,7 +4104,11 @@ export function AiPanel({
                     title={item?.supportReason || `${item?.name || tier} model`}
                     onClick={() => void selectBundledTier(tier)}
                   >
-                    <b>{tier[0].toUpperCase() + tier.slice(1)}</b>
+                    <b>
+                      {tier === "xsmall"
+                        ? "xSmall"
+                        : tier[0].toUpperCase() + tier.slice(1)}
+                    </b>
                     <span>
                       {item?.supported === false ? (
                         "Not supported"
@@ -4153,19 +4200,6 @@ export function AiPanel({
               <FeatherIcon icon="shield" size="16" />
               <span className="ai-footer-label">
                 <b>Permissions</b>
-                <small>
-                  {
-                    [
-                      fileAccess,
-                      fileAccess && editMode !== "read-only",
-                      webAccess,
-                      browserAccess,
-                      terminalMode === "auto",
-                      computerAccess,
-                    ].filter(Boolean).length
-                  }{" "}
-                  enabled
-                </small>
               </span>
             </span>
             <FeatherIcon
@@ -4329,7 +4363,6 @@ export function AiPanel({
           <FeatherIcon icon="robot" size="18" />
           <span className="ai-footer-label">
             <b>Auto</b>
-            <small>{autoInstall ? "Enabled" : "Off"}</small>
           </span>
         </button>
       </div>
@@ -4403,7 +4436,10 @@ export function AiPanel({
           </div>,
           document.querySelector(".app") || document.body,
         )}
-      <form className="ai-composer" onSubmit={send}>
+      <form
+        className={`ai-composer${composerExpanded ? " expanded-input" : ""}`}
+        onSubmit={send}
+      >
         <input
           ref={attachmentInputRef}
           className="sr-only"

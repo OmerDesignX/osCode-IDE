@@ -467,6 +467,7 @@ export function App() {
     [gitUtilityName, setGitUtilityName] = useState(""),
     [branchComposer, setBranchComposer] = useState(false),
     [notificationsOpen, setNotificationsOpen] = useState(false),
+    [expandedNotificationId, setExpandedNotificationId] = useState(""),
     [globalSearch, setGlobalSearch] = useState(""),
     [globalSearchOpen, setGlobalSearchOpen] = useState(false),
     [globalSearchResults, setGlobalSearchResults] = useState<{
@@ -532,6 +533,10 @@ export function App() {
     [locale, setLocale] = useState<"en" | "ar">("en"),
     [sidebarSide, setSidebarSide] = useState<"left" | "right">("left"),
     [uiScale, setUiScale] = useState<1 | 1.15 | 1.3 | 1.5 | 1.7>(1),
+    [interfaceFontSize, setInterfaceFontSize] =
+      useState<EditorPreferences["interfaceFontSize"]>(13),
+    [interfaceFontWeight, setInterfaceFontWeight] =
+      useState<EditorPreferences["interfaceFontWeight"]>(400),
     [editorFontSize, setEditorFontSize] = useState(14),
     [sidebarWidth, setSidebarWidth] = useState(520),
     [gitHeight, setGitHeight] = useState(390),
@@ -742,6 +747,8 @@ export function App() {
         setLocale(preferences.locale);
         setSidebarSide(preferences.sidebarSide);
         setUiScale(preferences.uiScale);
+        setInterfaceFontSize(preferences.interfaceFontSize);
+        setInterfaceFontWeight(preferences.interfaceFontWeight);
         setEditorFontSize(preferences.editorFontSize);
         setTerminalHeight(
           Math.max(280, Math.min(700, preferences.terminalHeight)),
@@ -2095,6 +2102,16 @@ export function App() {
         setLocale(preferences.locale);
         setSidebarSide(preferences.sidebarSide);
         setUiScale(preferences.uiScale);
+        setInterfaceFontSize(preferences.interfaceFontSize);
+        setInterfaceFontWeight(preferences.interfaceFontWeight);
+        document.documentElement.style.setProperty(
+          "--app-font-size",
+          `${preferences.interfaceFontSize}px`,
+        );
+        document.documentElement.style.setProperty(
+          "--app-font-weight",
+          String(preferences.interfaceFontWeight),
+        );
         setEditorFontSize(preferences.editorFontSize);
         setSidebarWidth(preferences.sidebarWidth);
         setGitHeight(preferences.gitHeight);
@@ -2173,11 +2190,13 @@ export function App() {
   useEffect(() => {
     if (!preferencesReady) return;
     const preferences: EditorPreferences = {
-      version: 19,
+      version: 20,
       theme,
       locale,
       sidebarSide,
       uiScale,
+      interfaceFontSize,
+      interfaceFontWeight,
       editorFontSize,
       sidebarWidth,
       gitHeight,
@@ -2218,6 +2237,8 @@ export function App() {
     locale,
     sidebarSide,
     uiScale,
+    interfaceFontSize,
+    interfaceFontWeight,
     editorFontSize,
     sidebarWidth,
     gitHeight,
@@ -2533,7 +2554,7 @@ export function App() {
         },
         {
           label: "Refresh Explorer",
-          icon: "refresh-cw",
+          icon: "loader",
           run: refreshProjectItems,
         },
         {
@@ -3078,6 +3099,26 @@ export function App() {
   };
   const tr = (english: string, arabic: string) =>
     locale === "ar" ? arabic : english;
+  const updateInterfaceTypography = async (
+    patch: Partial<
+      Pick<EditorPreferences, "interfaceFontSize" | "interfaceFontWeight">
+    >,
+  ) => {
+    try {
+      const current = await window.oscode.loadPreferences();
+      await window.oscode.savePreferences({ ...current, ...patch });
+      if (patch.interfaceFontSize)
+        setInterfaceFontSize(patch.interfaceFontSize);
+      if (patch.interfaceFontWeight)
+        setInterfaceFontWeight(patch.interfaceFontWeight);
+      window.alert(
+        "Typography saved. Please quit and reopen osCode to apply the change.",
+      );
+      setNotice("Typography saved. Restart osCode to apply it.");
+    } catch (error) {
+      setNotice(errorMessage(error, "Typography could not be saved"));
+    }
+  };
   const chooseAutomaticUpdates = async (enabled: boolean) => {
     autoUpdateEnabledRef.current = enabled;
     setAutoUpdateEnabled(enabled);
@@ -3199,6 +3240,33 @@ export function App() {
   const computerPermissionPending =
     activity?.kind === "computer" && activity.phase === "permission";
   const activityIsDownload = activity?.kind === "download" && activity.active;
+  const openActivityDetails = () => {
+    const activityMessage = activity
+      ? [activity.label, activity.url, activity.target]
+          .filter(Boolean)
+          .join(" · ")
+      : notice;
+    if (activityMessage) {
+      const existing = notifications.find(
+        (item) =>
+          item.message === activityMessage &&
+          Date.now() - item.createdAt < 2_000,
+      );
+      const notificationId = existing?.id || crypto.randomUUID();
+      if (!existing) {
+        setNotifications((current) => [
+          ...current.slice(-39),
+          {
+            id: notificationId,
+            message: activityMessage,
+            createdAt: Date.now(),
+          },
+        ]);
+      }
+      setExpandedNotificationId(notificationId);
+    }
+    setNotificationsOpen(true);
+  };
   return (
     <div
       className={`app ${theme}`}
@@ -3343,35 +3411,11 @@ export function App() {
                 role="button"
                 tabIndex={0}
                 title="Open activity details"
-                onClick={() => {
-                  const message = activity
-                    ? [activity.label, activity.url, activity.target]
-                        .filter(Boolean)
-                        .join(" · ")
-                    : notice;
-                  if (message)
-                    setNotifications((current) =>
-                      current.some(
-                        (item) =>
-                          item.message === message &&
-                          Date.now() - item.createdAt < 2_000,
-                      )
-                        ? current
-                        : [
-                            ...current.slice(-39),
-                            {
-                              id: crypto.randomUUID(),
-                              message,
-                              createdAt: Date.now(),
-                            },
-                          ],
-                    );
-                  setNotificationsOpen(true);
-                }}
+                onClick={openActivityDetails}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    setNotificationsOpen(true);
+                    openActivityDetails();
                   }
                 }}
               >
@@ -3444,7 +3488,7 @@ export function App() {
                       ? "download-cloud"
                       : updateStatus.state === "downloading"
                         ? "loader"
-                        : "refresh-cw"
+                        : "loader"
                   }
                   label={updateActionLabel}
                   className={`app-update-action ${updateStatus.state}`}
@@ -3596,15 +3640,16 @@ export function App() {
             <h2>Notifications</h2>
             <span className="notification-actions">
               <button
-                onClick={() =>
+                onClick={() => {
                   setNotifications((current) =>
                     current.filter(
                       (item) =>
                         item.kind === "auto-update-prompt" ||
                         item.kind === "ai-attention",
                     ),
-                  )
-                }
+                  );
+                  setExpandedNotificationId("");
+                }}
               >
                 Clear
               </button>
@@ -3621,95 +3666,132 @@ export function App() {
               notifications
                 .slice()
                 .reverse()
-                .map((item) => (
-                  <div
-                    className={`notification-row ${item.kind === "auto-update-prompt" ? "update-prompt" : ""} ${["auto-update-prompt", "app-update", "ai-attention"].includes(item.kind || "") ? "notification-row-actions" : ""}`}
-                    key={item.id}
-                  >
-                    <div className="notification-content">
-                      <p>{item.message}</p>
-                      <time dateTime={new Date(item.createdAt).toISOString()}>
-                        {new Date(item.createdAt).toLocaleString()}
-                      </time>
-                    </div>
-                    {item.kind === "auto-update-prompt" ? (
-                      <div className="notification-choice">
+                .map((item) => {
+                  const expanded = expandedNotificationId === item.id;
+                  const notificationKind =
+                    item.kind === "auto-update-prompt"
+                      ? "Update preference"
+                      : item.kind === "app-update"
+                        ? "Application update"
+                        : item.kind === "ai-attention"
+                          ? "Chat attention"
+                          : "osCode notification";
+                  return (
+                    <div
+                      className={`notification-row${expanded ? " expanded" : ""} ${item.kind === "auto-update-prompt" ? "update-prompt" : ""} ${["auto-update-prompt", "app-update", "ai-attention"].includes(item.kind || "") ? "notification-row-actions" : ""}`}
+                      key={item.id}
+                    >
+                      <button
+                        type="button"
+                        className="notification-content"
+                        aria-expanded={expanded}
+                        onClick={() =>
+                          setExpandedNotificationId(expanded ? "" : item.id)
+                        }
+                      >
+                        <span className="notification-message">
+                          {item.message}
+                        </span>
+                        <span className="notification-meta">
+                          <time
+                            dateTime={new Date(item.createdAt).toISOString()}
+                          >
+                            {new Date(item.createdAt).toLocaleString()}
+                          </time>
+                          <FeatherIcon
+                            icon={expanded ? "chevron-up" : "chevron-down"}
+                            size="15"
+                          />
+                        </span>
+                        {expanded && (
+                          <small className="notification-detail">
+                            {notificationKind} · {item.message}
+                          </small>
+                        )}
+                      </button>
+                      {item.kind === "auto-update-prompt" ? (
+                        <div className="notification-choice">
+                          <button
+                            onClick={() => void chooseAutomaticUpdates(false)}
+                          >
+                            Don't show again
+                          </button>
+                          <button
+                            className="primary"
+                            onClick={() => void chooseAutomaticUpdates(true)}
+                          >
+                            Turn on
+                          </button>
+                        </div>
+                      ) : item.kind === "app-update" ? (
+                        <div className="notification-choice update-actions">
+                          <button
+                            onClick={() =>
+                              setNotifications((current) =>
+                                current.filter((entry) => entry.id !== item.id),
+                              )
+                            }
+                          >
+                            Later
+                          </button>
+                          <button onClick={dismissUpdateReminder}>
+                            Don't show again
+                          </button>
+                          <button
+                            className="primary"
+                            disabled={[
+                              "checking",
+                              "downloading",
+                              "installing",
+                            ].includes(updateStatus.state)}
+                            onClick={() => void runAppUpdateAction()}
+                          >
+                            {updateActionLabel}
+                          </button>
+                        </div>
+                      ) : item.kind === "ai-attention" ? (
+                        <div className="notification-choice">
+                          <button
+                            onClick={() => {
+                              setAiVisible(true);
+                              setNotificationsOpen(false);
+                              if (aiAttention?.kind !== "permission")
+                                handleAiAttentionChange(null);
+                            }}
+                          >
+                            Open chat
+                          </button>
+                          {aiAttention?.kind === "permission" &&
+                            permissionCompletionReady && (
+                              <button
+                                className="primary"
+                                disabled={permissionCompleting}
+                                onClick={() =>
+                                  void completeComputerPermission()
+                                }
+                              >
+                                {permissionCompleting
+                                  ? "Checking…"
+                                  : "Completed"}
+                              </button>
+                            )}
+                        </div>
+                      ) : (
                         <button
-                          onClick={() => void chooseAutomaticUpdates(false)}
-                        >
-                          Don't show again
-                        </button>
-                        <button
-                          className="primary"
-                          onClick={() => void chooseAutomaticUpdates(true)}
-                        >
-                          Turn on
-                        </button>
-                      </div>
-                    ) : item.kind === "app-update" ? (
-                      <div className="notification-choice update-actions">
-                        <button
+                          className="notification-dismiss"
+                          aria-label="Dismiss notification"
                           onClick={() =>
                             setNotifications((current) =>
                               current.filter((entry) => entry.id !== item.id),
                             )
                           }
                         >
-                          Later
+                          <FeatherIcon icon="x" size="15" />
                         </button>
-                        <button onClick={dismissUpdateReminder}>
-                          Don't show again
-                        </button>
-                        <button
-                          className="primary"
-                          disabled={[
-                            "checking",
-                            "downloading",
-                            "installing",
-                          ].includes(updateStatus.state)}
-                          onClick={() => void runAppUpdateAction()}
-                        >
-                          {updateActionLabel}
-                        </button>
-                      </div>
-                    ) : item.kind === "ai-attention" ? (
-                      <div className="notification-choice">
-                        <button
-                          onClick={() => {
-                            setAiVisible(true);
-                            setNotificationsOpen(false);
-                            if (aiAttention?.kind !== "permission")
-                              handleAiAttentionChange(null);
-                          }}
-                        >
-                          Open chat
-                        </button>
-                        {aiAttention?.kind === "permission" &&
-                          permissionCompletionReady && (
-                            <button
-                              className="primary"
-                              disabled={permissionCompleting}
-                              onClick={() => void completeComputerPermission()}
-                            >
-                              {permissionCompleting ? "Checking…" : "Completed"}
-                            </button>
-                          )}
-                      </div>
-                    ) : (
-                      <button
-                        className="notification-dismiss"
-                        aria-label="Dismiss notification"
-                        onClick={() =>
-                          setNotifications((current) =>
-                            current.filter((entry) => entry.id !== item.id),
-                          )
-                        }
-                      >
-                        <FeatherIcon icon="x" size="15" />
-                      </button>
-                    )}
-                  </div>
-                ))
+                      )}
+                    </div>
+                  );
+                })
             ) : (
               <p className="notification-empty">No notifications.</p>
             )}
@@ -3875,7 +3957,7 @@ export function App() {
                   Add installed Python
                 </button>
                 <IconButton
-                  icon="refresh-cw"
+                  icon="loader"
                   label="Refresh Python interpreters"
                   disabled={Boolean(pythonEnvironmentOperation)}
                   onClick={() => void refreshRuntimes(false)}
@@ -4362,17 +4444,32 @@ export function App() {
               <section className="explorer panel">
                 <div className="section-head">
                   <div>
-                    <span className="eyebrow">{tr("PROJECT", "المشروع")}</span>
                     <h2>
                       {project?.name || tr("Your workspace", "مساحة العمل")}
                     </h2>
                   </div>
-                  <IconButton
-                    icon="folder"
-                    label={tr("Browse", "تصفح")}
-                    className="project-browse-action"
-                    onClick={openProject}
-                  />
+                  <div className="project-heading-actions">
+                    <IconButton
+                      icon="folder"
+                      label={tr("Browse", "تصفح")}
+                      className="project-browse-action"
+                      onClick={openProject}
+                    />
+                    {project && (
+                      <>
+                        <span
+                          className="project-heading-divider"
+                          aria-hidden="true"
+                        />
+                        <IconButton
+                          icon="x-circle"
+                          label="Close and forget project"
+                          className="project-close-action"
+                          onClick={() => void closeProject()}
+                        />
+                      </>
+                    )}
+                  </div>
                 </div>
                 {project && (
                   <>
@@ -4424,14 +4521,9 @@ export function App() {
                         onClick={trashSelectedEntry}
                       />
                       <IconButton
-                        icon="refresh-cw"
+                        icon="loader"
                         label="Refresh project"
                         onClick={refreshProjectItems}
-                      />
-                      <IconButton
-                        icon="x-circle"
-                        label="Close and forget project"
-                        onClick={() => void closeProject()}
                       />
                     </div>
                     {projectOperation && (
@@ -4702,7 +4794,7 @@ export function App() {
                           </div>
                           <div className="git-iconbar">
                             <IconButton
-                              icon="refresh-cw"
+                              icon="loader"
                               label="Refresh Git status"
                               onClick={refreshGit}
                             />
@@ -5111,7 +5203,7 @@ export function App() {
                             disabled={git.files.length === 0}
                             onClick={() => void gitAction("addAll")}
                           >
-                            <FeatherIcon icon="plus-circle" size="14" />
+                            <FeatherIcon icon="plus" size="14" />
                           </button>
                           <button
                             className="commit-action"
@@ -5169,7 +5261,7 @@ export function App() {
                               {git.remote ? "Update link" : "Add link"}
                             </button>
                             <IconButton
-                              icon="refresh-cw"
+                              icon="loader"
                               label="Fetch remote status"
                               disabled={!git.remote}
                               onClick={() => void gitAction("fetch")}
@@ -5308,7 +5400,7 @@ export function App() {
                     <FeatherIcon icon="external-link" size="15" /> Open live
                   </button>
                   <button onClick={() => void refreshAgentBrowserView()}>
-                    <FeatherIcon icon="refresh-cw" size="15" /> Refresh
+                    <FeatherIcon icon="loader" size="15" /> Refresh
                   </button>
                 </div>
               </div>
@@ -6021,21 +6113,21 @@ export function App() {
                     onClick={() => setTheme("dark")}
                   >
                     <FeatherIcon icon="droplet" size="14" />
-                    {tr("Gunmetal + blue", "رمادي معدني وأزرق")}
+                    {tr("Gunmetal", "رمادي معدني")}
                   </button>
                   <button
                     className={theme === "blue-dark" ? "active" : ""}
                     onClick={() => setTheme("blue-dark")}
                   >
                     <FeatherIcon icon="moon" size="14" />
-                    {tr("Blue dark", "أزرق داكن")}
+                    {tr("Deep blue", "أزرق داكن")}
                   </button>
                   <button
                     className={theme === "blue-light" ? "active" : ""}
                     onClick={() => setTheme("blue-light")}
                   >
                     <FeatherIcon icon="sun" size="14" />
-                    {tr("Blue light", "أزرق فاتح")}
+                    {tr("Paper light", "فاتح ورقي")}
                   </button>
                 </div>
                 <label className="settings-select-row">
@@ -6053,6 +6145,46 @@ export function App() {
                     <option value={1.7}>170%</option>
                   </select>
                 </label>
+                <label className="settings-select-row">
+                  <span>{tr("Interface font size", "حجم خط الواجهة")}</span>
+                  <select
+                    value={interfaceFontSize}
+                    onChange={(event) =>
+                      void updateInterfaceTypography({
+                        interfaceFontSize: Number(
+                          event.target.value,
+                        ) as EditorPreferences["interfaceFontSize"],
+                      })
+                    }
+                  >
+                    <option value={13}>{tr("Compact", "مضغوط")}</option>
+                    <option value={14}>{tr("Standard", "قياسي")}</option>
+                    <option value={15}>{tr("Large", "كبير")}</option>
+                  </select>
+                </label>
+                <label className="settings-select-row">
+                  <span>{tr("Interface thickness", "سُمك خط الواجهة")}</span>
+                  <select
+                    value={interfaceFontWeight}
+                    onChange={(event) =>
+                      void updateInterfaceTypography({
+                        interfaceFontWeight: Number(
+                          event.target.value,
+                        ) as EditorPreferences["interfaceFontWeight"],
+                      })
+                    }
+                  >
+                    <option value={400}>{tr("Regular", "عادي")}</option>
+                    <option value={500}>{tr("Medium", "متوسط")}</option>
+                    <option value={600}>{tr("Semibold", "شبه عريض")}</option>
+                  </select>
+                </label>
+                <p className="settings-note">
+                  {tr(
+                    "Interface typography applies after restarting osCode.",
+                    "يُطبّق خط الواجهة بعد إعادة تشغيل osCode.",
+                  )}
+                </p>
                 <label className="settings-select-row">
                   <span>{tr("Code size", "حجم خط الكود")}</span>
                   <select
@@ -6192,7 +6324,7 @@ export function App() {
                     icon={
                       updateStatus.state === "ready"
                         ? "download-cloud"
-                        : "refresh-cw"
+                        : "loader"
                     }
                     size="15"
                   />
@@ -6613,7 +6745,7 @@ export function App() {
                       }}
                     />
                     <IconButton
-                      icon="refresh-cw"
+                      icon="loader"
                       label="Restart terminal"
                       className="terminal-session-control"
                       disabled={!activeTerminalId}
@@ -6848,7 +6980,7 @@ export function App() {
                         disabled={Boolean(packageOperation)}
                         onClick={() => void refreshPythonPackages()}
                       >
-                        <FeatherIcon icon="refresh-cw" size="15" />
+                        <FeatherIcon icon="loader" size="15" />
                         Refresh
                       </button>
                       <button
@@ -7077,6 +7209,10 @@ export function App() {
               activeFile={active && !active.media ? active.path : ""}
               visible={aiVisible}
               openChatId={requestedAiChat}
+              onOpenAppSettings={() => {
+                setAdvanced(false);
+                setSettingsOpen(true);
+              }}
               onEngine={(next) => {
                 setAiEngine(next);
                 setAiModel("");

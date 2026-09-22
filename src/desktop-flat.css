@@ -1,0 +1,1481 @@
+/* A restrained desktop companion to osChat iOS. This stylesheet loads last;
+   it changes presentation without replacing editor or chat behaviours. */
+.app {
+  --accent-fill: #89cff0;
+  --flat-menu-radius: 16px;
+  --flat-control-radius: 11px;
+  --control-hover-fill: var(--panel);
+  --control-hover-fill-strong: var(--panel2);
+}
+
+/* Keep the persisted blue-light key, but make its visual treatment Paper Light. */
+.app.blue-light {
+  --bg: #ffffff;
+  --topbar: #ffffff;
+  --panel: #f1f3f5;
+  --panel2: #e9edf0;
+  --text: #20292e;
+  --muted: #68747b;
+  --line: #e1e6e9;
+  --accent: #397b9d;
+  --accent2: #8ac9e8;
+  --accent-fill: #8ac9e8;
+  --onaccent: #142b38;
+  --terminal-bg: #ffffff;
+  --terminal-surface: #f1f3f5;
+  --terminal-text: #20292e;
+  --terminal-muted: #68747b;
+  --chat-bg: #ffffff;
+  --chat-assistant: #ffffff;
+  --chat-user: #eef4f7;
+  --overlay-surface: #ffffff;
+  --overlay-scrim: rgb(32 41 46 / 34%);
+  --control-hover-fill: #f1f3f5;
+  --control-hover-fill-strong: #e9edf0;
+}
+
+/* Flat chrome with borders in place of stacked elevation. */
+.app .topbar,
+.app .sidebar,
+.app .explorer,
+.app .tabs,
+.app .editor-command-stack,
+.app .ai-panel {
+  box-shadow: none !important;
+}
+.app .topbar {
+  border-bottom: 1px solid var(--line);
+  background: var(--topbar);
+}
+.app :where(.sidebar, .explorer) {
+  background: var(--topbar);
+}
+.app .tabs,
+.app .ai-chat-tab-strip {
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--line);
+  background: var(--topbar);
+  scrollbar-width: thin;
+}
+.app .ai-chat-tab-strip {
+  padding: 7px 12px;
+}
+.app .ai-chat-tab {
+  min-width: 120px;
+  height: 38px;
+  border-radius: 11px;
+  background: var(--panel);
+}
+.app .ai-chat-tab.active {
+  background: color-mix(in srgb, var(--panel2) 88%, var(--accent) 12%);
+}
+.app .editor-command-stack {
+  background: var(--topbar);
+}
+.app .editor-command-tabs,
+.app .editor-command-tabs.horizontal-menu-scroll {
+  min-height: 42px;
+  padding-top: 5px;
+  background: var(--topbar);
+}
+.app .editor-command-tabs > button {
+  min-height: 36px;
+  height: 36px;
+  padding-inline: 13px;
+  border-radius: 8px 8px 0 0;
+}
+.app .editor-command-bar,
+.app .editor-command-bar.horizontal-menu-scroll {
+  min-height: 50px;
+  height: 50px;
+  gap: 6px;
+  padding-block: 5px;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+}
+.app .editor-command-bar button {
+  min-height: 40px;
+  height: 40px;
+  padding-inline: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--flat-control-radius);
+  background: var(--panel);
+}
+.app .editor-command-bar button:hover:not(:disabled) {
+  background: var(--panel2);
+}
+
+/* Plain assistant prose and modest user bubbles mirror the mobile conversation. */
+.app .ai-panel {
+  min-width: 0;
+  background: var(--chat-bg);
+}
+.app .ai-conversation {
+  min-width: 0;
+  padding: 15px max(12px, calc((100% - 880px) / 2));
+  scroll-padding-bottom: 110px;
+}
+.app .ai-message {
+  max-width: 880px;
+  margin-bottom: 13px;
+  box-shadow: none !important;
+}
+.app .ai-message.assistant {
+  padding: 8px 0;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+}
+.app .ai-message.user {
+  width: fit-content;
+  max-width: min(85%, 680px);
+  margin-left: auto;
+  padding: 11px 14px;
+  border: 0 !important;
+  border-radius: 16px 16px 5px 16px;
+  background: var(--chat-user) !important;
+}
+.app .ai-message-author i {
+  background: var(--panel);
+}
+.app .ai-message-images img,
+.app .ai-message-file {
+  border-radius: 10px;
+}
+
+/* Chat input remains fully functional in docked, narrow, and expanded modes. */
+.app .ai-composer {
+  min-width: 0;
+  min-height: 72px;
+  border: 1px solid var(--line) !important;
+  border-radius: 20px !important;
+  background: var(--panel) !important;
+  box-shadow: none !important;
+}
+.app .ai-composer textarea {
+  min-width: 0;
+  min-height: 48px;
+}
+.app .ai-composer > button:not(.ai-composer-stop-button) {
+  border-radius: 50%;
+}
+.app .ai-footer-controls {
+  min-width: 0;
+  gap: 7px;
+}
+.app
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle) {
+  background: var(--panel);
+  box-shadow: none;
+}
+.app .ai-panel .ai-footer-controls :is(.ai-tier-picker, .ai-capability-bar) {
+  border: 1px solid var(--line) !important;
+  border-radius: var(--flat-menu-radius) !important;
+  background: var(--overlay-surface) !important;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 16%) !important;
+}
+.app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar)
+  > button {
+  border-radius: var(--flat-control-radius) !important;
+}
+.app .ai-panel:not(.expanded) .ai-footer-controls {
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: thin;
+}
+.app .ai-attachments {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+/* Light, readable menus; do not alter popover anchoring or width constraints. */
+.app
+  :where(
+    .ai-model-popover,
+    .ai-permission-popover,
+    .ai-agent-popover,
+    .ai-history-popover,
+    .ai-tier-picker,
+    .ai-capability-bar.ai-capability-popover,
+    .settings-dock,
+    .advanced-dock,
+    .python-environment-manager,
+    .sidebar-item-menu,
+    .ai-chat-tab-menu
+  ) {
+  border: 1px solid var(--line) !important;
+  border-radius: var(--flat-menu-radius) !important;
+  background: var(--overlay-surface) !important;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 16%) !important;
+}
+.app
+  :where(
+    .ai-model-popover button,
+    .ai-permission-popover button,
+    .ai-agent-popover button,
+    .advanced-dock button,
+    .settings-dock button,
+    .python-environment-manager button
+  ) {
+  border-radius: var(--flat-control-radius);
+}
+.app .python-environment-manager-actions.horizontal-menu-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.app .python-environment-manager-actions > button {
+  min-width: max-content;
+  border-radius: var(--flat-control-radius);
+}
+.app.blue-light .settings-dock,
+.app.blue-light .advanced-dock,
+.app.blue-light .python-environment-manager {
+  background: #ffffff !important;
+}
+
+@media (max-width: 900px) {
+  .app .ai-conversation {
+    padding-inline: 12px;
+  }
+  .app .editor-command-bar,
+  .app .editor-command-tabs {
+    scroll-padding-inline: 10px;
+  }
+}
+
+@media (max-width: 620px) {
+  .app .ai-message.user {
+    max-width: 94%;
+  }
+  .app .ai-composer {
+    margin-inline: 6px;
+  }
+  .app .ai-chat-tab-strip {
+    padding-inline: 7px;
+  }
+}
+
+/* iOS-aligned chat and settings refinement. The editor remains dense while
+   chat chrome uses the calmer, divider-based mobile hierarchy. */
+.app {
+  --app-font-size: 13px;
+  --app-font-weight: 400;
+  font-size: var(--app-font-size);
+  font-weight: var(--app-font-weight);
+}
+.app :where(button, input, textarea, select) {
+  font-family: inherit;
+  font-size: var(--app-font-size);
+}
+.app :where(button, input, textarea, select, p, small, span) {
+  font-weight: var(--app-font-weight);
+}
+.app :where(b, strong) {
+  font-weight: 600;
+}
+
+/* Rounded global search and capsule chat tabs. */
+.app .global-search.expanded,
+.app .global-search.expanded > input {
+  border-radius: 999px !important;
+}
+.app .global-search.expanded {
+  border: 1px solid var(--line) !important;
+  background: var(--panel) !important;
+}
+.app .ai-chat-tab-strip {
+  gap: 8px;
+  padding-block: 8px;
+}
+.app .ai-chat-tab {
+  min-width: 145px;
+  height: 38px;
+  padding-inline: 14px 7px;
+  border-radius: 999px !important;
+}
+.app .ai-chat-tab > .ai-chat-tab-more,
+.app .ai-chat-tab > .ai-chat-tab-more:hover,
+.app .ai-chat-tab > .ai-chat-tab-more:focus-visible {
+  width: 32px;
+  height: 32px;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.app .ai-chat-tab-menu {
+  padding: 7px;
+  border-radius: 18px !important;
+}
+.app .ai-chat-tab-menu > button {
+  min-height: 42px;
+  border-radius: 11px !important;
+}
+
+/* Text-like Model / Permissions / Auto controls, with flat option rows. */
+.app .ai-footer-controls {
+  gap: 16px;
+  min-height: 42px;
+  overflow: visible;
+}
+.app .ai-footer-controls :is(.ai-bottom-model, .ai-capability-drawer) {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+.app
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle) {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 42px !important;
+  min-height: 42px;
+  padding: 0 4px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--accent);
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.app
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle)
+  > svg:last-child {
+  display: none;
+}
+.app .ai-footer-controls .ai-footer-label {
+  display: inline !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+.app .ai-footer-controls .ai-capability-bar,
+.app .ai-footer-controls .ai-tier-picker {
+  padding: 10px 12px;
+  border-radius: 18px !important;
+  background: var(--overlay-surface) !important;
+}
+.app .ai-footer-controls .ai-capability-bar > button,
+.app .ai-footer-controls .ai-tier-picker > button {
+  min-height: 44px;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* The legacy responsive rules turn these controls into icon circles. Keep the
+   iOS-style text controls in both docked and expanded chat instead. */
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  > :is(.ai-bottom-model, .ai-capability-drawer, .ai-auto-install-toggle) {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle) {
+  display: flex !important;
+  grid-template-columns: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  gap: 7px !important;
+  padding-inline: 4px !important;
+  overflow: visible !important;
+  border-radius: 0 !important;
+}
+#root .app .ai-panel .ai-footer-controls .ai-capability-toggle > span {
+  display: flex !important;
+  width: auto !important;
+  height: auto !important;
+  gap: 7px !important;
+}
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle, .ai-auto-install-toggle)
+  .ai-footer-label {
+  display: inline !important;
+  width: auto !important;
+  max-width: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-toggle, .ai-capability-toggle)
+  > svg:last-child {
+  display: none !important;
+}
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar)
+  > button {
+  min-height: 44px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* Single-line capsule, rounded rectangle once the draft wraps. */
+.app .ai-composer {
+  min-height: 58px;
+  padding: 8px 9px;
+  border-radius: 999px !important;
+  align-items: center;
+  transition:
+    border-radius 160ms ease,
+    min-height 160ms ease;
+}
+.app .ai-composer.expanded-input {
+  border-radius: 22px !important;
+}
+.app .ai-composer textarea {
+  min-height: 28px;
+  max-height: 146px;
+  padding: 5px 6px;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.45;
+}
+.app .ai-composer > button {
+  align-self: center;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  min-height: 42px;
+  border-radius: 50% !important;
+}
+
+/* Top-right hamburger menu. */
+.app .ai-main-menu {
+  position: fixed;
+  z-index: 180;
+  top: max(68px, env(titlebar-area-height, 0px));
+  right: 14px;
+  display: grid;
+  width: min(230px, calc(100vw - 28px));
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--overlay-surface);
+  box-shadow: 0 14px 36px rgb(0 0 0 / 18%);
+}
+.app .ai-main-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 43px;
+  padding-inline: 12px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+.app .ai-main-menu > button:hover {
+  background: var(--panel);
+}
+.app .ai-main-menu-divider {
+  height: 1px;
+  margin: 5px 7px;
+  background: var(--line);
+}
+
+/* Permissions and AI settings: one surface, separator-led rows. */
+.app :where(.ai-permission-popover, .ai-model-popover) {
+  background: var(--overlay-surface) !important;
+}
+.app .ai-permission-popover .ai-permission-tools {
+  padding: 12px 16px;
+  background: transparent !important;
+}
+.app .ai-permission-popover .ai-permission-tools > label,
+.app .ai-permission-popover .ai-permission-tools > button {
+  border-radius: 999px !important;
+  background: var(--panel) !important;
+}
+.app .ai-permission-popover .ai-permission-list,
+.app .ai-model-popover .ai-model-table {
+  padding-inline: 16px;
+  background: transparent !important;
+}
+.app .ai-permission-popover .ai-permission-row,
+.app .ai-model-popover .ai-model-row,
+.app .ai-model-popover .ai-setting-row {
+  min-height: 58px;
+  margin: 0 !important;
+  padding: 10px 4px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.app .ai-model-popover .ai-hardware-note,
+.app .ai-model-popover .ai-engine-note {
+  margin: 0 16px;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* App Settings follows the same divider-based list treatment. */
+.app .settings-dock {
+  background: var(--overlay-surface) !important;
+}
+.app .settings-dock > section {
+  padding: 16px 18px;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+.app .settings-dock .settings-select-row,
+.app .settings-dock .toggle-row {
+  min-height: 50px;
+  margin: 0;
+  padding-block: 7px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+.app .settings-dock .settings-select-row select {
+  min-height: 38px;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: var(--panel);
+}
+.app .settings-dock .theme-choice {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+.app .settings-dock .theme-choice button {
+  min-height: 46px;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  text-align: left;
+}
+.app .settings-dock .theme-choice button.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent) !important;
+}
+
+@media (max-width: 620px) {
+  .app .ai-footer-controls {
+    gap: 10px;
+    overflow-x: auto;
+  }
+}
+
+/* Keep the model and permission menus above every chat layer.  These menus
+   stay attached to their controls so their alignment follows the AI column. */
+#root .app .ai-panel {
+  overflow: visible !important;
+  isolation: isolate;
+}
+#root .app .ai-panel .ai-conversation {
+  position: relative;
+  z-index: 0;
+}
+#root .app .ai-panel .ai-footer-controls {
+  position: relative;
+  z-index: 80 !important;
+  overflow: visible !important;
+}
+#root .app .ai-panel .ai-bottom-model,
+#root .app .ai-panel .ai-capability-drawer {
+  position: relative;
+  z-index: 81;
+  overflow: visible !important;
+}
+#root .app .ai-panel .ai-composer {
+  position: relative;
+  z-index: 1;
+}
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar) {
+  z-index: 240 !important;
+  bottom: calc(100% + 10px) !important;
+  max-width: min(520px, calc(100vw - 28px)) !important;
+  max-height: min(60vh, 520px);
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+#root
+  .app
+  .ai-panel:not(.expanded)[data-side="right"]
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar) {
+  right: 0 !important;
+  left: auto !important;
+}
+#root
+  .app
+  .ai-panel:not(.expanded)[data-side="left"]
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar) {
+  right: auto !important;
+  left: 0 !important;
+}
+
+/* Advanced mirrors the quiet, divider-led iOS menu. */
+#root .app .advanced-dock,
+#root .app .advanced-dock.advanced-dock-wide,
+#root .app .advanced-dock.advanced-dock-runtimes {
+  overflow: hidden;
+  border-radius: 18px !important;
+  background: var(--overlay-surface) !important;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 18%) !important;
+}
+#root .app .advanced-title {
+  min-height: 58px;
+  padding: 0 16px !important;
+  border-bottom: 1px solid var(--line);
+}
+#root .app .advanced-menu {
+  display: grid !important;
+  gap: 0 !important;
+  padding: 0 16px 12px !important;
+}
+#root .app .advanced-dock .advanced-menu > button {
+  display: grid !important;
+  grid-template-columns: 28px minmax(0, 1fr) 20px;
+  align-items: center;
+  min-height: 56px !important;
+  padding: 0 4px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  color: var(--text);
+  background: transparent !important;
+  box-shadow: none !important;
+  text-align: start;
+}
+#root .app .advanced-dock .advanced-menu > button:last-child {
+  border-bottom: 0 !important;
+}
+#root .app .advanced-dock .advanced-menu > button > svg:first-child {
+  color: var(--accent);
+}
+#root .app .advanced-dock .advanced-menu > button > svg:last-child {
+  justify-self: end;
+  color: var(--muted);
+}
+#root .app .advanced-content,
+#root .app .advanced-runtime-content {
+  margin: 0 !important;
+  padding: 16px 18px 18px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .advanced-content .toggle-row,
+#root .app .advanced-content .runtime-row,
+#root .app .advanced-content .advanced-subsection,
+#root .app .advanced-content .mcp-server-list > article {
+  margin: 0 !important;
+  padding: 12px 4px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .advanced-content .advanced-action,
+#root .app .advanced-content .secondary-action {
+  min-height: 42px;
+  border-radius: 12px !important;
+}
+#root .app .advanced-runtime-content {
+  padding: 24px !important;
+}
+#root .app .advanced-runtime-content .advanced-action-grid > button {
+  min-height: 54px !important;
+}
+#root .app .advanced-runtime-content .advanced-subsection {
+  padding: 20px !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* Settings uses one surface and compact selectable rows. */
+#root .app .settings-dock {
+  overflow-x: hidden;
+  border-radius: 18px !important;
+  background: var(--overlay-surface) !important;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 18%) !important;
+}
+#root .app .settings-title {
+  min-height: 58px;
+  padding: 0 18px !important;
+  border-bottom: 1px solid var(--line);
+}
+#root .app .settings-dock > section {
+  margin: 0 !important;
+  padding: 12px 18px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .settings-dock > section:last-child {
+  border-bottom: 0 !important;
+}
+#root .app .settings-dock .settings-label {
+  min-height: auto !important;
+  padding: 6px 4px 8px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--accent) !important;
+  background: transparent !important;
+  letter-spacing: 0.08em;
+}
+#root .app .settings-dock .theme-choice {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 0 !important;
+}
+#root .app .settings-dock .theme-choice button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 48px !important;
+  padding: 0 4px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  color: var(--text);
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .settings-dock .theme-choice button::after {
+  content: "›";
+  margin-inline-start: auto;
+  color: var(--muted);
+  font-size: 20px;
+}
+#root .app .settings-dock .theme-choice button.active {
+  color: var(--accent) !important;
+  background: transparent !important;
+}
+#root .app .settings-dock .theme-choice button.active::after {
+  content: "✓";
+  color: var(--accent);
+  font-size: 15px;
+}
+#root .app .settings-dock .settings-select-row,
+#root .app .settings-dock .toggle-row {
+  min-height: 52px !important;
+  margin: 0 !important;
+  padding: 7px 4px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .settings-dock .settings-select-row select {
+  width: auto !important;
+  min-width: min(52%, 260px) !important;
+  min-height: 36px !important;
+  padding-inline: 10px 28px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--accent) !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  text-align: end;
+}
+#root .app .settings-dock .settings-note,
+#root .app .settings-dock .settings-update-channel {
+  margin: 8px 4px !important;
+}
+#root .app .settings-dock .settings-update-check {
+  min-height: 42px;
+  border-radius: 12px !important;
+}
+
+/* Git fills its column; only the scrollbar gets a gutter. */
+#root .app .git.panel {
+  background: var(--panel2) !important;
+}
+#root .app .git-panel-head {
+  min-height: 48px !important;
+  padding: 0 8px 0 0 !important;
+  border-bottom: 1px solid var(--line);
+}
+#root .app .git-panel-head .section-toggle {
+  min-height: 48px !important;
+  padding: 0 12px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--text);
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .git-panel-head .section-toggle > span {
+  gap: 9px;
+}
+#root .app .git-body {
+  padding: 0 8px 12px 0 !important;
+  scrollbar-gutter: stable;
+}
+#root .app .git-repo-head {
+  min-height: 50px;
+  margin: 0 !important;
+  padding: 0 8px 0 12px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .git-group,
+#root .app .git-group-card {
+  width: 100%;
+  margin: 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .git-group > summary {
+  min-height: 48px;
+  padding: 0 12px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .git-sync-summary,
+#root .app .git-commit-tree,
+#root .app .git-group > .git-group-help {
+  padding-inline: 12px !important;
+}
+#root .app .git-commit-entry {
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .git-commit-row {
+  gap: 10px !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  background: transparent !important;
+}
+#root .app .git-commit-row input {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+  background: var(--bg) !important;
+}
+#root .app .git-commit-row > button:not(.commit-action) {
+  width: 36px !important;
+  min-width: 36px !important;
+  height: 36px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--muted);
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .git-commit-row .commit-action {
+  min-height: 42px;
+  padding-inline: 16px !important;
+  border-radius: 12px !important;
+}
+#root .app .git-group > .field {
+  width: calc(100% - 24px) !important;
+  margin: 4px 12px 10px !important;
+  border-radius: 12px !important;
+}
+#root .app .git-group > .git-remote-actions {
+  margin: 0 !important;
+  padding: 0 12px 12px !important;
+}
+#root .app .git-remote-actions > button:first-child {
+  min-height: 40px;
+  border-radius: 12px !important;
+}
+#root .app .git-body .git-empty-card {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .git-body .git-empty-card .git-primary-action {
+  min-height: 42px;
+  border-radius: 12px !important;
+}
+
+/* Desktop hover feedback is color-only: no blue hover blocks. */
+@media (hover: hover) and (pointer: fine) {
+  #root .app :where(button, a, summary, [role="button"]):hover:not(:disabled) {
+    color: var(--accent) !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+  #root .app :where(.tree-row, .git-commit-entry, .change):hover {
+    color: var(--accent) !important;
+    background-color: transparent !important;
+  }
+  #root .app :where(.danger, [data-danger]):hover:not(:disabled) {
+    color: var(--danger) !important;
+  }
+}
+
+/* 1.3.10 layout hardening: keep flattened controls readable at every panel
+   width and keep scrolling content in normal document flow. */
+#root .app .section-head {
+  min-height: 58px;
+  padding: 10px 12px 10px 18px;
+}
+#root .app .section-head > div:first-child {
+  min-width: 0;
+}
+#root .app .section-head h2 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: "Manrope", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#root .app .section-head > .project-browse-action {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px !important;
+  min-height: 40px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .section-head > .project-browse-action > span {
+  display: none !important;
+}
+#root .app .explorer-toolbar-divider {
+  width: 1px;
+  height: 24px;
+  flex: 0 0 1px;
+  margin-inline: 4px;
+  background: var(--line);
+}
+
+#root .app .git.panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#root .app .git-panel-head {
+  position: relative !important;
+  inset: auto !important;
+  z-index: 3;
+  flex: 0 0 auto;
+  background: var(--panel2) !important;
+}
+#root .app .git-body {
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+#root .app .git-repo-head,
+#root .app .git-history-tree,
+#root .app .git-history-tree > summary,
+#root .app .git-sync-summary {
+  position: relative !important;
+  inset: auto !important;
+  z-index: auto !important;
+}
+#root .app .git-history-tree > summary {
+  min-height: 48px;
+  box-sizing: border-box;
+}
+
+#root .app .settings-dock,
+#root .app .advanced-dock,
+#root .app .advanced-dock.advanced-dock-wide,
+#root .app .advanced-dock.advanced-dock-runtimes {
+  top: 14px !important;
+  right: 14px !important;
+  bottom: 14px;
+  width: min(540px, calc(100% - 28px)) !important;
+  max-width: min(540px, calc(100% - 28px)) !important;
+  max-height: none !important;
+  box-sizing: border-box;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+#root .app .advanced-dock.advanced-dock-runtimes {
+  width: min(640px, calc(100vw - 32px)) !important;
+  max-width: min(640px, calc(100vw - 32px)) !important;
+}
+#root .app .settings-dock {
+  padding-bottom: max(14px, env(safe-area-inset-bottom)) !important;
+}
+#root .app .settings-dock > section {
+  padding: 16px 22px !important;
+}
+#root .app .settings-dock > section:last-child {
+  padding-bottom: 22px !important;
+}
+#root .app .settings-dock .settings-title,
+#root .app .advanced-dock .advanced-title {
+  padding-inline: 22px 14px !important;
+}
+
+/* Model options are roomy two-column choices. Only the V1 section boundary
+   gets a divider; option buttons themselves stay flat. */
+#root .app .ai-panel .ai-footer-controls .ai-tier-picker {
+  width: min(620px, calc(100vw - 32px)) !important;
+  min-width: min(520px, calc(100vw - 32px)) !important;
+  max-width: min(620px, calc(100vw - 32px)) !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 0 16px !important;
+  padding: 12px 18px 16px !important;
+}
+#root .app .ai-panel .ai-footer-controls .ai-tier-picker > button {
+  min-width: 0 !important;
+  min-height: 68px !important;
+  border: 0 !important;
+  border-bottom: 0 !important;
+  border-radius: 0 !important;
+}
+#root .app .ai-panel .ai-tier-picker-section {
+  grid-column: 1 / -1;
+  margin: 8px 0 2px !important;
+  padding: 18px 4px 8px !important;
+  border-top: 1px solid var(--line) !important;
+  border-bottom: 0 !important;
+}
+
+/* Permission choices are buttons, not segmented rows. */
+#root .app .ai-panel .ai-footer-controls .ai-capability-bar {
+  width: min(680px, calc(100vw - 32px)) !important;
+  min-width: min(560px, calc(100vw - 32px)) !important;
+  max-width: min(680px, calc(100vw - 32px)) !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 6px 14px !important;
+  padding: 12px 16px !important;
+}
+#root .app .ai-panel .ai-footer-controls .ai-capability-bar > button {
+  min-width: 0 !important;
+  min-height: 54px !important;
+  border: 0 !important;
+  border-bottom: 0 !important;
+  border-radius: 0 !important;
+}
+#root .app .ai-panel .ai-footer-controls .ai-capability-divider {
+  display: none !important;
+}
+
+/* Chats and tasks follows the same single-surface, divider-led language as
+   Settings instead of nesting dark cards inside a modal. */
+#root .app .ai-agent-popover {
+  width: min(960px, calc(100vw - 32px)) !important;
+  max-width: calc(100vw - 32px) !important;
+}
+#root .app .ai-agent-popover .ai-chat-workspace-layout {
+  grid-template-columns: minmax(250px, 0.34fr) minmax(0, 1fr);
+  gap: 0 !important;
+  padding: 0 !important;
+  background: var(--overlay-surface) !important;
+}
+#root .app .ai-agent-popover :is(.ai-chat-selector, .ai-chat-detail) {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .ai-agent-popover .ai-chat-selector {
+  gap: 0;
+  padding: 14px 16px 16px;
+  border-inline-end: 1px solid var(--line) !important;
+}
+#root .app .ai-agent-popover .ai-chat-search {
+  margin-bottom: 12px;
+  border-radius: 999px !important;
+}
+#root .app .ai-agent-popover .ai-chat-selector > .primary {
+  min-height: 46px;
+  margin-bottom: 10px;
+  border-radius: 999px !important;
+}
+#root .app .ai-agent-popover .ai-chat-list {
+  gap: 0 !important;
+}
+#root .app .ai-agent-popover .ai-chat-choice {
+  gap: 6px;
+  padding: 10px 2px 10px 8px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .ai-agent-popover .ai-chat-choice.active {
+  color: var(--accent) !important;
+  background: transparent !important;
+}
+#root .app .ai-agent-popover .ai-chat-choice.active b {
+  color: var(--accent) !important;
+}
+#root .app .ai-agent-popover .ai-chat-detail-head {
+  padding: 18px 20px;
+  background: transparent !important;
+}
+#root .app .ai-agent-popover .ai-chat-detail .ai-agent-tabs {
+  gap: 0;
+  padding: 0 16px;
+  background: transparent !important;
+}
+#root .app .ai-agent-popover .ai-chat-detail .ai-agent-tabs > button {
+  min-height: 52px;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .ai-agent-popover .ai-chat-detail .ai-agent-tabs > button.active {
+  border-bottom-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+#root .app .ai-agent-popover :is(.ai-agent-form, .ai-agent-list) {
+  gap: 0;
+  padding: 18px 20px;
+}
+#root .app .ai-agent-popover .ai-agent-row {
+  padding: 12px 4px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* Xterm fills the padded content box. A percentage-minus-padding height made
+   the final prompt drift into the panel edge after switching Python/Shell. */
+#root .app .terminal-main {
+  min-height: 0;
+  padding-bottom: 0 !important;
+}
+#root .app .terminal-host {
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 14px 18px 28px !important;
+}
+#root .app .terminal-host .xterm {
+  height: 100% !important;
+}
+#root .app .terminal-host .xterm-viewport {
+  scroll-padding-bottom: 28px;
+}
+
+#root .app .top-status {
+  border-radius: 14px !important;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  #root
+    .app
+    .ai-panel
+    .ai-footer-controls
+    :is(.ai-tier-picker, .ai-capability-bar) {
+    width: min(520px, calc(100vw - 24px)) !important;
+    min-width: 0 !important;
+  }
+  #root .app .ai-agent-popover .ai-chat-workspace-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(180px, 34vh) minmax(0, 1fr);
+  }
+  #root .app .ai-agent-popover .ai-chat-selector {
+    border-inline-end: 0 !important;
+    border-bottom: 1px solid var(--line) !important;
+  }
+}
+
+/* 1.3.10 conversation and narrow-panel polish. Everything inside the Git
+   scroller participates in normal flow, while compact controls size to their
+   content instead of the desktop viewport. */
+#root .app .changes-head,
+#root .app .git-commit-row {
+  position: relative !important;
+  inset: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  z-index: auto !important;
+}
+
+#root .app .project-heading-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+#root .app .project-heading-actions > .icon-button {
+  display: inline-flex;
+  justify-content: center;
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px !important;
+  min-height: 40px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .project-heading-actions > .icon-button > span {
+  display: none !important;
+}
+#root .app .project-heading-divider {
+  width: 1px;
+  height: 24px;
+  flex: 0 0 1px;
+  background: var(--line);
+}
+
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row {
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: 14px;
+  min-height: 56px;
+  padding: 9px 4px !important;
+}
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row > span,
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row > b,
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row > button {
+  font-size: var(--app-font-size) !important;
+  line-height: 1.35;
+}
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row > b,
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 112px;
+  min-width: 112px;
+  min-height: 38px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 14px;
+}
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row > b {
+  color: var(--accent);
+  font-weight: 500;
+}
+#root .app .advanced-runtime-content .runtime-catalog .runtime-row > button {
+  border-radius: 11px !important;
+}
+
+#root .app .ai-panel .ai-footer-controls .ai-tier-picker {
+  width: max-content !important;
+  min-width: min(320px, calc(100vw - 24px)) !important;
+  max-width: min(460px, calc(100vw - 24px)) !important;
+  gap: 0 10px !important;
+  padding: 8px 10px 12px !important;
+}
+#root .app .ai-panel .ai-footer-controls .ai-tier-picker > button {
+  min-height: 54px !important;
+  padding: 8px 10px !important;
+}
+#root .app .ai-panel .ai-footer-controls .ai-capability-bar {
+  width: max-content !important;
+  min-width: min(360px, calc(100vw - 24px)) !important;
+  max-width: min(520px, calc(100vw - 24px)) !important;
+  gap: 2px 10px !important;
+  padding: 8px 10px !important;
+}
+#root .app .ai-panel .ai-footer-controls .ai-capability-bar > button {
+  min-height: 48px !important;
+  padding: 7px 9px !important;
+}
+#root .app .ai-composer.expanded-input {
+  min-height: 72px;
+}
+
+/* Mobile-style transcript: disclosure chevrons and typographic hierarchy
+   replace nested cards, bubbles, and framed model output. */
+#root .app .ai-message.user {
+  padding: 8px 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .ai-message-author.user-only {
+  justify-content: flex-end;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+#root .app .ai-message :is(.ai-reasoning, .ai-response-actions),
+#root .app .ai-live-model-output,
+#root .app .ai-live-work {
+  overflow: visible;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .ai-message :is(.ai-reasoning, .ai-response-actions) {
+  margin: 8px 0 !important;
+  padding: 0 !important;
+}
+#root .app .ai-message :is(.ai-reasoning, .ai-response-actions) > summary,
+#root .app .ai-action-output > summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 34px !important;
+  padding: 3px 0 !important;
+  list-style: none;
+  color: var(--muted);
+  font-size: 14px !important;
+  font-weight: 500;
+}
+#root
+  .app
+  .ai-message
+  :is(.ai-reasoning, .ai-response-actions)
+  > summary::-webkit-details-marker,
+#root .app .ai-action-output > summary::-webkit-details-marker {
+  display: none;
+}
+#root
+  .app
+  .ai-message
+  :is(.ai-reasoning, .ai-response-actions)
+  > summary::before,
+#root .app .ai-action-output > summary::before {
+  content: "›";
+  width: 14px;
+  flex: 0 0 14px;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  transform-origin: center;
+  transition: transform 140ms ease;
+}
+#root
+  .app
+  .ai-message
+  :is(.ai-reasoning, .ai-response-actions)[open]
+  > summary::before,
+#root .app .ai-action-output[open] > summary::before {
+  transform: rotate(90deg);
+}
+#root
+  .app
+  .ai-message
+  :is(.ai-reasoning, .ai-response-actions)
+  > summary
+  small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px !important;
+}
+#root .app .ai-message .ai-reasoning > :not(summary),
+#root .app .ai-message .ai-response-actions > .ai-action-timeline {
+  margin: 0 !important;
+  padding: 5px 0 5px 22px !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+#root .app .ai-action-timeline {
+  gap: 0 !important;
+}
+#root .app .ai-action-card {
+  padding: 10px 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .ai-action-card:last-child {
+  border-bottom: 0 !important;
+}
+#root .app .ai-action-icon {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .ai-action-output {
+  margin-top: 6px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+#root .app .ai-action-output pre {
+  padding: 4px 0 8px 22px;
+  background: transparent;
+}
+#root .app .ai-live-work {
+  margin: 0 12px 12px;
+  padding: 0;
+}
+#root .app .ai-live-work .ai-thinking {
+  min-height: 42px;
+  padding: 5px 0;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+@media (max-width: 560px) {
+  #root .app .ai-panel .ai-footer-controls .ai-capability-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 380px) {
+  #root .app .ai-panel .ai-footer-controls .ai-tier-picker,
+  #root .app .ai-panel .ai-footer-controls .ai-capability-bar {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

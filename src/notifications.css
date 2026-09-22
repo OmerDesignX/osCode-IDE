@@ -95,25 +95,70 @@
 .notification-content {
   min-width: 0;
   max-width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
   overflow-wrap: break-word;
   word-break: normal;
 }
 
-.notification-content p {
+.notification-content .notification-message {
+  display: -webkit-box;
   max-width: 100%;
   margin: 0;
+  overflow: hidden;
   color: var(--text);
   font-size: 15px;
   line-height: 1.5;
   white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.notification-row.expanded .notification-message {
+  display: block;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: initial;
+}
+
+.notification-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
 }
 
 .notification-content time {
-  display: block;
-  margin-top: 6px;
+  min-width: 0;
+  flex: 1;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.notification-meta svg {
+  flex: none;
+}
+
+.notification-detail {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.notification-content:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
 .notifications-popover .notification-choice,

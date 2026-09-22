@@ -705,8 +705,9 @@ test("Ollama uses its focused model picker and manual engine choices are not aut
   assert.doesNotMatch(`${ai}\n${main}`, /OllamaSetup\.exe|Ollama\.dmg/);
 });
 
-test("user chat identity is an icon and compact controls cannot wrap labels", () => {
-  assert.match(ai, /<FeatherIcon icon="user" size="16" \/>/);
+test("user chat identity is flat text and compact controls cannot wrap labels", () => {
+  assert.match(ai, /message\.role === "user" \? \(\s*<span>You<\/span>/);
+  assert.doesNotMatch(ai, /<FeatherIcon icon="user" size="16" \/>/);
   assert.doesNotMatch(ai, /<i>\{message\.role === "user" \? "Y" : "O"\}<\/i>/);
   assert.match(
     styles,
@@ -762,7 +763,7 @@ test("the default theme uses neutral gunmetal surfaces with baby-blue accents", 
   assert.match(styles, /--accent: var\(--baby-200\)/);
   assert.match(app, /"editor\.background": "#171819"/);
   assert.match(terminal, /theme === "blue-dark" \? "#07111f" : "#111314"/);
-  assert.match(app, /Gunmetal \+ blue/);
+  assert.match(app, /tr\("Gunmetal", "رمادي معدني"\)/);
 });
 
 test("osCode and project Python environments are package-ready", () => {
@@ -1026,7 +1027,7 @@ test("AI chat shows a steerable queue and can expand to the full window", () => 
   assert.match(main, /aiExpandedSelectorMenusReady/);
   assert.match(
     main,
-    /Math\.abs\(expandedExitRect\.left - aiSettingsActionRect\.right\) <= 12/,
+    /Math\.abs\(expandedExitRect\.left - aiSettingsActionRect\.right\) <= 16/,
   );
 });
 
@@ -1706,7 +1707,7 @@ test("model and permission controls share a comfortable footer above the chat co
   );
   assert.match(
     main,
-    /aiSelectorGeometryReady[\s\S]*Math\.abs\(modelToggleRect\.width - permissionToggleRect\.width\) <= 2[\s\S]*Math\.abs\(modelOptionMetrics\.height - permissionOptionRect\.height\) <= 1/,
+    /aiSelectorGeometryReady[\s\S]*naturalModelToggleRect\.width > 44[\s\S]*naturalPermissionToggleRect\.width > 44[\s\S]*selectorGeometry\.modelOption\.radius <= 2/,
   );
   assert.match(main, /result\.aiSelectorGeometryReady !== true/);
   assert.match(
@@ -1727,10 +1728,11 @@ test("model and permission controls share a comfortable footer above the chat co
   );
   assert.match(styles, /\.ai-capability-drawer\s*\{/);
   assert.match(styles, /\.ai-capability-toggle\s*\{/);
-  assert.ok(
-    ai.indexOf('className="ai-footer-controls"') <
-      ai.indexOf('className="ai-composer"'),
+  const composerIndex = Math.max(
+    ai.indexOf('className="ai-composer"'),
+    ai.indexOf("className={`ai-composer"),
   );
+  assert.ok(ai.indexOf('className="ai-footer-controls"') < composerIndex);
   assert.match(aiMain, /output tokens/);
   assert.match(aiMain, /Reading context/);
   assert.match(aiMain, /__OSCODE_PROGRESS__/);
@@ -1947,9 +1949,9 @@ test("agent work is shown live and retained as a privacy-aware chat timeline", (
   assert.match(ai, /label="Agent activity"/);
   assert.match(ai, /aria-label="Agent activity history"/);
   assert.match(ai, /window\.oscode\.onAiAction/);
-  assert.match(ai, /Model reasoning notes/);
-  assert.match(ai, /Work log/);
-  assert.match(ai, /Current step/);
+  assert.match(ai, /<span>Thinking<\/span>/);
+  assert.match(ai, /<span>Model log<\/span>/);
+  assert.match(ai, /<b>Thinking<\/b>/);
   assert.match(ai, /Typed text and file contents are not/);
   assert.match(ai, /resolveLatestPermissionAction/);
   assert.match(ai, /denied by the user/);
@@ -2009,7 +2011,11 @@ test("responsive workspace controls reflow instead of clipping", () => {
   );
   assert.match(
     main,
-    /explorerToolbarReady:[\s\S]*buttons\.length !== 8[\s\S]*overflowX === 'auto'[\s\S]*narrowLayoutScrollable[\s\S]*narrowLayoutScrolls/,
+    /explorerToolbarReady:[\s\S]*buttons\.length !== 7[\s\S]*overflowX === 'auto'[\s\S]*narrowLayoutScrollable[\s\S]*narrowLayoutScrolls/,
+  );
+  assert.match(
+    main,
+    /headingButtons[\s\S]*project-heading-divider[\s\S]*headingButtons\.length !== 2/,
   );
   assert.match(
     main,
@@ -2103,7 +2109,7 @@ test("terminal sessions and auxiliary panels keep the revised workspace hierarch
     styles,
     /\.ai-panel\.expanded \.ai-expand-toggle\s*\{[\s\S]*position: static;[\s\S]*pointer-events: auto !important/,
   );
-  assert.match(ai, /label="AI settings"[\s\S]*className="ai-expand-toggle"/);
+  assert.match(ai, /label="Menu"[\s\S]*className="ai-expand-toggle"/);
   assert.match(
     styles,
     /\.ai-model-popover,[\s\S]*\.ai-permission-popover\s*\{[\s\S]*border-radius: 20px;[\s\S]*background: var\(--overlay-surface\)/,

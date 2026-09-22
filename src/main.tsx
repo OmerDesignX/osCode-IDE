@@ -9,6 +9,7 @@ import "./styles.css";
 import "./advanced.css";
 import "./startup.css";
 import "./notifications.css";
+import "./desktop-flat.css";
 import osCodeIcon from "./assets/oscode-icon.png";
 
 type MonacoRequire = {

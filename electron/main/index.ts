@@ -40,6 +40,7 @@ import {
   migrateLegacyModelInstallations,
   migratedModelSelection,
   resolveVersionedModelSelection,
+  withModelArchiveFetchFallback,
 } from "./model-catalog.js";
 import { AgentControlService } from "./agent-control.js";
 import { parseGitStatus, parseTracking } from "./git-status.js";
@@ -2182,9 +2183,19 @@ async function runSmokeTest(window: BrowserWindow) {
       const openAiPopup = async (buttonLabel, check, label) => {
         let lastError;
         for (let attempt = 0; attempt < 3; attempt += 1) {
-          const button = document.querySelector(
+          let button = document.querySelector(
             '[aria-label="' + buttonLabel + '"]'
           );
+          if (!button && buttonLabel === 'AI settings') {
+            const menuButton = document.querySelector('[aria-label="Menu"]');
+            if (!document.querySelector('.ai-main-menu')) menuButton?.click();
+            button = await waitFor(
+              () => [...document.querySelectorAll('.ai-main-menu button')]
+                .find(item => item.textContent.trim() === 'AI settings'),
+              'AI settings menu item',
+              5000
+            );
+          }
           if (!button) throw new Error('Missing ' + buttonLabel + ' button');
           button.click();
           try {
@@ -2700,7 +2711,7 @@ async function runSmokeTest(window: BrowserWindow) {
         .map(button => button.textContent.trim());
       const themeChoicesReady =
         themeLabels.length === 3 &&
-        ['Gunmetal + blue', 'Blue dark', 'Blue light'].every(label =>
+        ['Gunmetal', 'Deep blue', 'Paper light'].every(label =>
           themeLabels.includes(label)
         );
       const proseWrapToggle = [...settingsDock.querySelectorAll('label')].find(
@@ -2896,19 +2907,25 @@ async function runSmokeTest(window: BrowserWindow) {
         permissionOption: permissionOptionMetrics
       };
       const aiSelectorGeometryReady =
-        Math.abs(modelToggleRect.width - permissionToggleRect.width) <= 2 &&
-        Math.abs(modelToggleRect.height - permissionToggleRect.height) <= 1 &&
-        selectorGeometry.modelToggle.radius >= modelToggleRect.height / 2 - 2 &&
-        selectorGeometry.permissionToggle.radius >= permissionToggleRect.height / 2 - 2 &&
-        Math.abs(modelOptionMetrics.height - permissionOptionRect.height) <= 1 &&
-        selectorGeometry.modelOption.radius >= modelOptionMetrics.height / 2 - 2 &&
-        selectorGeometry.permissionOption.radius >= permissionOptionRect.height / 2 - 2 &&
-        selectorGeometry.modelPicker.radius >= 27 &&
-        selectorGeometry.modelPicker.radius <= 29 &&
-        selectorGeometry.permissionPicker.radius >= 27 &&
-        selectorGeometry.permissionPicker.radius <= 29 &&
-        selectorGeometry.modelPicker.padding >= 10 &&
-        selectorGeometry.permissionPicker.padding >= 10;
+        naturalModelToggleRect.width > 44 &&
+        naturalPermissionToggleRect.width > 44 &&
+        Math.abs(naturalModelToggleRect.height - naturalPermissionToggleRect.height) <= 1 &&
+        selectorGeometry.modelToggle.radius <= 2 &&
+        selectorGeometry.permissionToggle.radius <= 2 &&
+        modelOptionMetrics.height >= 40 &&
+        permissionOptionRect.height >= 40 &&
+        selectorGeometry.modelOption.radius <= 2 &&
+        selectorGeometry.permissionOption.radius <= 2 &&
+        selectorGeometry.modelPicker.radius >= 16 &&
+        selectorGeometry.permissionPicker.radius >= 16 &&
+        selectorGeometry.modelPicker.width >= 320 &&
+        selectorGeometry.modelPicker.width <= 460 &&
+        selectorGeometry.permissionPicker.width >= 360 &&
+        selectorGeometry.permissionPicker.width <= 520 &&
+        selectorGeometry.modelPicker.padding >= 8 &&
+        selectorGeometry.modelPicker.padding <= 12 &&
+        selectorGeometry.permissionPicker.padding >= 8 &&
+        selectorGeometry.permissionPicker.padding <= 12;
       modelToggle.click();
       await waitFor(
         () => !aiPanel.querySelector('.ai-tier-picker'),
@@ -2969,20 +2986,11 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedAutoTitleStyle = getComputedStyle(
         autoInstallToggle.querySelector('.ai-footer-label b')
       );
-      const expandedAutoStatusStyle = getComputedStyle(
-        autoInstallToggle.querySelector('.ai-footer-label small')
-      );
       const expandedModelTitleStyle = getComputedStyle(
         modelToggle.querySelector('.ai-footer-label b')
       );
-      const expandedModelStatusStyle = getComputedStyle(
-        modelToggle.querySelector('.ai-footer-label small')
-      );
       const expandedPermissionTitleStyle = getComputedStyle(
         permissionToggle.querySelector('.ai-footer-label b')
-      );
-      const expandedPermissionStatusStyle = getComputedStyle(
-        permissionToggle.querySelector('.ai-footer-label small')
       );
       const modelIconCenterOffset = Math.abs(
         expandedModelIconRect.left + expandedModelIconRect.width / 2 -
@@ -3003,19 +3011,16 @@ async function runSmokeTest(window: BrowserWindow) {
       };
       const aiFooterSelectorSpacingReady =
         compactSelectorInsetsReady &&
-        modelIconCenterOffset <= 1 &&
-        permissionIconCenterOffset <= 1 &&
-        compactFooterControlGap >= 8 &&
-        compactFooterControlGap <= 12 &&
-        modelToggleRect.left - compactFooterRect.left >= 12 &&
-        modelToggleRect.left - compactFooterRect.left <= 16;
+        naturalModelToggleRect.width > modelToggleRect.width &&
+        naturalPermissionToggleRect.width > permissionToggleRect.width &&
+        compactFooterControlGap >= 8;
       const aiFooterAutoHideReady =
-        expandedModelToggleRect.width >= 43 &&
-        expandedModelToggleRect.width <= 45 &&
-        restingModelToggleRect.width <= 66 &&
-        restingPermissionToggleRect.width <= 66 &&
-        expandedModelLabelRect.width === 0 &&
-        expandedPermissionLabelRect.width === 0 &&
+        expandedModelToggleRect.width > 44 &&
+        expandedPermissionToggleRect.width > 44 &&
+        restingModelToggleRect.width > 44 &&
+        restingPermissionToggleRect.width > 44 &&
+        expandedModelLabelRect.width > 0 &&
+        expandedPermissionLabelRect.width > 0 &&
         permissionPickerMetrics.width > 0;
       const expandedPanelRect = aiPanel.getBoundingClientRect();
       const expandedFooterRect = aiPanel
@@ -3028,7 +3033,7 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedContextRect = expandedContext.getBoundingClientRect();
       const expandedContextStyle = getComputedStyle(expandedContext);
       const aiSettingsActionRect = aiPanel
-        .querySelector('[aria-label="AI settings"]')
+        .querySelector('[aria-label="Menu"]')
         .getBoundingClientRect();
       const expandedExitRect = expandToggle.getBoundingClientRect();
       const expandedFirstControlRect = aiPanel
@@ -3065,32 +3070,26 @@ async function runSmokeTest(window: BrowserWindow) {
         permissionHeight: expandedPermissionToggleRect.height,
         autoHeight: restingAutoToggleRect.height,
         modelTitleSize: parseFloat(expandedModelTitleStyle.fontSize),
-        modelStatusSize: parseFloat(expandedModelStatusStyle.fontSize),
         permissionTitleSize: parseFloat(expandedPermissionTitleStyle.fontSize),
-        permissionStatusSize: parseFloat(expandedPermissionStatusStyle.fontSize),
         autoTitleSize: parseFloat(expandedAutoTitleStyle.fontSize),
-        autoStatusSize: parseFloat(expandedAutoStatusStyle.fontSize),
         composerGap: expandedComposerGap
       };
       const aiExpandedFooterControlsReady =
-        expandedModelToggleRect.height >= 43 &&
-        expandedModelToggleRect.height <= 45 &&
-        expandedPermissionToggleRect.height >= 43 &&
-        expandedPermissionToggleRect.height <= 45 &&
+        expandedModelToggleRect.height >= 40 &&
+        expandedModelToggleRect.height <= 44 &&
+        expandedPermissionToggleRect.height >= 40 &&
+        expandedPermissionToggleRect.height <= 44 &&
         Math.abs(
           expandedModelToggleRect.height - expandedPermissionToggleRect.height
         ) <= 1 &&
         Math.abs(
           expandedModelToggleRect.height - restingAutoToggleRect.height
         ) <= 1 &&
-        Math.abs(
-          restingModelToggleRect.width - restingAutoToggleRect.width
-        ) <= 2 &&
-        Math.abs(
-          restingPermissionToggleRect.width - restingAutoToggleRect.width
-        ) <= 2 &&
-        expandedModelLabelRect.width === 0 &&
-        expandedPermissionLabelRect.width === 0 &&
+        restingModelToggleRect.width > 44 &&
+        restingPermissionToggleRect.width > 44 &&
+        restingAutoToggleRect.width > 44 &&
+        expandedModelLabelRect.width > 0 &&
+        expandedPermissionLabelRect.width > 0 &&
         expandedComposerGap >= 18;
       const layoutProbe = document.createElement('article');
       layoutProbe.className = 'ai-message assistant';
@@ -3108,7 +3107,7 @@ async function runSmokeTest(window: BrowserWindow) {
         expandedContextStyle.backgroundColor === 'rgba(0, 0, 0, 0)' &&
         Math.abs(expandedFirstControlRect.left - expandedFooterRect.left) <= 2 &&
         expandedHeaderIconsCentered &&
-        Math.abs(expandedExitRect.left - aiSettingsActionRect.right) <= 12 &&
+        Math.abs(expandedExitRect.left - aiSettingsActionRect.right) <= 16 &&
         Math.abs(expandedExitRect.top - aiSettingsActionRect.top) <= 2;
       modelToggle.click();
       const expandedModelOption = await waitFor(
@@ -3129,8 +3128,8 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedPermissionOptionHeight =
         expandedPermissionOption.getBoundingClientRect().height;
       const aiExpandedSelectorMenusReady =
-        expandedModelOptionHeight >= 55 &&
-        expandedPermissionOptionHeight >= 55 &&
+        expandedModelOptionHeight >= 40 &&
+        expandedPermissionOptionHeight >= 40 &&
         !aiPanel.querySelector('.ai-tier-picker');
       permissionToggle.click();
       await waitFor(
@@ -3171,7 +3170,7 @@ async function runSmokeTest(window: BrowserWindow) {
       layoutSelect.value = 'left';
       layoutSelect.dispatchEvent(new Event('change', { bubbles: true }));
       const lightButton = [...document.querySelectorAll('button')].find(
-        item => item.textContent.trim() === 'Blue light'
+        item => item.textContent.trim() === 'Paper light'
       );
       lightButton.click();
       const lightThemeReady = await waitFor(
@@ -3439,7 +3438,20 @@ async function runSmokeTest(window: BrowserWindow) {
         explorerToolbarReady: (() => {
           const toolbar = document.querySelector('.explorer-toolbar');
           const buttons = [...(toolbar?.querySelectorAll('button') || [])];
-          if (!toolbar || buttons.length !== 8) return false;
+          const headingActions = document.querySelector('.project-heading-actions');
+          const headingButtons = [
+            ...(headingActions?.querySelectorAll('button') || [])
+          ];
+          const headingDivider = headingActions?.querySelector(
+            '.project-heading-divider'
+          );
+          if (
+            !toolbar ||
+            buttons.length !== 7 ||
+            headingButtons.length !== 2 ||
+            !headingDivider
+          )
+            return false;
           const bounds = toolbar.getBoundingClientRect();
           const wideLayoutReady =
             toolbar.scrollWidth <= toolbar.clientWidth + 1 &&
@@ -6344,6 +6356,13 @@ app.whenReady().then(async () => {
   aiService = new LocalAiService({
     userData: app.getPath("userData"),
     modelsRoot: path.join(app.getPath("userData"), "models"),
+    modelArchiveFetch: withModelArchiveFetchFallback(
+      (url, init) =>
+        session
+          .fromPartition("oscode-model-download", { cache: false })
+          .fetch(url, init),
+      (url, init) => globalThis.fetch(url, init),
+    ),
     sharedModelsRoots: [
       path.join(path.dirname(app.getPath("userData")), "oschat", "models"),
     ],

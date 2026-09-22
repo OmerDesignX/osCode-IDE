@@ -33,7 +33,10 @@ import {
   mlxRuntimeSupported,
   systemCudaBin,
 } from "./bundled-models.js";
-import { downloadModelVariant } from "./model-catalog.js";
+import {
+  downloadModelVariant,
+  type ModelArchiveFetch,
+} from "./model-catalog.js";
 import { fetchPublicPageImage, fetchWebPage, searchWeb } from "./web-search.js";
 import { SecureDataStore } from "./secure-store.js";
 import { assertSafeExternalPayload } from "./outbound-guard.js";
@@ -331,6 +334,7 @@ type PendingEdit = { id: string; root: string; path: string; content: string };
 type ServiceOptions = {
   userData: string;
   modelsRoot: string;
+  modelArchiveFetch?: ModelArchiveFetch;
   sharedModelsRoots?: string[];
   secureStore?: SecureDataStore;
   llamaRoot?: string;
@@ -3351,8 +3355,8 @@ export class LocalAiService {
       AiModelTier,
       "custom"
     >;
-    if (!["small", "medium", "large"].includes(tier))
-      throw new Error("Choose Small, Medium, or Large");
+    if (!["xsmall", "small", "medium", "large"].includes(tier))
+      throw new Error("Choose xSmall, Small, Medium, or Large");
     if (this.downloadController)
       throw new Error("Another model download is already running");
     const runtime = localAiEngine();
@@ -3374,6 +3378,7 @@ export class LocalAiService {
             progress,
             cancellable: true,
           }),
+        fetchArchive: this.options.modelArchiveFetch,
       });
       this.options.status(`${label} model ready`);
       const model = (await bundledModels(this.options.modelsRoot)).find(
