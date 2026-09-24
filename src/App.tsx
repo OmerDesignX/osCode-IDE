@@ -474,6 +474,8 @@ export function App() {
       code: ProjectSearchResult[];
       chats: Array<{ id: string; title: string; preview: string }>;
     }>({ code: [], chats: [] }),
+    [completedSearchQuery, setCompletedSearchQuery] = useState(""),
+    [failedSearchQuery, setFailedSearchQuery] = useState(""),
     [requestedAiChat, setRequestedAiChat] = useState(""),
     [activeAiChatId, setActiveAiChatId] = useState(""),
     [pendingRevealLine, setPendingRevealLine] = useState(0),
@@ -481,6 +483,8 @@ export function App() {
     [gitHelpSearch, setGitHelpSearch] = useState(""),
     [detachedRef, setDetachedRef] = useState("");
   const [terminalOpen, setTerminalOpen] = useState(false),
+    [terminalNeedsAttention, setTerminalNeedsAttention] = useState(false),
+    [terminalWorkActive, setTerminalWorkActive] = useState(false),
     [terminalView, setTerminalView] = useState<"shell" | "python">("shell"),
     [shellTabs, setShellTabs] = useState(() => [
       {
@@ -510,6 +514,9 @@ export function App() {
     [notice, setNotice] = useState("");
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [aiAttention, setAiAttention] = useState<AiAttention | null>(null);
+  useEffect(() => {
+    if (pythonPackageError) setTerminalNeedsAttention(true);
+  }, [pythonPackageError]);
   const [permissionCompletionReady, setPermissionCompletionReady] =
     useState(false);
   const [permissionCompleting, setPermissionCompleting] = useState(false);
@@ -645,6 +652,12 @@ export function App() {
   const hasDirtyTabs = tabs.some(
     (tab) => !tab.media && tab.content !== tab.saved,
   );
+  const hasPendingGitChanges =
+    git.initialized &&
+    (hasDirtyTabs ||
+      git.files.length > 0 ||
+      git.ahead > 0 ||
+      git.commits.some((commit) => commit.state !== "pushed"));
   const selectedRuntime = runtimes.find((x) => x.path === runtime);
   const appRuntime =
     runtimes.find(
@@ -833,6 +846,16 @@ export function App() {
         );
     });
     const offAi = window.oscode.onAiStatus((message) => {
+      if (
+        /preparing code changes|applying a focused code change|copying a project file|creating the PlatformIO project|writing|editing/i.test(
+          message,
+        )
+      )
+        setTerminalWorkActive(true);
+      else if (
+        /ready|stopped|thinking|answering|complete|failed|error/i.test(message)
+      )
+        setTerminalWorkActive(false);
       if (/searching the web|public web page|pulling|installing/i.test(message))
         setActivity({
           kind: "network",
@@ -1181,6 +1204,8 @@ export function App() {
     const query = globalSearch.trim();
     if (!query || !project) {
       setGlobalSearchResults({ code: [], chats: [] });
+      setCompletedSearchQuery("");
+      setFailedSearchQuery("");
       return;
     }
     let current = true;
@@ -1217,9 +1242,15 @@ export function App() {
               };
             });
           setGlobalSearchResults({ code: code.slice(0, 80), chats });
+          setCompletedSearchQuery(query);
+          setFailedSearchQuery("");
         })
         .catch((error) => {
-          if (current) setNotice(errorMessage(error, "Search failed"));
+          if (current) {
+            setNotice(errorMessage(error, "Search failed"));
+            setCompletedSearchQuery(query);
+            setFailedSearchQuery(query);
+          }
         });
     }, 180);
     return () => {
@@ -1988,6 +2019,15 @@ export function App() {
     }
   };
   const deleteRepository = async () => {
+    if (!project) return;
+    const confirmed = window.confirm(
+      `Remove the local Git repository for ${project.name}? This removes its Git history, branches, and stashes from this folder. Project files stay in place.`,
+    );
+    if (!confirmed) return;
+    const finalConfirmation = window.confirm(
+      `Confirm removal of the local repository for ${project.name}. This cannot be undone from osCode.`,
+    );
+    if (!finalConfirmation) return;
     try {
       const state = await window.oscode.deleteRepository();
       setGit(state);
@@ -2554,7 +2594,7 @@ export function App() {
         },
         {
           label: "Refresh Explorer",
-          icon: "loader",
+          icon: "rotate-ccw",
           run: refreshProjectItems,
         },
         {
@@ -3240,6 +3280,13 @@ export function App() {
   const computerPermissionPending =
     activity?.kind === "computer" && activity.phase === "permission";
   const activityIsDownload = activity?.kind === "download" && activity.active;
+  const terminalProgressActive =
+    terminalWorkActive ||
+    Boolean(packageOperation) ||
+    Boolean(
+      activity?.active &&
+      ["download", "platformio", "network"].includes(activity.kind),
+    );
   const openActivityDetails = () => {
     const activityMessage = activity
       ? [activity.label, activity.url, activity.target]
@@ -3545,7 +3592,7 @@ export function App() {
               />
               <span className="divider" />
               <IconButton
-                icon="sliders"
+                icon="bar-chart-2"
                 label={tr("Advanced", "متقدم")}
                 active={advanced}
                 onClick={() => {
@@ -3574,57 +3621,69 @@ export function App() {
               role="dialog"
               aria-label="Search results"
             >
-              <div className="global-search-section">
-                <b>Code base</b>
-                {globalSearchResults.code.length ? (
-                  globalSearchResults.code.map((result) => (
-                    <button
-                      key={`${result.path}:${result.line}`}
-                      onClick={async () => {
-                        await openFile({
-                          name:
-                            result.relativePath.split("/").at(-1) ||
-                            result.relativePath,
-                          path: result.path,
-                          kind: "file",
-                        });
-                        setPendingRevealLine(result.line);
-                        setGlobalSearch("");
-                        setGlobalSearchOpen(false);
-                      }}
-                    >
-                      <span>
-                        {result.relativePath}:{result.line}
-                      </span>
-                      <small>{result.preview}</small>
-                    </button>
-                  ))
-                ) : (
-                  <p>No code matches.</p>
-                )}
-              </div>
-              <div className="global-search-divider" />
-              <div className="global-search-section">
-                <b>AI chats</b>
-                {globalSearchResults.chats.length ? (
-                  globalSearchResults.chats.map((chat) => (
-                    <button
-                      key={chat.id}
-                      onClick={() => {
-                        setRequestedAiChat(chat.id);
-                        setAiVisible(true);
-                        setGlobalSearch("");
-                        setGlobalSearchOpen(false);
-                      }}
-                    >
-                      <span>{chat.title}</span>
-                      <small>{chat.preview}</small>
-                    </button>
-                  ))
-                ) : (
-                  <p>No chat matches.</p>
-                )}
-              </div>
+              {completedSearchQuery !== globalSearch.trim() ? (
+                <p className="global-search-pending" role="status">
+                  Searching code and chats…
+                </p>
+              ) : failedSearchQuery === globalSearch.trim() ? (
+                <p className="global-search-pending" role="alert">
+                  Search could not complete. Edit the query to try again.
+                </p>
+              ) : (
+                <>
+                  <div className="global-search-section">
+                    <b>Code base</b>
+                    {globalSearchResults.code.length ? (
+                      globalSearchResults.code.map((result) => (
+                        <button
+                          key={`${result.path}:${result.line}`}
+                          onClick={async () => {
+                            await openFile({
+                              name:
+                                result.relativePath.split("/").at(-1) ||
+                                result.relativePath,
+                              path: result.path,
+                              kind: "file",
+                            });
+                            setPendingRevealLine(result.line);
+                            setGlobalSearch("");
+                            setGlobalSearchOpen(false);
+                          }}
+                        >
+                          <span>
+                            {result.relativePath}:{result.line}
+                          </span>
+                          <small>{result.preview}</small>
+                        </button>
+                      ))
+                    ) : (
+                      <p>No code matches.</p>
+                    )}
+                  </div>
+                  <div className="global-search-divider" />
+                  <div className="global-search-section">
+                    <b>AI chats</b>
+                    {globalSearchResults.chats.length ? (
+                      globalSearchResults.chats.map((chat) => (
+                        <button
+                          key={chat.id}
+                          onClick={() => {
+                            setRequestedAiChat(chat.id);
+                            setAiVisible(true);
+                            setGlobalSearch("");
+                            setGlobalSearchOpen(false);
+                          }}
+                        >
+                          <span>{chat.title}</span>
+                          <small>{chat.preview}</small>
+                        </button>
+                      ))
+                    ) : (
+                      <p>No chat matches.</p>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -3957,7 +4016,7 @@ export function App() {
                   Add installed Python
                 </button>
                 <IconButton
-                  icon="loader"
+                  icon="rotate-ccw"
                   label="Refresh Python interpreters"
                   disabled={Boolean(pythonEnvironmentOperation)}
                   onClick={() => void refreshRuntimes(false)}
@@ -4521,7 +4580,7 @@ export function App() {
                         onClick={trashSelectedEntry}
                       />
                       <IconButton
-                        icon="loader"
+                        icon="rotate-ccw"
                         label="Refresh project"
                         onClick={refreshProjectItems}
                       />
@@ -4694,7 +4753,7 @@ export function App() {
                 />
               )}
               <section
-                className={`git panel ${gitOpen ? "expanded" : ""}`}
+                className={`git panel ${gitOpen ? "expanded" : ""}${hasPendingGitChanges ? " has-pending-changes" : ""}`}
                 style={gitOpen ? { height: gitHeight } : undefined}
               >
                 <div className="git-panel-head">
@@ -4794,7 +4853,7 @@ export function App() {
                           </div>
                           <div className="git-iconbar">
                             <IconButton
-                              icon="loader"
+                              icon="rotate-ccw"
                               label="Refresh Git status"
                               onClick={refreshGit}
                             />
@@ -4812,29 +4871,6 @@ export function App() {
                               Commit history
                             </span>
                           </summary>
-                          <div
-                            className="git-sync-summary"
-                            aria-label="Commit history legend"
-                          >
-                            <span title="Files changed since the last commit">
-                              <i className="git-sync-dot open" />
-                              Open changes · {git.files.length}
-                            </span>
-                            <span title="Local commits not yet pushed">
-                              <i className="git-sync-dot unpushed" />
-                              Unpushed · {git.ahead}
-                            </span>
-                            <span
-                              title={
-                                git.remote
-                                  ? "Commits already available on the remote"
-                                  : "No remote repository is linked"
-                              }
-                            >
-                              <i className="git-sync-dot pushed" />
-                              {git.remote ? "On remote" : "Local only"}
-                            </span>
-                          </div>
                           <div className="git-commit-tree">
                             {git.commits.length === 0 ? (
                               <p>No commits yet.</p>
@@ -5027,6 +5063,11 @@ export function App() {
                             </button>
                             <button
                               disabled={git.files.length === 0}
+                              title={
+                                git.files.length === 0
+                                  ? "No open changes to stash"
+                                  : "Save open changes in a stash"
+                              }
                               onClick={() =>
                                 void gitAction(
                                   "stashCreate",
@@ -5038,6 +5079,11 @@ export function App() {
                               changes
                             </button>
                           </div>
+                          {git.files.length === 0 && (
+                            <p className="git-utility-hint">
+                              No open changes to stash.
+                            </p>
+                          )}
                           <form
                             className="git-inline-form detached-checkout"
                             onSubmit={async (event) => {
@@ -5261,7 +5307,7 @@ export function App() {
                               {git.remote ? "Update link" : "Add link"}
                             </button>
                             <IconButton
-                              icon="loader"
+                              icon="rotate-ccw"
                               label="Fetch remote status"
                               disabled={!git.remote}
                               onClick={() => void gitAction("fetch")}
@@ -5400,7 +5446,7 @@ export function App() {
                     <FeatherIcon icon="external-link" size="15" /> Open live
                   </button>
                   <button onClick={() => void refreshAgentBrowserView()}>
-                    <FeatherIcon icon="loader" size="15" /> Refresh
+                    <FeatherIcon icon="rotate-ccw" size="15" /> Refresh
                   </button>
                 </div>
               </div>
@@ -6582,19 +6628,36 @@ export function App() {
             </div>
           )}
           <button
-            className="terminal-toggle"
+            className={`terminal-toggle${terminalNeedsAttention ? " needs-attention" : ""}${terminalProgressActive ? " has-progress" : ""}`}
             hidden={terminalOpen}
             aria-expanded={terminalOpen}
-            onClick={() => setTerminalOpen(!terminalOpen)}
+            onClick={() => {
+              setTerminalNeedsAttention(false);
+              setTerminalOpen(!terminalOpen);
+            }}
           >
             <span>
               <FeatherIcon icon="terminal" size="15" />
               {tr("Terminal", "الطرفية")}
             </span>
-            <FeatherIcon
-              icon={terminalOpen ? "chevron-down" : "chevron-up"}
-              size="15"
-            />
+            {terminalProgressActive &&
+              typeof activity?.progress === "number" && (
+                <span className="terminal-toggle-percent">
+                  {Math.round(activity.progress)}%
+                </span>
+              )}
+            {terminalProgressActive && (
+              <span
+                className={`terminal-toggle-progress${typeof activity?.progress === "number" ? "" : " indeterminate"}`}
+                style={
+                  typeof activity?.progress === "number"
+                    ? {
+                        width: `${Math.max(0, Math.min(100, activity.progress))}%`,
+                      }
+                    : undefined
+                }
+              />
+            )}
           </button>
           <div
             className="terminal-panel"
@@ -6745,7 +6808,7 @@ export function App() {
                       }}
                     />
                     <IconButton
-                      icon="loader"
+                      icon="rotate-ccw"
                       label="Restart terminal"
                       className="terminal-session-control"
                       disabled={!activeTerminalId}
@@ -6905,6 +6968,7 @@ export function App() {
                     }
                     interpreter={environmentActive ? runtime : ""}
                     theme={theme}
+                    onAttention={() => setTerminalNeedsAttention(true)}
                   />
                 ))}
                 {terminalView === "shell" && !shellTabs.length && (
@@ -6980,7 +7044,7 @@ export function App() {
                         disabled={Boolean(packageOperation)}
                         onClick={() => void refreshPythonPackages()}
                       >
-                        <FeatherIcon icon="loader" size="15" />
+                        <FeatherIcon icon="rotate-ccw" size="15" />
                         Refresh
                       </button>
                       <button
@@ -7209,10 +7273,6 @@ export function App() {
               activeFile={active && !active.media ? active.path : ""}
               visible={aiVisible}
               openChatId={requestedAiChat}
-              onOpenAppSettings={() => {
-                setAdvanced(false);
-                setSettingsOpen(true);
-              }}
               onEngine={(next) => {
                 setAiEngine(next);
                 setAiModel("");

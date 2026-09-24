@@ -2186,16 +2186,6 @@ async function runSmokeTest(window: BrowserWindow) {
           let button = document.querySelector(
             '[aria-label="' + buttonLabel + '"]'
           );
-          if (!button && buttonLabel === 'AI settings') {
-            const menuButton = document.querySelector('[aria-label="Menu"]');
-            if (!document.querySelector('.ai-main-menu')) menuButton?.click();
-            button = await waitFor(
-              () => [...document.querySelectorAll('.ai-main-menu button')]
-                .find(item => item.textContent.trim() === 'AI settings'),
-              'AI settings menu item',
-              5000
-            );
-          }
           if (!button) throw new Error('Missing ' + buttonLabel + ' button');
           button.click();
           try {
@@ -2554,6 +2544,10 @@ async function runSmokeTest(window: BrowserWindow) {
         ${JSON.stringify(path.join(smokeProject, "branch-smoke.txt"))},
         'branch controls ready\\n'
       );
+      const gitWorkingTreeHighlightReady = await waitFor(
+        () => document.querySelector('.git.has-pending-changes'),
+        'Git highlight for uncommitted changes'
+      );
       const saveHistoryReady = (
         await window.oscode.listSaveHistory(
           ${JSON.stringify(path.join(smokeProject, "branch-smoke.txt"))}
@@ -2589,10 +2583,10 @@ async function runSmokeTest(window: BrowserWindow) {
                 !option.value.startsWith('download:')
             )
           );
-          const downloads = options.filter(option =>
-            option.value.startsWith('download:')
+          const optionalVersions = ['3.13', '3.14'].every(version =>
+            options.some(option => option.textContent.includes(version))
           );
-          return bundled && downloads.length >= 2 ? select : null;
+          return bundled && optionalVersions ? select : null;
         },
         'loaded Python controls'
       );
@@ -2729,6 +2723,16 @@ async function runSmokeTest(window: BrowserWindow) {
       await waitFor(() => !proseWrapToggle.checked, 'disable prose wrapping');
       proseWrapToggle.click();
       await waitFor(() => proseWrapToggle.checked, 'enable prose wrapping');
+      const settingsSwitch = proseWrapToggle.nextElementSibling;
+      const settingsSwitchReady = await waitFor(() => {
+        const track = getComputedStyle(settingsSwitch);
+        const thumb = getComputedStyle(settingsSwitch, '::after');
+        return track.width === '46px' &&
+          track.height === '26px' &&
+          thumb.width === '18px' &&
+          thumb.height === '18px' &&
+          thumb.backgroundColor === 'rgb(255, 255, 255)';
+      }, 'Settings switch matches AI settings');
       markSmokeStage('AI chat');
       const chatButton = [...document.querySelectorAll('button')].find(
         item => item.textContent.trim() === 'Chat'
@@ -3033,7 +3037,7 @@ async function runSmokeTest(window: BrowserWindow) {
       const expandedContextRect = expandedContext.getBoundingClientRect();
       const expandedContextStyle = getComputedStyle(expandedContext);
       const aiSettingsActionRect = aiPanel
-        .querySelector('[aria-label="Menu"]')
+        .querySelector('[aria-label="AI settings"]')
         .getBoundingClientRect();
       const expandedExitRect = expandToggle.getBoundingClientRect();
       const expandedFirstControlRect = aiPanel
@@ -3098,13 +3102,86 @@ async function runSmokeTest(window: BrowserWindow) {
       aiPanel.querySelector('.ai-conversation').append(layoutProbe);
       const expandedMessageRect = layoutProbe.getBoundingClientRect();
       layoutProbe.remove();
+      const userLayoutProbe = document.createElement('article');
+      userLayoutProbe.className = 'ai-message user';
+      userLayoutProbe.innerHTML =
+        '<header class="ai-message-author user-only"><span>You</span></header><p>Short user note</p>';
+      aiPanel.querySelector('.ai-conversation').append(userLayoutProbe);
+      const expandedUserRect = userLayoutProbe.getBoundingClientRect();
+      const userText = userLayoutProbe.querySelector('p');
+      const userTextRange = document.createRange();
+      userTextRange.selectNodeContents(userText);
+      const expandedUserTextRect = userTextRange.getBoundingClientRect();
+      const expandedUserTextAlign = getComputedStyle(userText).textAlign;
+      userLayoutProbe.remove();
+      const expandedSendRect = aiPanel
+        .querySelector('.ai-composer > .ai-send-button')
+        .getBoundingClientRect();
+      const expandedAttachRect = aiPanel
+        .querySelector('.ai-composer > .ai-attach-button')
+        .getBoundingClientRect();
+      const expandedComposerUnfilled =
+        getComputedStyle(aiPanel.querySelector('.ai-composer')).backgroundColor ===
+        'rgba(0, 0, 0, 0)';
+      const aiExpandedEdgeReady =
+        expandedPanelRect.right - expandedUserRect.right <=
+          Math.max(48, expandedPanelRect.width * 0.12) &&
+        expandedUserRect.right - expandedUserTextRect.right <= 24 &&
+        expandedUserTextAlign === 'end' &&
+        expandedComposerRect.width >= expandedPanelRect.width * 0.75 &&
+        expandedComposerRect.right - expandedSendRect.right <= 12 &&
+        Math.abs(
+          expandedSendRect.top + expandedSendRect.height / 2 -
+          (expandedComposerRect.top + expandedComposerRect.height / 2)
+        ) <= 5 &&
+        Math.abs(
+          expandedAttachRect.top + expandedAttachRect.height / 2 -
+          (expandedComposerRect.top + expandedComposerRect.height / 2)
+        ) <= 5 &&
+        expandedComposerUnfilled;
+      const busyComposerProbe = document.createElement('form');
+      busyComposerProbe.className = 'ai-composer';
+      busyComposerProbe.style.position = 'fixed';
+      busyComposerProbe.style.top = '0';
+      busyComposerProbe.style.left = '0';
+      busyComposerProbe.style.opacity = '0';
+      busyComposerProbe.style.pointerEvents = 'none';
+      busyComposerProbe.innerHTML =
+        '<button class="ai-attach-button" type="button"></button><textarea></textarea><button class="ai-steer-button" type="button"></button><button class="ai-send-button" type="submit"></button><span class="ai-composer-stop-divider"></span><button class="ai-composer-stop-button" type="button"></button>';
+      aiPanel.append(busyComposerProbe);
+      const busyComposerRect = busyComposerProbe.getBoundingClientRect();
+      const busySendRect = busyComposerProbe
+        .querySelector('.ai-send-button')
+        .getBoundingClientRect();
+      const busyStopRect = busyComposerProbe
+        .querySelector('.ai-composer-stop-button')
+        .getBoundingClientRect();
+      const busyComposerGeometry = {
+        formRight: busyComposerRect.right,
+        formCenterY: busyComposerRect.top + busyComposerRect.height / 2,
+        sendLeft: busySendRect.left,
+        sendRight: busySendRect.right,
+        sendCenterY: busySendRect.top + busySendRect.height / 2,
+        stopRight: busyStopRect.right,
+        columns: getComputedStyle(busyComposerProbe).gridTemplateColumns
+      };
+      const aiBusyComposerEdgeReady =
+        busyComposerRect.right - busySendRect.right <= 12 &&
+        busyStopRect.right <= busySendRect.left &&
+        Math.abs(
+          busySendRect.top + busySendRect.height / 2 -
+          (busyComposerRect.top + busyComposerRect.height / 2)
+        ) <= 5;
+      busyComposerProbe.remove();
       const aiExpandedLayoutReady =
-        expandedPanelRect.width - expandedFooterRect.width >= 300 &&
+        expandedPanelRect.width - expandedFooterRect.width >= 48 &&
+        expandedPanelRect.width - expandedFooterRect.width <=
+          expandedPanelRect.width * 0.3 &&
         Math.abs(expandedFooterRect.width - expandedComposerRect.width) <= 2 &&
         expandedMessageRect.width <= expandedFooterRect.width * 0.9 &&
         expandedMessageRect.width >= 480 &&
         expandedContextRect.top - expandedComposerRect.bottom >= 8 &&
-        expandedContextStyle.backgroundColor === 'rgba(0, 0, 0, 0)' &&
+        expandedContextStyle.backgroundColor === getComputedStyle(aiPanel).backgroundColor &&
         Math.abs(expandedFirstControlRect.left - expandedFooterRect.left) <= 2 &&
         expandedHeaderIconsCentered &&
         Math.abs(expandedExitRect.left - aiSettingsActionRect.right) <= 16 &&
@@ -3506,9 +3583,7 @@ async function runSmokeTest(window: BrowserWindow) {
         pythonControlsReady: Boolean(runtimeSelect),
         projectSelectionReady,
         containedBaseRuntimes,
-        directRuntimeDownloads: downloadOptions.length >= 2 && downloadOptions.every(
-          option => !option.disabled
-        ),
+        directRuntimeDownloads: downloadOptions.every(option => !option.disabled),
         gitSubmoduleDetected: gitBeforeAbsorb.submodules.some(
           item =>
             item.path === 'vendor/sample-module' &&
@@ -3519,6 +3594,7 @@ async function runSmokeTest(window: BrowserWindow) {
           gitAfterAbsorb.files.some(file =>
             file.path === 'vendor/sample-module/module.py'
           ),
+        gitWorkingTreeHighlightReady: Boolean(gitWorkingTreeHighlightReady),
         gitLocalIdentityReady:
           Boolean(gitAfterSync.userName) && Boolean(gitAfterSync.userEmail),
         gitBranchesReady:
@@ -3533,6 +3609,7 @@ async function runSmokeTest(window: BrowserWindow) {
         advancedRuntimeLayoutReady,
         mcpReady,
         settingsReady: Boolean(settingsDock),
+        settingsSwitchReady,
         utilityPanelWidths: {
           advanced: advancedPanelWidth,
           settings: settingsPanelWidth,
@@ -3572,6 +3649,9 @@ async function runSmokeTest(window: BrowserWindow) {
         aiExpandedFooterControlsReady,
         aiExpandedSelectorMenusReady,
         aiExpandedLayoutReady,
+        aiExpandedEdgeReady,
+        aiBusyComposerEdgeReady,
+        busyComposerGeometry,
         aiTextFieldsBorderless,
         aiContextReady: Boolean(aiContextReady),
         aiModelSelected: Boolean(aiModelSelected),
@@ -4005,6 +4085,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.directRuntimeDownloads !== true ||
       result.gitSubmoduleDetected !== true ||
       result.gitSubmoduleAbsorbed !== true ||
+      result.gitWorkingTreeHighlightReady !== true ||
       result.gitLocalIdentityReady !== true ||
       result.gitBranchesReady !== true ||
       result.gitRemoteReady !== true ||
@@ -4013,6 +4094,7 @@ async function runSmokeTest(window: BrowserWindow) {
       result.advancedRuntimeLayoutReady !== true ||
       result.mcpReady !== true ||
       result.settingsReady !== true ||
+      result.settingsSwitchReady !== true ||
       result.utilityPanelGeometryReady !== true ||
       result.closeIconHitTargetsReady !== true ||
       result.autosaveSettingReady !== true ||
@@ -4039,6 +4121,8 @@ async function runSmokeTest(window: BrowserWindow) {
       result.aiExpandedFooterControlsReady !== true ||
       result.aiExpandedSelectorMenusReady !== true ||
       result.aiExpandedLayoutReady !== true ||
+      result.aiExpandedEdgeReady !== true ||
+      result.aiBusyComposerEdgeReady !== true ||
       result.aiTextFieldsBorderless !== true ||
       result.aiContextReady !== true ||
       result.aiModelSelected !== true ||

@@ -41,9 +41,45 @@ test("desktop flat design keeps the editor toolbar scrollable and updates Paper 
   assert.match(css, /--app-font-size: 13px/);
   assert.match(css, /\.ai-composer\.expanded-input/);
   assert.match(css, /\.app \.settings-dock > section/);
-  assert.match(ai, /className="ai-main-menu"/);
+  assert.match(ai, /label="AI settings"[\s\S]*toggleAiPopup\("models"\)/);
   assert.match(ai, /<b>Model<\/b>/);
   assert.match(app, /Interface typography applies after restarting osCode/);
+});
+
+test("Settings switches match AI settings and Git highlights every pending edit", () => {
+  assert.match(
+    css,
+    /#root \.app \.settings-dock \.toggle-row > i\s*\{[^}]*width: 46px !important;[^}]*height: 26px !important;/s,
+  );
+  assert.match(
+    css,
+    /#root \.app \.settings-dock \.toggle-row > input:checked \+ i::after\s*\{[^}]*background: #fff !important;[^}]*translate3d\(20px, 0, 0\)/s,
+  );
+  assert.match(
+    app,
+    /const hasPendingGitChanges\s*=\s*git\.initialized\s*&&\s*\(hasDirtyTabs\s*\|\|\s*git\.files\.length > 0\s*\|\|\s*git\.ahead > 0/s,
+  );
+  assert.match(app, /hasPendingGitChanges \? " has-pending-changes"/);
+  assert.match(css, /\.git\.has-pending-changes \.git-panel-head/);
+});
+
+test("expanded chat puts user text and send action at the edges without a filled composer", () => {
+  assert.match(
+    css,
+    /#root \.app \.ai-panel\.expanded \.ai-conversation\s*\{[^}]*padding-inline: var\(--ai-expanded-gutter\) !important;/s,
+  );
+  assert.match(
+    css,
+    /#root \.app \.ai-panel\.expanded \.ai-message\.user > p\s*\{[^}]*text-align: end;/s,
+  );
+  assert.match(
+    css,
+    /#root \.app \.ai-panel\.expanded \.ai-composer\s*\{[^}]*background: transparent !important;/s,
+  );
+  assert.match(
+    css,
+    /\.ai-composer:has\(\.ai-composer-stop-button\)[\s\S]*> \.ai-send-button\s*\{\s*grid-column: 6;/,
+  );
 });
 
 test("chat menus, flat utility panels, and color-only hover survive legacy styles", () => {

@@ -49,7 +49,6 @@ type Props = {
   activeFile?: string;
   visible?: boolean;
   openChatId?: string;
-  onOpenAppSettings?: () => void;
   onEngine: (engine: AiEngine) => void;
   onModel: (model: string) => void;
   onEditMode: (mode: AiEditMode) => void;
@@ -465,7 +464,6 @@ export function AiPanel({
   activeFile,
   visible = true,
   openChatId,
-  onOpenAppSettings,
   onEngine,
   onModel,
   onEditMode,
@@ -495,6 +493,19 @@ export function AiPanel({
     top: 0,
     left: 0,
   });
+  const [chatTitleTooltip, setChatTitleTooltip] = useState<{
+    title: string;
+    top: number;
+    left: number;
+  } | null>(null);
+  const showChatTitle = (title: string, target: HTMLElement) => {
+    const rect = target.getBoundingClientRect();
+    setChatTitleTooltip({
+      title: title || "New chat",
+      top: rect.bottom + 8,
+      left: Math.max(12, Math.min(rect.left, window.innerWidth - 312)),
+    });
+  };
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<AiChatAttachment[]>([]);
@@ -516,7 +527,6 @@ export function AiPanel({
   >("");
   const [status, setStatus] = useState("Ready · local only");
   const [modelsOpen, setModelsOpen] = useState(false);
-  const [mainMenuOpen, setMainMenuOpen] = useState(false);
   const [tierPickerOpen, setTierPickerOpen] = useState(false);
   const [permissionsDrawerOpen, setPermissionsDrawerOpen] = useState(false);
   const [autoInstallConfirmOpen, setAutoInstallConfirmOpen] = useState(false);
@@ -592,7 +602,6 @@ export function AiPanel({
     setHistoryOpen(false);
     setPermissionOpen(false);
     setModelsOpen(false);
-    setMainMenuOpen(false);
     setAddMenuOpen(false);
     setOllamaPickerOpen(false);
     setCustomListOpen(false);
@@ -1183,7 +1192,6 @@ export function AiPanel({
       setHistoryOpen(false);
       setPermissionOpen(false);
       setModelsOpen(false);
-      setMainMenuOpen(false);
       setAddMenuOpen(false);
       setOllamaPickerOpen(false);
       setCustomListOpen(false);
@@ -1195,16 +1203,6 @@ export function AiPanel({
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [browserAccess, computerAccess, expanded]);
-  useEffect(() => {
-    if (!mainMenuOpen) return;
-    const closeMenu = (event: PointerEvent) => {
-      const target = event.target as Element | null;
-      if (target?.closest(".ai-main-menu, .ai-main-menu-toggle")) return;
-      setMainMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", closeMenu, true);
-    return () => document.removeEventListener("pointerdown", closeMenu, true);
-  }, [mainMenuOpen]);
   useEffect(() => {
     const textarea = composerInputRef.current;
     if (!textarea) return;
@@ -2397,7 +2395,6 @@ export function AiPanel({
       style={expanded ? undefined : { width }}
     >
       <div className="ai-head">
-        <h2>AI Coder</h2>
         <div
           className="ai-head-actions horizontal-menu-scroll"
           data-horizontal-menu
@@ -2432,18 +2429,12 @@ export function AiPanel({
               void refreshAgentState();
             }}
           />
-          <span className="ai-main-menu-toggle">
-            <IconButton
-              icon="menu"
-              label="Menu"
-              active={mainMenuOpen}
-              onClick={() => {
-                const shouldOpen = !mainMenuOpen;
-                closeAiPopups();
-                setMainMenuOpen(shouldOpen);
-              }}
-            />
-          </span>
+          <IconButton
+            icon="sliders"
+            label="AI settings"
+            active={modelsOpen}
+            onClick={() => toggleAiPopup("models")}
+          />
           <IconButton
             icon={expanded ? "minimize-2" : "maximize-2"}
             label={expanded ? "Exit full-window chat" : "Open full-window chat"}
@@ -2456,36 +2447,6 @@ export function AiPanel({
           />
         </div>
       </div>
-
-      {mainMenuOpen &&
-        createPortal(
-          <div className="ai-main-menu" role="menu" aria-label="Chat menu">
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setMainMenuOpen(false);
-                openAiPopup("models");
-              }}
-            >
-              <FeatherIcon icon="cpu" size="16" /> AI settings
-            </button>
-            {onOpenAppSettings && <span className="ai-main-menu-divider" />}
-            {onOpenAppSettings && (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMainMenuOpen(false);
-                  onOpenAppSettings();
-                }}
-              >
-                <FeatherIcon icon="settings" size="16" /> Settings
-              </button>
-            )}
-          </div>,
-          document.querySelector(".app") || document.body,
-        )}
 
       {openChatTabs.length > 1 && (
         <div
@@ -2505,7 +2466,15 @@ export function AiPanel({
                   type="button"
                   role="tab"
                   aria-selected={chat.id === chatId}
-                  title={chat.title}
+                  aria-label={chat.title || "New chat"}
+                  onMouseEnter={(event) =>
+                    showChatTitle(chat.title, event.currentTarget)
+                  }
+                  onMouseLeave={() => setChatTitleTooltip(null)}
+                  onFocus={(event) =>
+                    showChatTitle(chat.title, event.currentTarget)
+                  }
+                  onBlur={() => setChatTitleTooltip(null)}
                   onClick={() => chooseChat(chat, false)}
                 >
                   {pinned && <FeatherIcon icon="bookmark" size="13" />}
@@ -2527,6 +2496,21 @@ export function AiPanel({
           })}
         </div>
       )}
+
+      {chatTitleTooltip &&
+        createPortal(
+          <div
+            className="ai-chat-title-tooltip"
+            role="tooltip"
+            style={{
+              top: chatTitleTooltip.top,
+              left: chatTitleTooltip.left,
+            }}
+          >
+            {chatTitleTooltip.title}
+          </div>,
+          document.querySelector(".app") || document.body,
+        )}
 
       {chatTabMenuChat &&
         createPortal(
@@ -3243,56 +3227,60 @@ export function AiPanel({
               title="Agent activity"
               close={() => setActivityOpen(false)}
             />
-            <div className="ai-activity-overview">
-              <div>
-                <span>
-                  <b>{activityEntries.length}</b>
-                  <small>actions</small>
-                </span>
-                <span>
-                  <b>
-                    {
-                      activityEntries.filter(
-                        (entry) => entry.tool === "web_search",
-                      ).length
-                    }
-                  </b>
-                  <small>searches</small>
-                </span>
-                <span>
-                  <b>
-                    {
-                      new Set(
-                        activityEntries.flatMap(
-                          (entry) => entry.websites || [],
-                        ),
-                      ).size
-                    }
-                  </b>
-                  <small>websites</small>
-                </span>
+            <div className="ai-activity-body">
+              <div className="ai-activity-overview">
+                <div>
+                  <span>
+                    <b>{activityEntries.length}</b>
+                    <small>actions</small>
+                  </span>
+                  <span>
+                    <b>
+                      {
+                        activityEntries.filter(
+                          (entry) => entry.tool === "web_search",
+                        ).length
+                      }
+                    </b>
+                    <small>searches</small>
+                  </span>
+                  <span>
+                    <b>
+                      {
+                        new Set(
+                          activityEntries.flatMap(
+                            (entry) => entry.websites || [],
+                          ),
+                        ).size
+                      }
+                    </b>
+                    <small>websites</small>
+                  </span>
+                </div>
+                <p>
+                  A local record of model tools, public-web sources,
+                  permissions, and visible device actions. Typed text and file
+                  contents are not recorded.
+                </p>
               </div>
-              <p>
-                A local record of model tools, public-web sources, permissions,
-                and visible device actions. Typed text and file contents are not
-                recorded.
-              </p>
+              <div className="ai-activity-filters" aria-label="Filter activity">
+                {(["all", "web", "device", "project"] as const).map(
+                  (filter) => (
+                    <button
+                      key={filter}
+                      className={activityFilter === filter ? "active" : ""}
+                      onClick={() => setActivityFilter(filter)}
+                    >
+                      {filter[0].toUpperCase() + filter.slice(1)}
+                    </button>
+                  ),
+                )}
+              </div>
+              <ActionTimeline
+                actions={filteredActivityEntries.slice().reverse()}
+                empty="No matching agent actions in this chat yet."
+              />
             </div>
-            <div className="ai-activity-filters" aria-label="Filter activity">
-              {(["all", "web", "device", "project"] as const).map((filter) => (
-                <button
-                  key={filter}
-                  className={activityFilter === filter ? "active" : ""}
-                  onClick={() => setActivityFilter(filter)}
-                >
-                  {filter[0].toUpperCase() + filter.slice(1)}
-                </button>
-              ))}
-            </div>
-            <ActionTimeline
-              actions={filteredActivityEntries.slice().reverse()}
-              empty="No matching agent actions in this chat yet."
-            />
           </div>,
           document.querySelector(".app") || document.body,
         )}
@@ -3795,7 +3783,7 @@ export function AiPanel({
                 }
               >
                 <FeatherIcon
-                  icon={messages.at(-1)?.interrupted ? "play" : "loader"}
+                  icon={messages.at(-1)?.interrupted ? "play" : "rotate-ccw"}
                   size="14"
                 />
                 {messages.at(-1)?.interrupted ? "Resume run" : "Retry response"}

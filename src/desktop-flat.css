@@ -1479,3 +1479,591 @@
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
+
+/* Clear switch affordance, with a visible white thumb on an enabled track. */
+#root .app .toggle-row > i,
+#root .app .ai-thinking-setting.toggle-row > i {
+  border: 1px solid color-mix(in srgb, var(--muted) 65%, var(--line)) !important;
+}
+#root .app .toggle-row > input:checked + i,
+#root .app .ai-thinking-setting.toggle-row > input:checked + i {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--text)) !important;
+  background: color-mix(in srgb, var(--accent) 82%, var(--panel2)) !important;
+}
+#root .app .toggle-row > input:checked + i::after,
+#root .app .ai-thinking-setting.toggle-row > input:checked + i::after {
+  background: #fff !important;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 35%) !important;
+}
+
+/* The Git title carries remote status without flashing or covering its scroller. */
+#root .app .git.has-pending-changes .git-panel-head {
+  border-bottom-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--accent) 24%, var(--panel2)) 0%,
+    color-mix(in srgb, var(--accent) 8%, var(--panel2)) 42%,
+    color-mix(in srgb, var(--accent) 24%, var(--panel2)) 100%
+  ) !important;
+  background-size: 220% 100% !important;
+  animation: git-status-glass 8s ease-in-out infinite alternate;
+}
+#root
+  .app
+  .git.has-pending-changes
+  .git-panel-head
+  :is(.section-toggle, .git-help-trigger) {
+  color: var(--accent) !important;
+}
+@keyframes git-status-glass {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
+}
+
+/* Terminal status reflects real reported progress; work without a percentage
+   uses a sweep rather than an invented number. */
+#root .app .terminal-toggle {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel2) 90%, var(--bg)) !important;
+}
+#root .app .terminal-toggle:is(:hover, :focus-visible) {
+  color: var(--accent) !important;
+  background: color-mix(in srgb, var(--panel2) 90%, var(--bg)) !important;
+}
+#root .app .terminal-toggle-percent {
+  margin-inline-start: auto;
+  color: var(--accent);
+  font-size: var(--app-font-size);
+}
+#root .app .terminal-toggle-progress {
+  position: absolute;
+  inset: auto auto 0 0;
+  height: 3px;
+  max-width: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+#root .app .terminal-toggle-progress.indeterminate {
+  width: 36%;
+  animation: terminal-progress-sweep 2.4s ease-in-out infinite;
+}
+@keyframes terminal-progress-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+#root .app .terminal-toggle.needs-attention {
+  border-color: #c89340 !important;
+  color: #f0bf66 !important;
+  box-shadow:
+    inset 0 0 18px rgb(240 177 64 / 13%),
+    0 0 14px rgb(240 177 64 / 16%) !important;
+  animation: terminal-attention-glow 1.7s ease-in-out infinite alternate;
+}
+@keyframes terminal-attention-glow {
+  from {
+    box-shadow:
+      inset 0 0 12px rgb(240 177 64 / 10%),
+      0 0 8px rgb(240 177 64 / 10%);
+  }
+  to {
+    box-shadow:
+      inset 0 0 24px rgb(240 177 64 / 27%),
+      0 0 18px rgb(240 177 64 / 30%);
+  }
+}
+
+/* Compact labels and a single composer tray are consistent across themes. */
+#root .app {
+  --composer-zone: color-mix(in srgb, var(--chat-bg) 58%, #080b0d);
+}
+#root .app.blue-dark {
+  --composer-zone: #07101a;
+}
+#root .app.blue-light {
+  --composer-zone: #e9edf0;
+}
+#root .app .ai-panel {
+  background: var(--composer-zone) !important;
+}
+#root .app .ai-panel .ai-conversation {
+  background: var(--chat-bg) !important;
+}
+#root .app .ai-panel :is(.ai-footer-controls, .ai-composer, .ai-context) {
+  background-color: var(--composer-zone) !important;
+}
+#root .app .ai-panel .ai-composer {
+  border-color: color-mix(in srgb, var(--line) 72%, var(--accent)) !important;
+}
+#root .app .ai-message.user :is(.ai-message-author, .ai-message-author span, p),
+#root .app .ai-message.user .ai-message-content {
+  color: var(--accent) !important;
+}
+#root .app .ai-message :is(.ai-reasoning, .ai-response-actions) > summary span,
+#root .app .ai-message :is(.ai-reasoning, .ai-response-actions) > summary small,
+#root .app .ai-action-card header :is(span, time, em),
+#root .app .ai-action-output > summary,
+#root .app .ai-live-work .ai-thinking :is(b, small) {
+  font-size: var(--app-font-size) !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+#root .app .ai-head-actions {
+  margin-inline-start: auto;
+}
+
+/* Settings values reserve a separate chevron lane even for long choices. */
+#root .app .settings-dock .settings-select-row {
+  gap: 20px;
+}
+#root .app .settings-dock .settings-select-row > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+#root .app .settings-dock .settings-select-row select {
+  width: min(58%, 290px) !important;
+  min-width: min(160px, 48%) !important;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding-inline: 12px 42px !important;
+  background-position: right 12px center !important;
+  background-size: 18px !important;
+  text-align: right;
+  text-overflow: ellipsis;
+}
+#root .app[dir="rtl"] .settings-dock .settings-select-row select {
+  padding-inline: 42px 12px !important;
+  background-position: left 12px center !important;
+  text-align: left;
+}
+
+/* Small Git action targets and utility forms must retain their own space. */
+#root .app .git-commit-row > button:not(.commit-action) {
+  width: 42px !important;
+  min-width: 42px !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  padding: 0 !important;
+}
+#root .app .git-utility-actions {
+  min-width: 0;
+  gap: 8px;
+  padding: 8px 12px !important;
+  overflow-x: auto;
+}
+#root .app .git-utility-actions > button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+#root .app .git-group .detached-checkout {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+}
+#root .app .git-group .detached-checkout input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+#root .app .git-utility-hint {
+  margin: 0 12px 8px;
+  color: var(--muted);
+  font-size: var(--app-font-size);
+}
+#root .app .global-search-pending {
+  margin: 0;
+  padding: 18px;
+  color: var(--muted);
+  font-size: var(--app-font-size);
+}
+
+/* Agent activity uses the same contained hierarchy as osChat. */
+#root .app .ai-activity-popover {
+  width: min(760px, calc(100vw - 32px)) !important;
+  max-width: calc(100vw - 32px) !important;
+  overflow: hidden;
+}
+#root .app .ai-activity-body {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+}
+#root .app .ai-activity-overview {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 18px;
+  border: 0;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+}
+#root .app .ai-activity-overview > div {
+  gap: 10px;
+}
+#root .app .ai-activity-overview span {
+  min-width: 0;
+  min-height: 70px;
+  padding: 12px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--panel2);
+}
+#root .app .ai-activity-filters {
+  position: relative;
+  top: auto;
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+}
+#root .app .ai-activity-filters button {
+  min-height: 38px;
+  padding-inline: 12px;
+}
+
+/* Active choices remain legible without becoming the brightest surface. */
+#root
+  .app
+  :is(.ai-chat-tab.active, .top-actions .icon-button.active:not(.primary)) {
+  background: color-mix(
+    in srgb,
+    var(--panel2) 93%,
+    var(--accent) 7%
+  ) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #root .app .git.has-pending-changes .git-panel-head,
+  #root .app .terminal-toggle.needs-attention,
+  #root .app .terminal-toggle-progress.indeterminate {
+    animation: none !important;
+  }
+}
+
+/* Match the iOS composer: a darker tray with a softly filled, borderless input. */
+#root .app {
+  --composer-zone: #101213;
+  --composer-input: #25292a;
+  --control-selected-fill: var(--panel);
+}
+#root .app.blue-dark {
+  --composer-zone: #050b14;
+  --composer-input: #0b1829;
+}
+#root .app.blue-light {
+  --composer-zone: #e9edf0;
+  --composer-input: #f1f3f5;
+}
+#root .app .ai-panel .ai-composer,
+#root .app .ai-panel.expanded .ai-composer {
+  min-height: 66px;
+  padding: 10px;
+  border: 0 !important;
+  outline: 0 !important;
+  border-radius: 33px !important;
+  background: var(--composer-input) !important;
+  box-shadow: none !important;
+}
+#root .app .ai-panel .ai-composer.expanded-input {
+  border-radius: 26px !important;
+}
+#root .app .ai-panel .ai-composer textarea {
+  min-height: 42px;
+  padding: 9px 5px;
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .ai-panel .ai-composer:focus-within {
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Selected controls should sit at the same quiet depth as chat controls. */
+#root .app :is(.topbar .top-actions .icon-button.active, .ai-chat-tab.active) {
+  background: var(--control-selected-fill) !important;
+}
+#root .app .ai-chat-tab {
+  width: 210px;
+  min-width: 112px;
+  max-width: 210px;
+}
+#root .app .ai-chat-title-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--overlay-surface);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  box-shadow: 0 10px 26px rgb(0 0 0 / 20%);
+}
+
+/* Text buttons follow the Files/Chat control scale; compact icons stay compact. */
+#root
+  .app
+  :is(
+    .git button:not(.icon-button),
+    .settings-dock button:not(.icon-button),
+    .advanced-dock button:not(.icon-button)
+  ) {
+  font-size: 15px;
+  font-weight: 500;
+}
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar)
+  > button,
+#root
+  .app
+  .ai-panel
+  .ai-footer-controls
+  :is(.ai-tier-picker, .ai-capability-bar)
+  > button
+  :is(span, b),
+#root .app .ai-panel .ai-footer-controls .ai-tier-picker-section {
+  font-size: 15px !important;
+  font-weight: 500 !important;
+}
+
+/* Git entries use understated underlines and keep action buttons aligned. */
+#root
+  .app
+  :is(.git, .git-help-panel)
+  :is(input:not([type="checkbox"]):not([type="radio"]), textarea) {
+  min-width: 0;
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 8px 4px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root
+  .app
+  :is(.git, .git-help-panel)
+  :is(input:not([type="checkbox"]):not([type="radio"]), textarea):focus {
+  border-bottom-color: var(--accent) !important;
+}
+#root .app .git-commit-row {
+  grid-template-columns: minmax(0, 1fr) 42px max-content;
+  align-items: center;
+  gap: 10px !important;
+}
+#root .app .git-commit-row .commit-action {
+  min-height: 44px;
+  padding-inline: 16px !important;
+}
+#root .app .git-group .detached-checkout {
+  align-items: center;
+  gap: 12px;
+}
+#root .app .git-group .detached-checkout > button {
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0 16px;
+  line-height: 1;
+}
+
+/* FitAddon subtracts padding on .xterm, not on its parent host. */
+#root .app .terminal-host {
+  padding: 0 !important;
+}
+#root .app .terminal-host .xterm {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 18px 20px 24px;
+}
+
+/* Settings switches use the same 46 × 26 track and white 18px thumb as AI settings. */
+#root .app .settings-dock .toggle-row {
+  grid-template-columns: minmax(0, 1fr) 46px;
+}
+#root .app .settings-dock .toggle-row > i {
+  position: relative !important;
+  width: 46px !important;
+  min-width: 46px !important;
+  max-width: 46px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  max-height: 26px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid color-mix(in srgb, var(--muted) 65%, var(--line)) !important;
+  border-radius: 999px !important;
+  background: var(--control-hover-fill) !important;
+  box-shadow: none !important;
+}
+#root .app .settings-dock .toggle-row > i::before {
+  content: none !important;
+  display: none !important;
+}
+#root .app .settings-dock .toggle-row > i::after {
+  content: "" !important;
+  position: absolute !important;
+  inset: auto !important;
+  top: 3px !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 3px !important;
+  width: 18px !important;
+  min-width: 18px !important;
+  height: 18px !important;
+  min-height: 18px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: var(--muted) !important;
+  box-shadow: none !important;
+  transform: translate3d(0, 0, 0) !important;
+}
+#root .app .settings-dock .toggle-row > input:checked + i {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--text)) !important;
+  background: color-mix(in srgb, var(--accent) 82%, var(--panel2)) !important;
+}
+#root .app .settings-dock .toggle-row > input:checked + i::after {
+  background: #fff !important;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 35%) !important;
+  transform: translate3d(20px, 0, 0) !important;
+}
+#root .app .settings-dock .toggle-row > input:focus-visible + i {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+}
+
+/* Full-window chat uses the available canvas, with a consistent edge gutter. */
+#root .app .ai-panel.expanded {
+  --ai-expanded-gutter: clamp(24px, 7vw, 160px);
+}
+#root .app .ai-panel.expanded .ai-conversation {
+  padding-inline: var(--ai-expanded-gutter) !important;
+}
+#root .app .ai-panel.expanded .ai-message.user {
+  width: fit-content;
+  min-width: 0;
+  max-width: min(700px, 100%);
+  margin-inline: auto 0;
+}
+#root .app .ai-panel.expanded .ai-message.user > p {
+  text-align: end;
+}
+#root .app .ai-panel.expanded :is(.ai-footer-controls, .ai-composer) {
+  width: calc(
+    100% - var(--ai-expanded-gutter) - var(--ai-expanded-gutter)
+  ) !important;
+  max-width: none !important;
+  margin-inline: var(--ai-expanded-gutter) !important;
+}
+
+/* Match osChat's unfilled bar, keeping each control centred and the send
+   arrow in the last visible position even while steer/stop controls appear. */
+#root .app .ai-panel .ai-composer,
+#root .app .ai-panel.expanded .ai-composer {
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  padding: 8px 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#root .app .ai-panel .ai-composer.expanded-input {
+  border-radius: 0 !important;
+}
+#root
+  .app
+  .ai-panel
+  .ai-composer
+  > :is(
+    .ai-attach-button,
+    textarea,
+    .ai-steer-button,
+    .ai-send-button,
+    .ai-composer-stop-divider,
+    .ai-composer-stop-button
+  ) {
+  grid-row: 1;
+}
+#root .app .ai-panel .ai-composer > .ai-attach-button {
+  grid-column: 1;
+}
+#root .app .ai-panel .ai-composer > textarea {
+  grid-column: 2;
+  align-self: center;
+}
+#root .app .ai-panel .ai-composer > .ai-send-button {
+  grid-column: 3;
+}
+#root .app .ai-panel .ai-composer:has(.ai-steer-button) {
+  grid-template-columns: 44px minmax(0, 1fr) 44px 44px;
+}
+#root .app .ai-panel .ai-composer > .ai-steer-button {
+  grid-column: 3;
+}
+#root .app .ai-panel .ai-composer:has(.ai-steer-button) > .ai-send-button {
+  grid-column: 4;
+}
+#root .app .ai-panel .ai-composer:has(.ai-composer-stop-button) {
+  grid-template-columns: 44px minmax(0, 1fr) 44px 1px 44px 44px;
+}
+#root .app .ai-panel .ai-composer > .ai-composer-stop-divider {
+  grid-column: 4;
+}
+#root .app .ai-panel .ai-composer > .ai-composer-stop-button {
+  grid-column: 5;
+}
+#root
+  .app
+  .ai-panel
+  .ai-composer:has(.ai-composer-stop-button)
+  > .ai-send-button {
+  grid-column: 6;
+}
+#root .app .ai-panel .ai-composer > button {
+  align-self: center;
+  justify-self: center;
+  line-height: 0;
+}
+#root .app .ai-panel .ai-composer > button > svg {
+  display: block;
+  margin: 0;
+}
+#root .app .ai-panel .ai-composer > .ai-send-button {
+  background: var(--panel2) !important;
+  color: var(--accent) !important;
+}
+#root .app .ai-panel .ai-composer > .ai-send-button:disabled {
+  opacity: 1;
+  color: var(--muted) !important;
+}

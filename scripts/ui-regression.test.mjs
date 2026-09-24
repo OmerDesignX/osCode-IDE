@@ -1852,7 +1852,7 @@ test("panel cohesion keeps Python, chats, permissions, and the top rail responsi
   );
   assert.match(
     main,
-    /expandedContextRect\.top - expandedComposerRect\.bottom >= 8[\s\S]*expandedContextStyle\.backgroundColor === 'rgba\(0, 0, 0, 0\)'/,
+    /expandedContextRect\.top - expandedComposerRect\.bottom >= 8[\s\S]*expandedContextStyle\.backgroundColor === getComputedStyle\(aiPanel\)\.backgroundColor/,
   );
 });
 
@@ -1883,13 +1883,11 @@ test("project navigation and footer selectors use blue fill without outlines", (
 
 test("commit history does not repeat sync counts in its summary", () => {
   const historyStart = app.indexOf('className="git-group git-history-tree"');
-  const historyLegend = app.indexOf(
-    'className="git-sync-summary"',
-    historyStart,
-  );
-  const historySummary = app.slice(historyStart, historyLegend);
+  const historyTree = app.indexOf('className="git-commit-tree"', historyStart);
+  const historySummary = app.slice(historyStart, historyTree);
   assert.match(historySummary, /Commit history/);
   assert.doesNotMatch(historySummary, /unpushed|incoming|local only/i);
+  assert.doesNotMatch(app, /className="git-sync-summary"/);
 });
 
 test("agent design and live inference feedback stay cross-platform across every engine", () => {
@@ -1952,7 +1950,7 @@ test("agent work is shown live and retained as a privacy-aware chat timeline", (
   assert.match(ai, /<span>Thinking<\/span>/);
   assert.match(ai, /<span>Model log<\/span>/);
   assert.match(ai, /<b>Thinking<\/b>/);
-  assert.match(ai, /Typed text and file contents are not/);
+  assert.match(ai, /Typed text and file\s+contents are not/);
   assert.match(ai, /resolveLatestPermissionAction/);
   assert.match(ai, /denied by the user/);
   assert.match(
@@ -2109,7 +2107,8 @@ test("terminal sessions and auxiliary panels keep the revised workspace hierarch
     styles,
     /\.ai-panel\.expanded \.ai-expand-toggle\s*\{[\s\S]*position: static;[\s\S]*pointer-events: auto !important/,
   );
-  assert.match(ai, /label="Menu"[\s\S]*className="ai-expand-toggle"/);
+  assert.match(ai, /label="AI settings"[\s\S]*className="ai-expand-toggle"/);
+  assert.doesNotMatch(ai, /<h2>AI Coder<\/h2>/);
   assert.match(
     styles,
     /\.ai-model-popover,[\s\S]*\.ai-permission-popover\s*\{[\s\S]*border-radius: 20px;[\s\S]*background: var\(--overlay-surface\)/,

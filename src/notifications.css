@@ -93,9 +93,13 @@
 }
 
 .notification-content {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  display: grid;
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
-  display: grid;
   gap: 6px;
   padding: 0;
   border: 0;
@@ -106,6 +110,18 @@
   text-align: start;
   overflow-wrap: break-word;
   word-break: normal;
+}
+
+.notifications-popover .notification-row > .notification-content {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  display: grid !important;
+  justify-items: stretch;
+  flex: 1 1 auto !important;
+  padding: 0 !important;
+  text-align: left;
 }
 
 .notification-content .notification-message {
@@ -126,6 +142,12 @@
   overflow: visible;
   overflow-wrap: anywhere;
   -webkit-line-clamp: initial;
+}
+
+.notifications-popover .notification-row .notification-message {
+  min-width: 0;
+  width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .notification-meta {

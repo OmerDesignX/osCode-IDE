@@ -42,6 +42,7 @@ export function TerminalPanel({
   theme,
   projectRoot,
   persistenceId,
+  onAttention,
 }: {
   id: string;
   interpreter: string;
@@ -49,13 +50,16 @@ export function TerminalPanel({
   theme: EditorPreferences["theme"];
   projectRoot: string;
   persistenceId: string;
+  onAttention?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const requestFitRef = useRef<(() => void) | null>(null);
   const repaintAfterFitRef = useRef(false);
   const activeRef = useRef(active);
+  const onAttentionRef = useRef(onAttention);
   activeRef.current = active;
+  onAttentionRef.current = onAttention;
   useEffect(() => {
     if (!host.current) return;
     const t = new Terminal({
@@ -72,6 +76,7 @@ export function TerminalPanel({
     t.open(host.current);
     terminal.current = t;
     let transcript = readTerminalTranscript(projectRoot, persistenceId);
+    let recentOutput = "";
     let persistenceTimer = 0;
     if (transcript) t.write(transcript);
     const persistTranscript = () => {
@@ -81,17 +86,26 @@ export function TerminalPanel({
     const off = window.oscode.onTerminalData((termId, data) => {
       if (termId !== id) return;
       t.write(data);
+      const plainOutput = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+      recentOutput = `${recentOutput}${plainOutput}`.slice(-1200);
+      if (
+        /(?:^|[\r\n])\s*(?:error\b|fatal\b|failed\b|permission denied\b)/i.test(
+          recentOutput,
+        )
+      ) {
+        onAttentionRef.current?.();
+        recentOutput = "";
+      }
       transcript = trimTerminalTranscript(`${transcript}${data}`);
       window.clearTimeout(persistenceTimer);
       persistenceTimer = window.setTimeout(persistTranscript, 180);
     });
-    void window.oscode
-      .createTerminal(id, interpreter)
-      .catch((error) =>
-        t.write(
-          `\r\nUnable to start terminal: ${error instanceof Error ? error.message : String(error)}\r\n`,
-        ),
+    void window.oscode.createTerminal(id, interpreter).catch((error) => {
+      onAttentionRef.current?.();
+      t.write(
+        `\r\nUnable to start terminal: ${error instanceof Error ? error.message : String(error)}\r\n`,
       );
+    });
     const inputDisposable = t.onData((data) =>
       window.oscode.terminalWrite(id, data),
     );
